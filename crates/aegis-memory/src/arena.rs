@@ -62,6 +62,7 @@ impl Chunk {
         NonNull::new(ptr)
     }
 
+    #[allow(dead_code)]
     fn remaining(&self) -> usize {
         self.size - self.used
     }
@@ -204,8 +205,7 @@ mod tests {
         let ptr1 = arena.allocate(100).unwrap();
         let ptr2 = arena.allocate(200).unwrap();
 
-        assert!(!ptr1.as_ptr().is_null());
-        assert!(!ptr2.as_ptr().is_null());
+        // NonNull guarantees non-null, so just check they're different
         assert_ne!(ptr1.as_ptr(), ptr2.as_ptr());
     }
 
@@ -253,7 +253,7 @@ mod tests {
     fn test_arena_large_allocation() {
         let arena = MemoryArena::with_chunk_size(1024);
 
-        let ptr = arena.allocate(2048).unwrap();
-        assert!(!ptr.as_ptr().is_null());
+        // Just verify the allocation succeeds - NonNull guarantees non-null
+        let _ptr = arena.allocate(2048).unwrap();
     }
 }

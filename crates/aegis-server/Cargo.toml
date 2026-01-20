@@ -22,6 +22,9 @@ tracing-subscriber = { workspace = true }
 aegis-common = { workspace = true }
 aegis-storage = { workspace = true }
 aegis-query = { workspace = true }
+aegis-document = { workspace = true }
+aegis-timeseries = { workspace = true }
+aegis-streaming = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
@@ -32,6 +35,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 parking_lot = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

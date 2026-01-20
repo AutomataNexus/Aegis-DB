@@ -405,7 +405,7 @@ mod tests {
         ring.add_node(NodeId::new("node2"));
 
         let key = "test_key";
-        let before = ring.get_node(key).unwrap().clone();
+        let _before = ring.get_node(key).unwrap().clone();
 
         ring.remove_node(&NodeId::new("node1"));
         assert_eq!(ring.node_count(), 1);

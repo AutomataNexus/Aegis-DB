@@ -7,8 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::sync::RwLock;
+use std::time::Duration;
 
 // =============================================================================
 // Trace ID

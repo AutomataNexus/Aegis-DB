@@ -385,7 +385,7 @@ mod tests {
         for i in 0..10 {
             let mut doc = Document::new();
             doc.set("value", i as i64);
-            doc.set("even", (i % 2 == 0));
+            doc.set("even", i % 2 == 0);
             collection.insert(doc).unwrap();
         }
 

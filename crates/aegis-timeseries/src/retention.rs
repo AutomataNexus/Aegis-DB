@@ -5,11 +5,10 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use crate::aggregation::{AggregateFunction, Downsampler};
+use crate::aggregation::AggregateFunction;
 use crate::partition::PartitionManager;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 // =============================================================================
 // Retention Policy

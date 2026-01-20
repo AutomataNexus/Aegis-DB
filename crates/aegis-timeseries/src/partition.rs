@@ -5,7 +5,7 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use crate::types::{DataPoint, Series, Tags};
+use crate::types::DataPoint;
 use chrono::{DateTime, Duration, Utc, Timelike, Datelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

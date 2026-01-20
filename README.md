@@ -1,11 +1,17 @@
-# Aegis Database Platform
+<p align="center">
+  <img src="./AegisDB-logo.png" alt="AegisDB Logo" width="400">
+</p>
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/tests-424%20passing-brightgreen.svg)]()
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)]()
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)]()
+<h1 align="center">Aegis Database Platform</h1>
+
+<p align="center">
+  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
+  <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status">
+  <img src="https://img.shields.io/badge/tests-424%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/version-0.1.0-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg" alt="Platform">
+</p>
 
 A unified, multi-paradigm database platform built in Rust. Combines relational, time series, document, and real-time streaming capabilities into a single high-performance system.
 

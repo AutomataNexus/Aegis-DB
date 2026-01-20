@@ -31,6 +31,7 @@ pub use error::ClientError;
 
 /// The main client for interacting with Aegis databases.
 pub struct AegisClient {
+    #[allow(dead_code)]
     config: ClientConfig,
     pool: ConnectionPool,
 }

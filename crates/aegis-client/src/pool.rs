@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::{timeout, Duration};
+use tokio::time::timeout;
 
 // =============================================================================
 // Connection Pool
@@ -116,14 +116,15 @@ impl ConnectionPool {
         self.total_acquired.fetch_add(1, Ordering::SeqCst);
 
         // Create the pooled connection with return callback
-        let semaphore = Arc::clone(&self.semaphore);
-        let pool_connections = unsafe {
+        let _semaphore = Arc::clone(&self.semaphore);
+        #[allow(unused_unsafe)]
+        let _pool_connections = unsafe {
             // Safety: We're creating a self-referential structure here
             // The pool outlives the connection due to Arc
             &self.connections as *const Mutex<VecDeque<Arc<Connection>>>
         };
 
-        Ok(PooledConnection::new(conn, move |conn| {
+        Ok(PooledConnection::new(conn, move |_conn| {
             // Return connection to pool
             let _ = permit; // Drop permit to release semaphore
 

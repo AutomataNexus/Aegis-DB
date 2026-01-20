@@ -323,7 +323,7 @@ impl QueryBuilder {
                 let placeholders: Vec<String> = row
                     .iter()
                     .enumerate()
-                    .map(|(i, v)| {
+                    .map(|(_i, v)| {
                         params.push(v.clone());
                         format!("${}", params.len())
                     })
@@ -519,6 +519,7 @@ struct Join {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum JoinType {
     Inner,
     Left,

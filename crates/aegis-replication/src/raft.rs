@@ -344,6 +344,7 @@ impl RaftNode {
     }
 
     /// Become the leader.
+    #[allow(dead_code)]
     fn become_leader(&self) {
         let term = self.current_term();
         self.become_leader_with_term(term);

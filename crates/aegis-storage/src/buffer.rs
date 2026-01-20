@@ -13,7 +13,7 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use crate::page::{Page, PageType, PAGE_SIZE};
+use crate::page::{Page, PageType};
 use aegis_common::{PageId, Result, AegisError};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
@@ -57,6 +57,7 @@ impl BufferFrame {
         }
     }
 
+    #[allow(dead_code)]
     fn is_occupied(&self) -> bool {
         self.page_id.read().is_some()
     }

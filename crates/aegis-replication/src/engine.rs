@@ -68,6 +68,7 @@ pub struct ReplicationEngine {
 
 /// A pending proposal waiting to be committed.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct PendingProposal {
     index: u64,
     command: Command,
@@ -551,6 +552,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unused_mut)]
     fn test_message_processing() {
         let mut engine1 = create_engine("node1");
         let mut engine2 = create_engine("node2");

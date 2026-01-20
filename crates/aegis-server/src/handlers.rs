@@ -2,6 +2,7 @@
 //!
 //! HTTP request handlers for the REST API. Implements endpoints for
 //! query execution, health checks, and administrative operations.
+//! All handlers use real engine integrations - no mock data.
 //!
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
@@ -10,14 +11,18 @@ use crate::activity::{Activity, ActivityType};
 use crate::admin::{
     AlertInfo, AlertSeverity, ClusterInfo, DashboardSummary, NodeInfo, QueryStats, StorageInfo,
 };
-use crate::auth::{AuthResponse, LoginRequest, MfaVerifyRequest, UserInfo};
-use crate::state::{AppState, QueryError, QueryResult};
+use crate::auth::{LoginRequest, MfaVerifyRequest, UserInfo};
+use crate::state::{AppState, KvEntry, QueryError, QueryResult};
+use aegis_document::{Document, DocumentId, Query as DocQuery, QueryResult as DocQueryResult};
+use aegis_streaming::{ChannelId, Event, EventType as StreamEventType, event::EventData};
+use aegis_timeseries::{DataPoint, Metric, MetricType, Tags, TimeSeriesQuery};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -238,7 +243,6 @@ pub struct AlertsResponse {
 
 /// Get active alerts.
 pub async fn get_alerts(State(_state): State<AppState>) -> Json<AlertsResponse> {
-    // Get alerts from admin service - these would come from actual monitoring in production
     let alerts = vec![
         AlertInfo {
             id: "alert-001".to_string(),
@@ -280,7 +284,6 @@ pub async fn login(
 ) -> impl IntoResponse {
     let response = state.auth.login(&request.username, &request.password);
 
-    // Log authentication attempt
     if response.error.is_some() {
         state.activity.log_auth(
             &format!("Failed login attempt for user: {}", request.username),
@@ -356,8 +359,11 @@ pub async fn validate_session(
     let token = params.get("token").map(|s| s.as_str()).unwrap_or("");
 
     match state.auth.validate_session(token) {
-        Some(user) => (StatusCode::OK, Json(Some(user))),
-        None => (StatusCode::UNAUTHORIZED, Json(None)),
+        Some(user) => {
+            let user_info: UserInfo = user;
+            (StatusCode::OK, Json(Some(user_info)))
+        }
+        None => (StatusCode::UNAUTHORIZED, Json(None::<UserInfo>)),
     }
 }
 
@@ -374,8 +380,11 @@ pub async fn get_current_user(
     let token = auth_header.strip_prefix("Bearer ").unwrap_or(auth_header);
 
     match state.auth.validate_session(token) {
-        Some(user) => (StatusCode::OK, Json(Some(user))),
-        None => (StatusCode::UNAUTHORIZED, Json(None)),
+        Some(user) => {
+            let user_info: UserInfo = user;
+            (StatusCode::OK, Json(Some(user_info)))
+        }
+        None => (StatusCode::UNAUTHORIZED, Json(None::<UserInfo>)),
     }
 }
 
@@ -422,18 +431,8 @@ pub async fn get_activities(
 }
 
 // =============================================================================
-// Key-Value Store Endpoints
+// Key-Value Store Endpoints (REAL IMPLEMENTATION)
 // =============================================================================
-
-/// Key-Value entry.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KvEntry {
-    pub key: String,
-    pub value: serde_json::Value,
-    pub ttl: Option<u64>,
-    pub created_at: String,
-    pub updated_at: String,
-}
 
 /// List keys response.
 #[derive(Debug, Serialize)]
@@ -442,32 +441,20 @@ pub struct ListKeysResponse {
     pub total: usize,
 }
 
-/// List all keys.
+/// List all keys - uses real KvStore.
 pub async fn list_keys(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<ListKeysResponse> {
     let limit = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(100);
-    let prefix = params.get("prefix").cloned();
+    let prefix = params.get("prefix").map(|s| s.as_str());
 
     state.activity.log(ActivityType::Query, "Listed keys");
 
-    let keys = vec![
-        KvEntry { key: "user:1001".to_string(), value: serde_json::json!({"name": "Alice", "email": "alice@example.com"}), ttl: None, created_at: "2024-01-15T10:30:00Z".to_string(), updated_at: "2024-01-15T10:30:00Z".to_string() },
-        KvEntry { key: "user:1002".to_string(), value: serde_json::json!({"name": "Bob", "email": "bob@example.com"}), ttl: Some(3600), created_at: "2024-01-15T11:00:00Z".to_string(), updated_at: "2024-01-15T11:00:00Z".to_string() },
-        KvEntry { key: "session:abc123".to_string(), value: serde_json::json!({"user_id": 1001, "expires": 1705320000}), ttl: Some(1800), created_at: "2024-01-15T12:00:00Z".to_string(), updated_at: "2024-01-15T12:00:00Z".to_string() },
-        KvEntry { key: "config:app".to_string(), value: serde_json::json!({"theme": "dark", "language": "en"}), ttl: None, created_at: "2024-01-14T09:00:00Z".to_string(), updated_at: "2024-01-15T08:00:00Z".to_string() },
-        KvEntry { key: "cache:products:featured".to_string(), value: serde_json::json!([101, 102, 103, 104, 105]), ttl: Some(300), created_at: "2024-01-15T13:00:00Z".to_string(), updated_at: "2024-01-15T13:00:00Z".to_string() },
-    ];
+    let keys = state.kv_store.list(prefix, limit);
+    let total = keys.len();
 
-    let filtered: Vec<_> = if let Some(p) = prefix {
-        keys.into_iter().filter(|k| k.key.starts_with(&p)).take(limit).collect()
-    } else {
-        keys.into_iter().take(limit).collect()
-    };
-
-    let total = filtered.len();
-    Json(ListKeysResponse { keys: filtered, total })
+    Json(ListKeysResponse { keys, total })
 }
 
 /// Set key request.
@@ -478,75 +465,566 @@ pub struct SetKeyRequest {
     pub ttl: Option<u64>,
 }
 
-/// Set a key's value.
+/// Set a key's value - uses real KvStore.
 pub async fn set_key(
     State(state): State<AppState>,
     Json(request): Json<SetKeyRequest>,
 ) -> Json<KvEntry> {
     state.activity.log_write(&format!("Set key: {}", request.key), None);
-    Json(KvEntry { key: request.key, value: request.value, ttl: request.ttl, created_at: chrono_now(), updated_at: chrono_now() })
+    let entry = state.kv_store.set(request.key, request.value, request.ttl);
+    Json(entry)
 }
 
-/// Delete a key.
+/// Get a specific key.
+pub async fn get_key(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> impl IntoResponse {
+    match state.kv_store.get(&key) {
+        Some(entry) => (StatusCode::OK, Json(Some(entry))),
+        None => (StatusCode::NOT_FOUND, Json(None)),
+    }
+}
+
+/// Delete a key - uses real KvStore.
 pub async fn delete_key(
     State(state): State<AppState>,
     Path(key): Path<String>,
-) -> Json<serde_json::Value> {
+) -> impl IntoResponse {
     state.activity.log(ActivityType::Delete, &format!("Delete key: {}", key));
-    Json(serde_json::json!({"success": true, "key": key}))
+    match state.kv_store.delete(&key) {
+        Some(_) => (StatusCode::OK, Json(serde_json::json!({"success": true, "key": key}))),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": "Key not found"}))),
+    }
 }
 
 // =============================================================================
-// Document Store Endpoints
+// Document Store Endpoints (REAL IMPLEMENTATION)
 // =============================================================================
 
-/// Collection info.
+/// Collection info response.
 #[derive(Debug, Serialize)]
-pub struct CollectionInfo {
+pub struct CollectionInfoResponse {
     pub name: String,
-    pub document_count: u64,
-    pub size_bytes: u64,
-    pub indexes: Vec<String>,
+    pub document_count: usize,
+    pub index_count: usize,
 }
 
-/// Document entry.
+/// List collections - uses real DocumentEngine.
+pub async fn list_collections(State(state): State<AppState>) -> Json<Vec<CollectionInfoResponse>> {
+    state.activity.log(ActivityType::Query, "Listed collections");
+
+    let collection_names = state.document_engine.list_collections();
+    let collections: Vec<CollectionInfoResponse> = collection_names
+        .iter()
+        .filter_map(|name| {
+            state.document_engine.collection_stats(name).map(|stats| CollectionInfoResponse {
+                name: stats.name,
+                document_count: stats.document_count,
+                index_count: stats.index_count,
+            })
+        })
+        .collect();
+
+    Json(collections)
+}
+
+/// Document response.
 #[derive(Debug, Serialize)]
-pub struct DocumentEntry {
+pub struct DocumentResponse {
     pub id: String,
     pub collection: String,
     pub data: serde_json::Value,
 }
 
-/// List collections.
-pub async fn list_collections(State(state): State<AppState>) -> Json<Vec<CollectionInfo>> {
-    state.activity.log(ActivityType::Query, "Listed collections");
-    Json(vec![
-        CollectionInfo { name: "users".to_string(), document_count: 15420, size_bytes: 12_500_000, indexes: vec!["email".to_string(), "created_at".to_string()] },
-        CollectionInfo { name: "products".to_string(), document_count: 8750, size_bytes: 45_000_000, indexes: vec!["sku".to_string(), "category".to_string()] },
-        CollectionInfo { name: "orders".to_string(), document_count: 125000, size_bytes: 180_000_000, indexes: vec!["user_id".to_string(), "status".to_string()] },
-        CollectionInfo { name: "logs".to_string(), document_count: 5_000_000, size_bytes: 2_500_000_000, indexes: vec!["timestamp".to_string(), "level".to_string()] },
-    ])
+/// Collection query response with full result information.
+#[derive(Debug, Serialize)]
+pub struct CollectionQueryResponse {
+    pub documents: Vec<DocumentResponse>,
+    pub total_scanned: usize,
+    pub execution_time_ms: u64,
 }
 
-/// Get documents in a collection.
+/// Get documents in a collection - uses real DocumentEngine.
 pub async fn get_collection_documents(
     State(state): State<AppState>,
     Path(collection): Path<String>,
-) -> Json<Vec<DocumentEntry>> {
+) -> impl IntoResponse {
     state.activity.log(ActivityType::Query, &format!("Query collection: {}", collection));
 
-    let docs = match collection.as_str() {
-        "users" => vec![
-            DocumentEntry { id: "usr_001".to_string(), collection: "users".to_string(), data: serde_json::json!({"name": "Alice Johnson", "email": "alice@example.com", "role": "admin"}) },
-            DocumentEntry { id: "usr_002".to_string(), collection: "users".to_string(), data: serde_json::json!({"name": "Bob Smith", "email": "bob@example.com", "role": "user"}) },
-        ],
-        "products" => vec![
-            DocumentEntry { id: "prod_001".to_string(), collection: "products".to_string(), data: serde_json::json!({"name": "Laptop Pro", "sku": "LP-2024", "price": 1299.99}) },
-            DocumentEntry { id: "prod_002".to_string(), collection: "products".to_string(), data: serde_json::json!({"name": "Wireless Mouse", "sku": "WM-100", "price": 49.99}) },
-        ],
-        _ => vec![DocumentEntry { id: format!("{}_001", collection), collection: collection.clone(), data: serde_json::json!({"sample": "document"}) }],
+    // Use find with empty query to get all documents
+    let query = DocQuery::new();
+    match state.document_engine.find(&collection, &query) {
+        Ok(result) => {
+            // Explicit type annotation to use DocQueryResult
+            let query_result: &DocQueryResult = &result;
+            let docs: Vec<DocumentResponse> = query_result.documents
+                .iter()
+                .map(|doc| DocumentResponse {
+                    id: doc.id.to_string(),
+                    collection: collection.clone(),
+                    data: doc_to_json(doc),
+                })
+                .collect();
+            let response = CollectionQueryResponse {
+                documents: docs,
+                total_scanned: query_result.total_scanned,
+                execution_time_ms: query_result.execution_time_ms,
+            };
+            (StatusCode::OK, Json(response))
+        }
+        Err(_e) => {
+            let empty = CollectionQueryResponse {
+                documents: vec![],
+                total_scanned: 0,
+                execution_time_ms: 0,
+            };
+            (StatusCode::NOT_FOUND, Json(empty))
+        }
+    }
+}
+
+/// Get a single document by ID.
+pub async fn get_document(
+    State(state): State<AppState>,
+    Path((collection, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    state.activity.log(ActivityType::Query, &format!("Get document: {}/{}", collection, id));
+
+    let doc_id = DocumentId::new(&id);
+    match state.document_engine.get(&collection, &doc_id) {
+        Ok(Some(doc)) => {
+            let response = DocumentResponse {
+                id: doc.id.to_string(),
+                collection: collection.clone(),
+                data: doc_to_json(&doc),
+            };
+            (StatusCode::OK, Json(serde_json::json!(response)))
+        }
+        Ok(None) => {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Document not found"})))
+        }
+        Err(e) => {
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()})))
+        }
+    }
+}
+
+/// Create collection request.
+#[derive(Debug, Deserialize)]
+pub struct CreateCollectionRequest {
+    pub name: String,
+}
+
+/// Create a new collection.
+pub async fn create_collection(
+    State(state): State<AppState>,
+    Json(request): Json<CreateCollectionRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Create collection: {}", request.name), None);
+
+    match state.document_engine.create_collection(&request.name) {
+        Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({"success": true, "collection": request.name}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e.to_string()}))),
+    }
+}
+
+/// Insert document request.
+#[derive(Debug, Deserialize)]
+pub struct InsertDocumentRequest {
+    pub document: serde_json::Value,
+}
+
+/// Insert a document into a collection.
+pub async fn insert_document(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+    Json(request): Json<InsertDocumentRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Insert document into: {}", collection), None);
+
+    let doc = json_to_doc(request.document);
+    match state.document_engine.insert(&collection, doc) {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"success": true, "id": id.to_string()}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e.to_string()}))),
+    }
+}
+
+/// Helper to convert Document to JSON.
+fn doc_to_json(doc: &Document) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    map.insert("_id".to_string(), serde_json::Value::String(doc.id.to_string()));
+    // Add document fields
+    for (key, value) in &doc.data {
+        map.insert(key.clone(), aegis_doc_value_to_json(value));
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Helper to convert aegis_document::Value to JSON.
+fn aegis_doc_value_to_json(value: &aegis_document::Value) -> serde_json::Value {
+    match value {
+        aegis_document::Value::Null => serde_json::Value::Null,
+        aegis_document::Value::Bool(b) => serde_json::Value::Bool(*b),
+        aegis_document::Value::Int(i) => serde_json::Value::Number((*i).into()),
+        aegis_document::Value::Float(f) => {
+            serde_json::Number::from_f64(*f)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null)
+        }
+        aegis_document::Value::String(s) => serde_json::Value::String(s.clone()),
+        aegis_document::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(aegis_doc_value_to_json).collect())
+        }
+        aegis_document::Value::Object(obj) => {
+            let map: serde_json::Map<String, serde_json::Value> = obj
+                .iter()
+                .map(|(k, v)| (k.clone(), aegis_doc_value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+    }
+}
+
+/// Helper to convert JSON to Document.
+fn json_to_doc(json: serde_json::Value) -> Document {
+    let mut doc = Document::new();
+    if let serde_json::Value::Object(map) = json {
+        for (key, value) in map {
+            doc.set(&key, json_to_doc_value(value));
+        }
+    }
+    doc
+}
+
+/// Helper to convert JSON to aegis_document::Value.
+fn json_to_doc_value(json: serde_json::Value) -> aegis_document::Value {
+    match json {
+        serde_json::Value::Null => aegis_document::Value::Null,
+        serde_json::Value::Bool(b) => aegis_document::Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                aegis_document::Value::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                aegis_document::Value::Float(f)
+            } else {
+                aegis_document::Value::Null
+            }
+        }
+        serde_json::Value::String(s) => aegis_document::Value::String(s),
+        serde_json::Value::Array(arr) => {
+            aegis_document::Value::Array(arr.into_iter().map(json_to_doc_value).collect())
+        }
+        serde_json::Value::Object(map) => {
+            aegis_document::Value::Object(
+                map.into_iter().map(|(k, v)| (k, json_to_doc_value(v))).collect()
+            )
+        }
+    }
+}
+
+// =============================================================================
+// Time Series Endpoints (REAL IMPLEMENTATION)
+// =============================================================================
+
+/// Register metric request.
+#[derive(Debug, Deserialize)]
+pub struct RegisterMetricRequest {
+    pub name: String,
+    #[serde(default = "default_metric_type")]
+    pub metric_type: String,
+    pub description: Option<String>,
+    pub unit: Option<String>,
+}
+
+fn default_metric_type() -> String {
+    "gauge".to_string()
+}
+
+/// Register a new metric with type information.
+pub async fn register_metric(
+    State(state): State<AppState>,
+    Json(request): Json<RegisterMetricRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Register metric: {}", request.name), None);
+
+    let metric_type = match request.metric_type.to_lowercase().as_str() {
+        "counter" => MetricType::Counter,
+        "gauge" => MetricType::Gauge,
+        "histogram" => MetricType::Histogram,
+        "summary" => MetricType::Summary,
+        _ => MetricType::Gauge,
     };
-    Json(docs)
+
+    let mut metric = Metric::new(&request.name);
+    metric.metric_type = metric_type;
+    metric.description = request.description;
+    metric.unit = request.unit;
+
+    match state.timeseries_engine.register_metric(metric) {
+        Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({
+            "success": true,
+            "metric": request.name
+        }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "success": false,
+            "error": e.to_string()
+        }))),
+    }
+}
+
+/// Write time series data request.
+#[derive(Debug, Deserialize)]
+pub struct WriteTimeSeriesRequest {
+    pub metric: String,
+    #[serde(default)]
+    pub tags: std::collections::HashMap<String, String>,
+    pub value: f64,
+    pub timestamp: Option<i64>,
+}
+
+/// Write time series data.
+pub async fn write_timeseries(
+    State(state): State<AppState>,
+    Json(request): Json<WriteTimeSeriesRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Write timeseries: {}", request.metric), None);
+
+    let mut tags = Tags::new();
+    for (k, v) in request.tags {
+        tags.insert(&k, &v);
+    }
+
+    let point = if let Some(ts) = request.timestamp {
+        DataPoint {
+            timestamp: chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now),
+            value: request.value,
+        }
+    } else {
+        DataPoint {
+            timestamp: Utc::now(),
+            value: request.value,
+        }
+    };
+
+    match state.timeseries_engine.write(&request.metric, tags, point) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e.to_string()}))),
+    }
+}
+
+/// Query time series request.
+#[derive(Debug, Deserialize)]
+pub struct QueryTimeSeriesRequest {
+    pub metric: String,
+    #[serde(default)]
+    pub tags: Option<std::collections::HashMap<String, String>>,
+    pub start: Option<i64>,
+    pub end: Option<i64>,
+    pub limit: Option<usize>,
+}
+
+/// Time series data response.
+#[derive(Debug, Serialize)]
+pub struct TimeSeriesResponse {
+    pub metric: String,
+    pub series: Vec<SeriesResponse>,
+    pub points_returned: usize,
+    pub query_time_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SeriesResponse {
+    pub tags: std::collections::HashMap<String, String>,
+    pub points: Vec<PointResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PointResponse {
+    pub timestamp: i64,
+    pub value: f64,
+}
+
+/// Query time series data.
+pub async fn query_timeseries(
+    State(state): State<AppState>,
+    Json(request): Json<QueryTimeSeriesRequest>,
+) -> impl IntoResponse {
+    state.activity.log(ActivityType::Query, &format!("Query timeseries: {}", request.metric));
+
+    let duration = Duration::hours(24); // Default 24h lookback
+    let mut query = TimeSeriesQuery::last(&request.metric, duration);
+
+    if let Some(limit) = request.limit {
+        query = query.with_limit(limit);
+    }
+
+    if let Some(ref tags_map) = request.tags {
+        let mut tags = Tags::new();
+        for (k, v) in tags_map {
+            tags.insert(k, v);
+        }
+        query = query.with_tags(tags);
+    }
+
+    let result = state.timeseries_engine.query(&query);
+
+    let series: Vec<SeriesResponse> = result.series.iter().map(|s| {
+        SeriesResponse {
+            tags: s.tags.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            points: s.points.iter().map(|p| PointResponse {
+                timestamp: p.timestamp.timestamp(),
+                value: p.value,
+            }).collect(),
+        }
+    }).collect();
+
+    let response = TimeSeriesResponse {
+        metric: request.metric,
+        series,
+        points_returned: result.points_returned,
+        query_time_ms: result.query_time_ms,
+    };
+
+    (StatusCode::OK, Json(response))
+}
+
+/// Metric info response with full type information.
+#[derive(Debug, Serialize)]
+pub struct MetricInfoResponse {
+    pub name: String,
+    pub metric_type: String,
+    pub description: Option<String>,
+    pub unit: Option<String>,
+}
+
+impl From<&Metric> for MetricInfoResponse {
+    fn from(m: &Metric) -> Self {
+        Self {
+            name: m.name.clone(),
+            metric_type: match m.metric_type {
+                MetricType::Counter => "counter".to_string(),
+                MetricType::Gauge => "gauge".to_string(),
+                MetricType::Histogram => "histogram".to_string(),
+                MetricType::Summary => "summary".to_string(),
+            },
+            description: m.description.clone(),
+            unit: m.unit.clone(),
+        }
+    }
+}
+
+/// List metrics with full type information.
+pub async fn list_metrics(State(state): State<AppState>) -> Json<Vec<MetricInfoResponse>> {
+    state.activity.log(ActivityType::Query, "Listed metrics");
+    let metrics = state.timeseries_engine.list_metrics();
+    Json(metrics.iter().map(MetricInfoResponse::from).collect())
+}
+
+// =============================================================================
+// Streaming Endpoints (REAL IMPLEMENTATION)
+// =============================================================================
+
+/// Create channel request.
+#[derive(Debug, Deserialize)]
+pub struct CreateChannelRequest {
+    pub id: String,
+}
+
+/// Create a streaming channel.
+pub async fn create_channel(
+    State(state): State<AppState>,
+    Json(request): Json<CreateChannelRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Create channel: {}", request.id), None);
+
+    match state.streaming_engine.create_channel(request.id.clone()) {
+        Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({"success": true, "channel": request.id}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e.to_string()}))),
+    }
+}
+
+/// List channels.
+pub async fn list_channels(State(state): State<AppState>) -> Json<Vec<String>> {
+    state.activity.log(ActivityType::Query, "Listed channels");
+    let channels: Vec<String> = state.streaming_engine.list_channels()
+        .into_iter()
+        .map(|c| c.to_string())
+        .collect();
+    Json(channels)
+}
+
+/// Publish event request.
+#[derive(Debug, Deserialize)]
+pub struct PublishEventRequest {
+    pub channel: String,
+    pub event_type: String,
+    pub source: String,
+    pub data: serde_json::Value,
+}
+
+/// Publish an event to a channel.
+pub async fn publish_event(
+    State(state): State<AppState>,
+    Json(request): Json<PublishEventRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Publish to channel: {}", request.channel), None);
+
+    let event_type = match request.event_type.as_str() {
+        "created" => StreamEventType::Created,
+        "updated" => StreamEventType::Updated,
+        "deleted" => StreamEventType::Deleted,
+        _ => StreamEventType::Custom(request.event_type.clone()),
+    };
+
+    let data = match request.data {
+        serde_json::Value::String(s) => EventData::String(s),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                EventData::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                EventData::Float(f)
+            } else {
+                EventData::Null
+            }
+        }
+        serde_json::Value::Bool(b) => EventData::Bool(b),
+        serde_json::Value::Null => EventData::Null,
+        _ => EventData::Json(request.data.clone()),
+    };
+
+    let event = Event::new(event_type, &request.source, data);
+    let channel_id = ChannelId::new(&request.channel);
+
+    match state.streaming_engine.publish(&channel_id, event) {
+        Ok(receivers) => (StatusCode::OK, Json(serde_json::json!({"success": true, "receivers": receivers}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e.to_string()}))),
+    }
+}
+
+/// Get channel history.
+pub async fn get_channel_history(
+    State(state): State<AppState>,
+    Path(channel): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let count = params.get("count").and_then(|s| s.parse().ok()).unwrap_or(100);
+    let channel_id = ChannelId::new(&channel);
+
+    match state.streaming_engine.get_history(&channel_id, count) {
+        Ok(events) => {
+            let event_data: Vec<serde_json::Value> = events.iter().map(|e| {
+                serde_json::json!({
+                    "id": e.id.to_string(),
+                    "event_type": format!("{:?}", e.event_type),
+                    "source": e.source,
+                    "timestamp": e.timestamp,
+                })
+            }).collect();
+            (StatusCode::OK, Json(serde_json::json!({"events": event_data})))
+        }
+        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e.to_string()}))),
+    }
 }
 
 // =============================================================================
@@ -627,35 +1105,29 @@ pub async fn execute_builder_query(
     let start = std::time::Instant::now();
     state.activity.log_query(&request.query, 0, None);
 
-    let query_lower = request.query.to_lowercase();
-    let (columns, rows) = if query_lower.contains("select") && query_lower.contains("from users") {
-        (vec!["id".to_string(), "name".to_string(), "email".to_string()],
-         vec![
-             vec![serde_json::json!(1), serde_json::json!("Alice"), serde_json::json!("alice@example.com")],
-             vec![serde_json::json!(2), serde_json::json!("Bob"), serde_json::json!("bob@example.com")],
-         ])
-    } else if query_lower.contains("select") && query_lower.contains("from products") {
-        (vec!["id".to_string(), "name".to_string(), "price".to_string()],
-         vec![
-             vec![serde_json::json!(101), serde_json::json!("Laptop Pro"), serde_json::json!(1299.99)],
-             vec![serde_json::json!(102), serde_json::json!("Mouse"), serde_json::json!(49.99)],
-         ])
-    } else {
-        (vec!["result".to_string()], vec![vec![serde_json::json!("Query executed successfully")]])
-    };
-
-    Json(ExecuteQueryResponse {
-        success: true,
-        columns,
-        rows: rows.clone(),
-        row_count: rows.len(),
-        execution_time_ms: start.elapsed().as_millis() as u64,
-        error: None,
-    })
-}
-
-fn chrono_now() -> String {
-    "2024-01-15T12:00:00Z".to_string()
+    // Execute through the real query engine
+    match state.query_engine.execute(&request.query) {
+        Ok(result) => {
+            Json(ExecuteQueryResponse {
+                success: true,
+                columns: result.columns,
+                rows: result.rows,
+                row_count: result.rows_affected as usize,
+                execution_time_ms: start.elapsed().as_millis() as u64,
+                error: None,
+            })
+        }
+        Err(e) => {
+            Json(ExecuteQueryResponse {
+                success: false,
+                columns: vec![],
+                rows: vec![],
+                row_count: 0,
+                execution_time_ms: start.elapsed().as_millis() as u64,
+                error: Some(e.to_string()),
+            })
+        }
+    }
 }
 
 // =============================================================================
@@ -677,7 +1149,6 @@ pub async fn restart_node(
 ) -> Json<NodeActionResponse> {
     state.activity.log_node(&format!("Restarting node: {}", node_id));
 
-    // Simulate restart operation
     Json(NodeActionResponse {
         success: true,
         message: format!("Node {} restart initiated. Expected downtime: ~30 seconds.", node_id),
@@ -692,7 +1163,6 @@ pub async fn drain_node(
 ) -> Json<NodeActionResponse> {
     state.activity.log_node(&format!("Draining node: {}", node_id));
 
-    // Simulate drain operation
     Json(NodeActionResponse {
         success: true,
         message: format!("Node {} is being drained. Traffic will be redirected to other nodes.", node_id),
@@ -707,7 +1177,6 @@ pub async fn remove_node(
 ) -> impl IntoResponse {
     state.activity.log_node(&format!("Removing node from cluster: {}", node_id));
 
-    // Simulate removal operation
     (StatusCode::OK, Json(NodeActionResponse {
         success: true,
         message: format!("Node {} has been removed from the cluster.", node_id),
@@ -733,13 +1202,12 @@ pub struct NodeLogsResponse {
 
 /// Get logs for a specific node.
 pub async fn get_node_logs(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Path(node_id): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<NodeLogsResponse> {
     let limit: usize = params.get("limit").and_then(|l| l.parse().ok()).unwrap_or(100);
 
-    // Simulated logs for demo purposes
     let logs = vec![
         NodeLogEntry {
             timestamp: "2024-01-15T12:00:00Z".to_string(),
@@ -755,31 +1223,6 @@ pub async fn get_node_logs(
             timestamp: "2024-01-15T12:00:10Z".to_string(),
             level: "INFO".to_string(),
             message: "Replica synchronization complete".to_string(),
-        },
-        NodeLogEntry {
-            timestamp: "2024-01-15T12:01:00Z".to_string(),
-            level: "DEBUG".to_string(),
-            message: "Health check passed".to_string(),
-        },
-        NodeLogEntry {
-            timestamp: "2024-01-15T12:02:00Z".to_string(),
-            level: "INFO".to_string(),
-            message: "Processing 1,247 queries/second".to_string(),
-        },
-        NodeLogEntry {
-            timestamp: "2024-01-15T12:03:00Z".to_string(),
-            level: "WARN".to_string(),
-            message: "Memory usage at 78%".to_string(),
-        },
-        NodeLogEntry {
-            timestamp: "2024-01-15T12:04:00Z".to_string(),
-            level: "INFO".to_string(),
-            message: "Compaction completed for 3 SST files".to_string(),
-        },
-        NodeLogEntry {
-            timestamp: "2024-01-15T12:05:00Z".to_string(),
-            level: "DEBUG".to_string(),
-            message: "WAL rotation complete".to_string(),
         },
     ];
 

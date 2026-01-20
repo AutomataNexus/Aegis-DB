@@ -6,7 +6,6 @@
 //! @author AutomataNexus Development Team
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // =============================================================================
 // Cluster Info
