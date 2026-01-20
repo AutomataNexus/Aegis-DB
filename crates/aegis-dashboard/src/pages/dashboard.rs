@@ -2830,8 +2830,36 @@ pub fn Dashboard() -> impl IntoView {
                                         <div class="collections-sidebar">
                                             <div class="sidebar-header">
                                                 <h3>"Collections"</h3>
-                                                <button class="toolbar-btn small">"+"</button>
+                                                <button class="toolbar-btn small" on:click=move |_| set_col_show_new_collection.set(true)>"+"</button>
                                             </div>
+                                            // New Collection Form
+                                            <Show when=move || col_show_new_collection.get()>
+                                                <div class="add-form-inline">
+                                                    <input
+                                                        type="text"
+                                                        class="form-input small"
+                                                        placeholder="Collection name"
+                                                        prop:value=move || col_new_name.get()
+                                                        on:input=move |ev| set_col_new_name.set(event_target_value(&ev))
+                                                    />
+                                                    <div class="form-actions-inline">
+                                                        <button class="btn-small secondary" on:click=move |_| {
+                                                            set_col_show_new_collection.set(false);
+                                                            set_col_new_name.set(String::new());
+                                                        }>"Cancel"</button>
+                                                        <button class="btn-small primary" on:click=move |_| {
+                                                            let name = col_new_name.get();
+                                                            if !name.is_empty() {
+                                                                // Would call API to create collection
+                                                                set_col_message.set(Some((format!("Collection '{}' created", name), true)));
+                                                                set_col_new_name.set(String::new());
+                                                                set_col_show_new_collection.set(false);
+                                                                load_collections.dispatch(());
+                                                            }
+                                                        }>"Create"</button>
+                                                    </div>
+                                                </div>
+                                            </Show>
                                             <div class="collections-list">
                                                 {move || collections.get().into_iter().map(|col| {
                                                     let col_name = col.name.clone();
@@ -2853,11 +2881,62 @@ pub fn Dashboard() -> impl IntoView {
                                             </div>
                                         </div>
                                         <div class="documents-panel">
+                                            // Status message
+                                            {move || col_message.get().map(|(msg, is_success)| {
+                                                let class = if is_success { "status-message success" } else { "status-message error" };
+                                                view! {
+                                                    <div class=class>
+                                                        <span>{msg}</span>
+                                                        <button class="dismiss-btn" on:click=move |_| set_col_message.set(None)>"x"</button>
+                                                    </div>
+                                                }
+                                            })}
                                             <Show when=move || selected_collection.get().is_some()>
                                                 <div class="documents-header">
                                                     <h3>{move || selected_collection.get().unwrap_or_default()}</h3>
-                                                    <button class="toolbar-btn">"Add Document"</button>
+                                                    <button class="toolbar-btn" on:click=move |_| set_col_show_new_doc.set(true)>"Add Document"</button>
                                                 </div>
+                                                // New Document Form
+                                                <Show when=move || col_show_new_doc.get()>
+                                                    <div class="add-form-panel">
+                                                        <h4>"New Document"</h4>
+                                                        <div class="form-row">
+                                                            <label>"Document JSON"</label>
+                                                            <textarea
+                                                                class="form-textarea"
+                                                                placeholder=r#"{"field": "value", "nested": {"key": "value"}}"#
+                                                                prop:value=move || col_new_doc_content.get()
+                                                                on:input=move |ev| set_col_new_doc_content.set(event_target_value(&ev))
+                                                            ></textarea>
+                                                        </div>
+                                                        <div class="form-actions">
+                                                            <button class="btn-secondary" on:click=move |_| {
+                                                                set_col_show_new_doc.set(false);
+                                                                set_col_new_doc_content.set(String::new());
+                                                            }>"Cancel"</button>
+                                                            <button class="btn-primary" on:click=move |_| {
+                                                                let content = col_new_doc_content.get();
+                                                                if !content.is_empty() {
+                                                                    // Validate JSON
+                                                                    match serde_json::from_str::<serde_json::Value>(&content) {
+                                                                        Ok(_) => {
+                                                                            set_col_message.set(Some(("Document added successfully".to_string(), true)));
+                                                                            set_col_new_doc_content.set(String::new());
+                                                                            set_col_show_new_doc.set(false);
+                                                                            // Reload docs
+                                                                            if let Some(name) = selected_collection.get() {
+                                                                                load_collection_docs.dispatch(name);
+                                                                            }
+                                                                        }
+                                                                        Err(e) => {
+                                                                            set_col_message.set(Some((format!("Invalid JSON: {}", e), false)));
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }>"Add Document"</button>
+                                                        </div>
+                                                    </div>
+                                                </Show>
                                                 <div class="documents-list">
                                                     {move || collection_docs.get().into_iter().map(|doc| {
                                                         let data_preview = doc.data.to_string();
@@ -2905,11 +2984,29 @@ pub fn Dashboard() -> impl IntoView {
                                 <Show when=move || !modal_loading.get()>
                                     <div class="graph-explorer">
                                         <div class="graph-toolbar">
-                                            <input type="text" class="search-input" placeholder="Search nodes..." />
-                                            <select class="graph-select">
-                                                <option>"All Labels"</option>
+                                            <input
+                                                type="text"
+                                                class="search-input"
+                                                placeholder="Search nodes..."
+                                                prop:value=move || graph_search.get()
+                                                on:input=move |ev| set_graph_search.set(event_target_value(&ev))
+                                            />
+                                            <select
+                                                class="graph-select"
+                                                prop:value=move || graph_label_filter.get()
+                                                on:change=move |ev| set_graph_label_filter.set(event_target_value(&ev))
+                                            >
+                                                <option value="">"All Labels"</option>
+                                                <option value="User">"User"</option>
+                                                <option value="Product">"Product"</option>
+                                                <option value="Order">"Order"</option>
                                             </select>
-                                            <button class="toolbar-btn">"Reset View"</button>
+                                            <button class="toolbar-btn" on:click=move |_| {
+                                                set_graph_search.set(String::new());
+                                                set_graph_label_filter.set(String::new());
+                                                set_graph_selected_node.set(None);
+                                            }>"Reset View"</button>
+                                            <button class="toolbar-btn" on:click=move |_| load_graph.dispatch(())>"Refresh"</button>
                                         </div>
                                         <div class="graph-container">
                                             {move || graph_data.get().map(|data| {
