@@ -1,0 +1,24 @@
+[package]
+name = "aegis-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Common types and utilities for Aegis database"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_bytes = "0.11"
+thiserror = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+uuid = { version = "1.7", features = ["v4", "v7", "serde"] }
+xxhash-rust = { workspace = true }
+crc32fast = { workspace = true }
+toml = "0.8"
+num_cpus = "1.16"
+
+[dev-dependencies]
+proptest = { workspace = true }

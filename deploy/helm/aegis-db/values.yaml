@@ -1,0 +1,238 @@
+# Aegis Database Platform - Helm Values
+# Default configuration for Kubernetes deployment
+
+# =============================================================================
+# Global Settings
+# =============================================================================
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# =============================================================================
+# Image Configuration
+# =============================================================================
+image:
+  repository: aegis-db/aegis-server
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# =============================================================================
+# Cluster Configuration
+# =============================================================================
+cluster:
+  # Number of replicas (minimum 3 for HA)
+  replicas: 3
+  # Cluster name
+  name: aegis-cluster
+  # Replication factor for data
+  replicationFactor: 3
+  # Enable automatic failover
+  autoFailover: true
+
+# =============================================================================
+# Server Configuration
+# =============================================================================
+server:
+  # HTTP API port
+  httpPort: 8080
+  # gRPC port for internal communication
+  grpcPort: 9090
+  # Raft consensus port
+  raftPort: 9091
+  # Metrics port
+  metricsPort: 9092
+
+# =============================================================================
+# Resources
+# =============================================================================
+resources:
+  requests:
+    memory: "2Gi"
+    cpu: "1000m"
+  limits:
+    memory: "8Gi"
+    cpu: "4000m"
+
+# =============================================================================
+# Storage Configuration
+# =============================================================================
+storage:
+  # Enable persistent storage
+  enabled: true
+  # Storage class (empty uses default)
+  storageClass: ""
+  # Size of data volume
+  dataSize: 100Gi
+  # Size of WAL volume
+  walSize: 20Gi
+  # Access mode
+  accessMode: ReadWriteOnce
+
+# =============================================================================
+# Service Configuration
+# =============================================================================
+service:
+  type: ClusterIP
+  httpPort: 8080
+  grpcPort: 9090
+  annotations: {}
+
+# External service for client access
+externalService:
+  enabled: false
+  type: LoadBalancer
+  annotations: {}
+
+# =============================================================================
+# Ingress Configuration
+# =============================================================================
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: aegis.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# =============================================================================
+# Security Configuration
+# =============================================================================
+security:
+  # Enable TLS for all communications
+  tls:
+    enabled: false
+    certSecretName: ""
+  # Authentication settings
+  auth:
+    enabled: true
+    # Admin credentials secret name
+    adminSecretName: aegis-admin-credentials
+  # Pod security context
+  podSecurityContext:
+    fsGroup: 1000
+    runAsUser: 1000
+    runAsNonRoot: true
+  # Container security context
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+# =============================================================================
+# Monitoring Configuration
+# =============================================================================
+monitoring:
+  # Enable Prometheus metrics
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+  # Enable health checks
+  healthCheck:
+    enabled: true
+    livenessProbe:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logging:
+  # Log level: trace, debug, info, warn, error
+  level: info
+  # Log format: json, text
+  format: json
+  # Enable request logging
+  requestLogging: true
+
+# =============================================================================
+# Database Engine Configuration
+# =============================================================================
+engine:
+  # SQL engine settings
+  sql:
+    enabled: true
+    maxConnections: 1000
+    queryTimeout: 30s
+  # Time series engine settings
+  timeseries:
+    enabled: true
+    retentionDays: 90
+    downsampleInterval: 1h
+  # Document store settings
+  document:
+    enabled: true
+    maxDocumentSize: 16Mi
+  # Streaming settings
+  streaming:
+    enabled: true
+    maxSubscribers: 10000
+    bufferSize: 1000
+
+# =============================================================================
+# Memory Configuration
+# =============================================================================
+memory:
+  # Buffer pool size
+  bufferPoolSize: 1Gi
+  # Query memory limit
+  queryMemoryLimit: 512Mi
+  # Cache size
+  cacheSize: 256Mi
+
+# =============================================================================
+# Affinity and Tolerations
+# =============================================================================
+affinity: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+# Pod topology spread constraints
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: aegis-db
+
+# =============================================================================
+# Pod Disruption Budget
+# =============================================================================
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# =============================================================================
+# Service Account
+# =============================================================================
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# =============================================================================
+# Extra Configuration
+# =============================================================================
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+extraContainers: []
+initContainers: []
