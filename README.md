@@ -1,12 +1,21 @@
 # Aegis Database Platform
 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-424%20passing-brightgreen.svg)]()
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)]()
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)]()
+
 A unified, multi-paradigm database platform built in Rust. Combines relational, time series, document, and real-time streaming capabilities into a single high-performance system.
 
-## Status
+## Highlights
 
-**Version:** 2.0.0
-**Phase:** All Phases Complete
-**Tests:** 424 passing
+- **Multi-Paradigm**: SQL, Time Series, Document, Graph, and Streaming in one platform
+- **Distributed**: Raft consensus, sharding, and multi-region replication
+- **High Performance**: Vectorized execution, Gorilla compression, zero-copy serialization
+- **Production Ready**: RBAC, audit logging, TLS, OAuth2/LDAP authentication
+- **Modern Stack**: Rust backend, Leptos/WASM dashboard, REST API
 
 ## Features
 
@@ -86,10 +95,13 @@ aegis-db/
 ├── sdks/
 │   ├── python/                # Python SDK (aegis-db)
 │   └── javascript/            # JavaScript/TypeScript SDK (@aegis-db/client)
+├── docs/
+│   └── AegisQL.md             # Query language reference
 ├── Aegis_Architecture.md      # Technical architecture
-├── Aegis_PRD.md              # Product requirements
-├── PROGRESS.md               # Development progress summary
-└── progress.txt              # Detailed progress tracker
+├── LICENSE.md                 # Apache 2.0 License
+├── COMMERCIAL.md              # Commercial licensing options
+├── TERMS.md                   # Terms of Service
+└── PRIVACY.md                 # Privacy Policy
 ```
 
 ## Installation
@@ -206,10 +218,29 @@ All phases complete with 424 tests passing.
 
 ## License
 
-Copyright 2026 AutomataNexus Development Team
+Licensed under the Apache License, Version 2.0. See [LICENSE.md](LICENSE.md) for details.
+
+Copyright 2024-2026 AutomataNexus Development Team
 
 ## Documentation
 
-- [Architecture](Aegis_Architecture.md) - Technical design
-- [PRD](Aegis_PRD.md) - Product requirements
-- [Progress](PROGRESS.md) - Development status
+- [Architecture](Aegis_Architecture.md) - Technical design and system overview
+- [AegisQL Reference](docs/AegisQL.md) - Complete query language documentation
+- [Commercial Licensing](COMMERCIAL.md) - Enterprise features and pricing
+- [API Documentation](docs/) - REST API and SDK references
+
+## Community
+
+- **GitHub Issues**: Report bugs and request features
+- **Discord**: Join our community chat
+- **Stack Overflow**: Tag questions with `aegis-db`
+
+## Contributing
+
+We welcome contributions! Please see our contribution guidelines before submitting PRs.
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
