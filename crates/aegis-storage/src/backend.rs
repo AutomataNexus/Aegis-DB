@@ -14,14 +14,12 @@
 //! @author AutomataNexus Development Team
 
 use crate::block::Block;
-use aegis_common::{BlockId, NodeId, Result, TransactionId, AegisError};
+use aegis_common::{BlockId, Result, TransactionId, AegisError};
 use async_trait::async_trait;
-use bytes::Bytes;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
 // =============================================================================
 // Storage Backend Trait
@@ -327,6 +325,7 @@ impl StorageBackend for LocalBackend {
 mod tests {
     use super::*;
     use aegis_common::BlockType;
+    use bytes::Bytes;
 
     #[tokio::test]
     async fn test_memory_backend_write_read() {

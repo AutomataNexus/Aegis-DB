@@ -370,7 +370,7 @@ impl ShardManager {
                 (i as u64 + 1) * range_size
             };
 
-            let mut shard = self.create_shard_with_range(shard_id.clone(), primary_node, start, end);
+            let _shard = self.create_shard_with_range(shard_id.clone(), primary_node, start, end);
 
             // Add replicas
             for r in 1..self.replication_factor.min(nodes.len()) {
@@ -499,7 +499,7 @@ mod tests {
     fn test_shard_manager_create_shard() {
         let manager = ShardManager::new(16, 3);
 
-        let shard = manager.create_shard(ShardId::new(0), NodeId::new("node1"));
+        let _shard = manager.create_shard(ShardId::new(0), NodeId::new("node1"));
 
         assert_eq!(manager.shard_count(), 1);
 

@@ -5,7 +5,7 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use crate::event::{Event, EventData, EventFilter, EventType};
+use crate::event::{Event, EventData, EventFilter};
 use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -362,6 +362,7 @@ fn current_timestamp_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::EventType;
 
     fn create_test_event(source: &str, value: i64) -> Event {
         Event::new(EventType::Created, source, EventData::Int(value))

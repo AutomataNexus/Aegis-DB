@@ -147,7 +147,7 @@ impl QueryExecutor {
         let start_time = std::time::Instant::now();
         let mut points_scanned = 0;
 
-        let mut result_series: Vec<Series> = series
+        let result_series: Vec<Series> = series
             .into_iter()
             .filter(|s| {
                 if let Some(ref filter) = query.tags {

@@ -12,10 +12,10 @@ use crate::index::TimeSeriesIndex;
 use crate::partition::{PartitionConfig, PartitionManager};
 use crate::query::{QueryExecutor, QueryResult, TimeSeriesQuery};
 use crate::retention::{RetentionManager, RetentionResult};
-use crate::types::{DataPoint, Metric, MetricType, Series, Tags};
+use crate::types::{DataPoint, Metric, Series, Tags};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 // =============================================================================
 // Time Series Engine Configuration

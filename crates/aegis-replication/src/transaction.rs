@@ -8,8 +8,7 @@
 use crate::node::NodeId;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::sync::RwLock;
 
 // =============================================================================
 // Transaction ID
@@ -993,7 +992,7 @@ mod tests {
         let coord = TransactionCoordinator::new(NodeId::new("coord"));
 
         let txn1 = coord.begin_transaction();
-        let txn2 = coord.begin_transaction();
+        let _txn2 = coord.begin_transaction();
 
         assert_eq!(coord.active_count(), 2);
 

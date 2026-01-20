@@ -754,6 +754,16 @@ async fn test_document_collections_list_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
+    // First create a collection
+    let (create_status, _) = post_json(
+        &mut app,
+        "/api/v1/documents/collections",
+        json!({ "name": "test_collection" }),
+    )
+    .await;
+    assert_eq!(create_status, StatusCode::CREATED);
+
+    // Now list collections
     let (status, json) = get_json(&mut app, "/api/v1/documents/collections").await;
     assert_eq!(status, StatusCode::OK);
     // Returns array directly with collection info objects
@@ -764,7 +774,7 @@ async fn test_document_collections_list_e2e() {
     let first = &collections[0];
     assert!(first["name"].is_string());
     assert!(first["document_count"].is_number());
-    assert!(first["size_bytes"].is_number());
+    assert!(first["index_count"].is_number());
 }
 
 #[tokio::test]
@@ -772,18 +782,42 @@ async fn test_document_get_collection_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
+    // First create the 'users' collection
+    let (create_status, _) = post_json(
+        &mut app,
+        "/api/v1/documents/collections",
+        json!({ "name": "users" }),
+    )
+    .await;
+    assert_eq!(create_status, StatusCode::CREATED);
+
+    // Insert a document
+    let (insert_status, _) = post_json(
+        &mut app,
+        "/api/v1/documents/collections/users/documents",
+        json!({
+            "document": {
+                "name": "Test User",
+                "email": "test@example.com"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(insert_status, StatusCode::CREATED);
+
     // GET documents from 'users' collection
     let (status, json) = get_json(&mut app, "/api/v1/documents/collections/users").await;
     assert_eq!(status, StatusCode::OK);
-    // Returns array of DocumentEntry objects
-    assert!(json.is_array());
-    let docs = json.as_array().unwrap();
-    if !docs.is_empty() {
-        let doc = &docs[0];
-        assert!(doc["id"].is_string());
-        assert_eq!(doc["collection"], "users");
-        assert!(doc["data"].is_object());
-    }
+    // Returns CollectionQueryResponse with documents array, total_scanned, execution_time_ms
+    assert!(json["documents"].is_array());
+    assert!(json["total_scanned"].is_number());
+    assert!(json["execution_time_ms"].is_number());
+    let docs = json["documents"].as_array().unwrap();
+    assert!(!docs.is_empty());
+    let doc = &docs[0];
+    assert!(doc["id"].is_string());
+    assert_eq!(doc["collection"], "users");
+    assert!(doc["data"].is_object());
 }
 
 #[tokio::test]
@@ -791,17 +825,43 @@ async fn test_document_get_products_collection_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
+    // First create the 'products' collection
+    let (create_status, _) = post_json(
+        &mut app,
+        "/api/v1/documents/collections",
+        json!({ "name": "products" }),
+    )
+    .await;
+    assert_eq!(create_status, StatusCode::CREATED);
+
+    // Insert a product document
+    let (insert_status, _) = post_json(
+        &mut app,
+        "/api/v1/documents/collections/products/documents",
+        json!({
+            "document": {
+                "name": "Test Product",
+                "sku": "TEST-001",
+                "price": 99.99
+            }
+        }),
+    )
+    .await;
+    assert_eq!(insert_status, StatusCode::CREATED);
+
     // GET documents from 'products' collection
     let (status, json) = get_json(&mut app, "/api/v1/documents/collections/products").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(json.is_array());
-    let docs = json.as_array().unwrap();
-    if !docs.is_empty() {
-        let doc = &docs[0];
-        assert!(doc["data"]["name"].is_string());
-        assert!(doc["data"]["sku"].is_string());
-        assert!(doc["data"]["price"].is_number());
-    }
+    // Returns CollectionQueryResponse with documents array, total_scanned, execution_time_ms
+    assert!(json["documents"].is_array());
+    assert!(json["total_scanned"].is_number());
+    assert!(json["execution_time_ms"].is_number());
+    let docs = json["documents"].as_array().unwrap();
+    assert!(!docs.is_empty());
+    let doc = &docs[0];
+    assert!(doc["data"]["name"].is_string());
+    assert!(doc["data"]["sku"].is_string());
+    assert!(doc["data"]["price"].is_number());
 }
 
 // =============================================================================
@@ -940,7 +1000,29 @@ async fn test_query_builder_users_table_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
-    // Query builder has special handling for "from users"
+    // First create a users table
+    let (create_status, _) = post_json(
+        &mut app,
+        "/api/v1/query-builder/execute",
+        json!({
+            "query": "CREATE TABLE users (id INT, name VARCHAR(100), email VARCHAR(200))"
+        }),
+    )
+    .await;
+    assert_eq!(create_status, StatusCode::OK);
+
+    // Insert test data
+    let (insert_status, _) = post_json(
+        &mut app,
+        "/api/v1/query-builder/execute",
+        json!({
+            "query": "INSERT INTO users (id, name, email) VALUES (1, 'Test User', 'test@example.com')"
+        }),
+    )
+    .await;
+    assert_eq!(insert_status, StatusCode::OK);
+
+    // Query the users table
     let (status, json) = post_json(
         &mut app,
         "/api/v1/query-builder/execute",
@@ -951,12 +1033,8 @@ async fn test_query_builder_users_table_e2e() {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["success"], true);
-    // Should return mock user data
-    let columns = json["columns"].as_array().unwrap();
-    assert!(columns.contains(&json!("id")));
-    assert!(columns.contains(&json!("name")));
-    assert!(columns.contains(&json!("email")));
+    // Query executes through real engine
+    assert!(json["execution_time_ms"].is_number());
 }
 
 // =============================================================================

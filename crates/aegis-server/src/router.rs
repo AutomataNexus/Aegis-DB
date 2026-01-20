@@ -57,12 +57,30 @@ pub fn create_router(state: AppState) -> Router {
     let kv_routes = Router::new()
         .route("/keys", get(handlers::list_keys))
         .route("/keys", post(handlers::set_key))
+        .route("/keys/:key", get(handlers::get_key))
         .route("/keys/:key", delete(handlers::delete_key));
 
     // Document store routes
     let doc_routes = Router::new()
         .route("/collections", get(handlers::list_collections))
-        .route("/collections/:name", get(handlers::get_collection_documents));
+        .route("/collections", post(handlers::create_collection))
+        .route("/collections/:name", get(handlers::get_collection_documents))
+        .route("/collections/:name/documents", post(handlers::insert_document))
+        .route("/collections/:name/documents/:id", get(handlers::get_document));
+
+    // Time series routes
+    let timeseries_routes = Router::new()
+        .route("/metrics", get(handlers::list_metrics))
+        .route("/metrics", post(handlers::register_metric))
+        .route("/write", post(handlers::write_timeseries))
+        .route("/query", post(handlers::query_timeseries));
+
+    // Streaming routes
+    let streaming_routes = Router::new()
+        .route("/channels", get(handlers::list_channels))
+        .route("/channels", post(handlers::create_channel))
+        .route("/publish", post(handlers::publish_event))
+        .route("/channels/:channel/history", get(handlers::get_channel_history));
 
     // Graph database routes
     let graph_routes = Router::new()
@@ -79,6 +97,8 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/auth", auth_routes)
         .nest("/api/v1/kv", kv_routes)
         .nest("/api/v1/documents", doc_routes)
+        .nest("/api/v1/timeseries", timeseries_routes)
+        .nest("/api/v1/streaming", streaming_routes)
         .nest("/api/v1/graph", graph_routes)
         .nest("/api/v1/query-builder", query_routes)
         .fallback(handlers::not_found)

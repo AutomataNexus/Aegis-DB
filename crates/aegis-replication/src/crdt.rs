@@ -8,7 +8,7 @@
 use crate::node::NodeId;
 use crate::vector_clock::VectorClock;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 // =============================================================================
 // CRDT Trait

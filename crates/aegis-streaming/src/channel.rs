@@ -314,6 +314,7 @@ impl ChannelReceiver {
 // =============================================================================
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct SubscriberInfo {
     filter: Option<EventFilter>,
     subscribed_at: u64,

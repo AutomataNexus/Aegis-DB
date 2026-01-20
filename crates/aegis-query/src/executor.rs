@@ -13,9 +13,9 @@
 //! @author AutomataNexus Development Team
 
 use crate::planner::{
-    AggregateFunction, AggregateNode, FilterNode, JoinNode, JoinStrategy, LimitNode,
+    AggregateFunction, JoinStrategy,
     PlanBinaryOp, PlanExpression, PlanJoinType, PlanLiteral, PlanNode, PlanUnaryOp,
-    ProjectNode, QueryPlan, ScanNode, SortNode,
+    QueryPlan, ScanNode,
 };
 use aegis_common::{DataType, Row, Value};
 use std::collections::HashMap;
@@ -436,6 +436,7 @@ impl Operator for ProjectOperator {
 // Join Operator
 // =============================================================================
 
+#[allow(dead_code)]
 struct JoinOperator {
     left: Box<dyn Operator>,
     right: Box<dyn Operator>,
@@ -1167,7 +1168,7 @@ fn cast_value(value: &Value, target_type: &DataType) -> ExecutorResult<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::{PlanNode, ProjectNode, ProjectionExpr, QueryPlan, ScanNode};
+    use crate::planner::{LimitNode, PlanNode, ProjectNode, ProjectionExpr, QueryPlan, ScanNode};
 
     fn create_test_context() -> ExecutionContext {
         let mut context = ExecutionContext::new();

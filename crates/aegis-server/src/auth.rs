@@ -8,7 +8,6 @@
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // =============================================================================
@@ -1211,7 +1210,7 @@ impl LdapAuthenticator {
         }
 
         // Simulate user search
-        let user_filter = self.config.user_filter.replace("{username}", username);
+        let _user_filter = self.config.user_filter.replace("{username}", username);
         let user_dn = format!("uid={},{}", username, self.config.base_dn);
 
         // Simulate bind with user credentials
@@ -1273,6 +1272,7 @@ pub struct OAuth2Authenticator {
 
 /// Pending OAuth2 state for CSRF protection.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct OAuth2State {
     created_at: Instant,
     redirect_uri: String,

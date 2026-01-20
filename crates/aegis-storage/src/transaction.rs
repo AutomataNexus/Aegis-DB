@@ -13,9 +13,9 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use aegis_common::{Lsn, TransactionId, Result, AegisError};
-use parking_lot::{Mutex, RwLock};
-use std::collections::{HashMap, HashSet, BTreeMap};
+use aegis_common::{TransactionId, Result, AegisError};
+use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 

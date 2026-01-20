@@ -5,10 +5,10 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use crate::hash::{ConsistentHash, HashRing};
+use crate::hash::HashRing;
 use crate::node::NodeId;
 use crate::partition::{PartitionKey, PartitionStrategy};
-use crate::shard::{Shard, ShardId, ShardManager};
+use crate::shard::{Shard, ShardId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;

@@ -86,6 +86,7 @@ pub struct ColumnSchema {
 
 /// Context for semantic analysis.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct AnalysisContext<'a> {
     catalog: &'a Catalog,
     scope: Scope,

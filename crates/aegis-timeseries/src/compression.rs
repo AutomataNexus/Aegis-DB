@@ -7,8 +7,9 @@
 //! @author AutomataNexus Development Team
 
 use crate::types::DataPoint;
-use chrono::{DateTime, Utc};
-use std::io::{self, Read, Write};
+use chrono::DateTime;
+#[cfg(test)]
+use chrono::Utc;
 
 // =============================================================================
 // Bit Writer
@@ -257,6 +258,7 @@ impl CompressedBlock {
 // =============================================================================
 
 /// Gorilla-style time series decompressor.
+#[allow(dead_code)]
 pub struct Decompressor<'a> {
     reader: BitReader<'a>,
     first_timestamp: i64,

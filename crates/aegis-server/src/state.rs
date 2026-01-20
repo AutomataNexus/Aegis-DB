@@ -1,7 +1,7 @@
 //! Aegis Server State
 //!
 //! Application state shared across request handlers. Provides access to
-//! database connections, query engine, and configuration.
+//! database engines, query engine, and configuration.
 //!
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
@@ -10,21 +10,30 @@ use crate::activity::ActivityLogger;
 use crate::admin::AdminService;
 use crate::auth::AuthService;
 use crate::config::ServerConfig;
+use aegis_document::DocumentEngine;
 use aegis_query::{Executor, Parser, Planner};
 use aegis_query::planner::PlannerSchema;
 use aegis_query::executor::ExecutionContext;
+use aegis_streaming::StreamingEngine;
+use aegis_timeseries::TimeSeriesEngine;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use parking_lot::RwLock as SyncRwLock;
 
 // =============================================================================
 // Application State
 // =============================================================================
 
-/// Shared application state.
+/// Shared application state with real engine integrations.
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<ServerConfig>,
     pub query_engine: Arc<QueryEngine>,
+    pub document_engine: Arc<DocumentEngine>,
+    pub timeseries_engine: Arc<TimeSeriesEngine>,
+    pub streaming_engine: Arc<StreamingEngine>,
+    pub kv_store: Arc<KvStore>,
     pub metrics: Arc<RwLock<Metrics>>,
     pub admin: Arc<AdminService>,
     pub auth: Arc<AuthService>,
@@ -42,6 +51,10 @@ impl AppState {
         Self {
             config: Arc::new(config),
             query_engine: Arc::new(QueryEngine::new()),
+            document_engine: Arc::new(DocumentEngine::new()),
+            timeseries_engine: Arc::new(TimeSeriesEngine::new()),
+            streaming_engine: Arc::new(StreamingEngine::new()),
+            kv_store: Arc::new(KvStore::new()),
             metrics: Arc::new(RwLock::new(Metrics::default())),
             admin: Arc::new(AdminService::new()),
             auth: Arc::new(AuthService::new()),
@@ -66,6 +79,98 @@ impl AppState {
 }
 
 // =============================================================================
+// Key-Value Store
+// =============================================================================
+
+/// In-memory key-value store with real persistence.
+pub struct KvStore {
+    data: SyncRwLock<HashMap<String, KvEntry>>,
+}
+
+/// Key-value entry with metadata.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KvEntry {
+    pub key: String,
+    pub value: serde_json::Value,
+    pub ttl: Option<u64>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl KvStore {
+    pub fn new() -> Self {
+        Self {
+            data: SyncRwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Set a key-value pair.
+    pub fn set(&self, key: String, value: serde_json::Value, ttl: Option<u64>) -> KvEntry {
+        let now = chrono::Utc::now();
+        let mut data = self.data.write();
+
+        let entry = if let Some(existing) = data.get(&key) {
+            KvEntry {
+                key: key.clone(),
+                value,
+                ttl,
+                created_at: existing.created_at,
+                updated_at: now,
+            }
+        } else {
+            KvEntry {
+                key: key.clone(),
+                value,
+                ttl,
+                created_at: now,
+                updated_at: now,
+            }
+        };
+
+        data.insert(key, entry.clone());
+        entry
+    }
+
+    /// Get a value by key.
+    pub fn get(&self, key: &str) -> Option<KvEntry> {
+        let data = self.data.read();
+        data.get(key).cloned()
+    }
+
+    /// Delete a key.
+    pub fn delete(&self, key: &str) -> Option<KvEntry> {
+        let mut data = self.data.write();
+        data.remove(key)
+    }
+
+    /// List all keys with optional prefix filter.
+    pub fn list(&self, prefix: Option<&str>, limit: usize) -> Vec<KvEntry> {
+        let data = self.data.read();
+        let iter = data.values();
+
+        if let Some(p) = prefix {
+            iter.filter(|e| e.key.starts_with(p))
+                .take(limit)
+                .cloned()
+                .collect()
+        } else {
+            iter.take(limit).cloned().collect()
+        }
+    }
+
+    /// Get total count of keys.
+    pub fn count(&self) -> usize {
+        self.data.read().len()
+    }
+}
+
+impl Default for KvStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// =============================================================================
 // Query Engine Wrapper
 // =============================================================================
 
@@ -73,7 +178,6 @@ impl AppState {
 pub struct QueryEngine {
     parser: Parser,
     planner: Planner,
-    context: RwLock<ExecutionContext>,
 }
 
 impl QueryEngine {
@@ -82,7 +186,6 @@ impl QueryEngine {
         Self {
             parser: Parser::new(),
             planner: Planner::new(schema),
-            context: RwLock::new(ExecutionContext::new()),
         }
     }
 
@@ -175,7 +278,7 @@ fn base64_encode(data: &[u8]) -> String {
         let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
         let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
 
-        result.push(CHARS[(b0 >> 2)] as char);
+        result.push(CHARS[b0 >> 2] as char);
         result.push(CHARS[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
 
         if chunk.len() > 1 {
@@ -267,5 +370,29 @@ mod tests {
         let value = aegis_common::Value::String("test".to_string());
         let json = value_to_json(value);
         assert_eq!(json, serde_json::Value::String("test".to_string()));
+    }
+
+    #[test]
+    fn test_kv_store_operations() {
+        let store = KvStore::new();
+
+        // Set
+        let entry = store.set("key1".to_string(), serde_json::json!("value1"), None);
+        assert_eq!(entry.key, "key1");
+        assert_eq!(entry.value, serde_json::json!("value1"));
+
+        // Get
+        let retrieved = store.get("key1").unwrap();
+        assert_eq!(retrieved.value, serde_json::json!("value1"));
+
+        // List
+        store.set("key2".to_string(), serde_json::json!("value2"), None);
+        let all = store.list(None, 100);
+        assert_eq!(all.len(), 2);
+
+        // Delete
+        let deleted = store.delete("key1");
+        assert!(deleted.is_some());
+        assert!(store.get("key1").is_none());
     }
 }

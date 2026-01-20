@@ -19,6 +19,7 @@ use std::time::Instant;
 /// A database connection.
 pub struct Connection {
     id: u64,
+    #[allow(dead_code)]
     config: ConnectionConfig,
     connected: AtomicBool,
     in_transaction: AtomicBool,
