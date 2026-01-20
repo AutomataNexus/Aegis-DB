@@ -966,19 +966,31 @@ pub fn Dashboard() -> impl IntoView {
                             <div class="metrics-tabs">
                                 <button
                                     class=move || if metrics_active_tab.get() == "overview" { "metrics-tab active" } else { "metrics-tab" }
-                                    on:click=move |_| set_metrics_active_tab.set("overview".to_string())
+                                    on:click=move |_| {
+                                        log::info!("Overview tab clicked");
+                                        set_metrics_active_tab.set("overview".to_string());
+                                    }
                                 >"Overview"</button>
                                 <button
                                     class=move || if metrics_active_tab.get() == "performance" { "metrics-tab active" } else { "metrics-tab" }
-                                    on:click=move |_| set_metrics_active_tab.set("performance".to_string())
+                                    on:click=move |_| {
+                                        log::info!("Performance tab clicked");
+                                        set_metrics_active_tab.set("performance".to_string());
+                                    }
                                 >"Performance"</button>
                                 <button
                                     class=move || if metrics_active_tab.get() == "storage" { "metrics-tab active" } else { "metrics-tab" }
-                                    on:click=move |_| set_metrics_active_tab.set("storage".to_string())
+                                    on:click=move |_| {
+                                        log::info!("Storage tab clicked");
+                                        set_metrics_active_tab.set("storage".to_string());
+                                    }
                                 >"Storage"</button>
                                 <button
                                     class=move || if metrics_active_tab.get() == "network" { "metrics-tab active" } else { "metrics-tab" }
-                                    on:click=move |_| set_metrics_active_tab.set("network".to_string())
+                                    on:click=move |_| {
+                                        log::info!("Network tab clicked");
+                                        set_metrics_active_tab.set("network".to_string());
+                                    }
                                 >"Network"</button>
                             </div>
                             <div class="metrics-actions">
