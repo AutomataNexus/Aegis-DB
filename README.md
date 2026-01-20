@@ -52,7 +52,7 @@ A unified, multi-paradigm database platform built in Rust. Combines relational, 
 - Database paradigm browsers (KV, Documents, Graph, Query Builder)
 - Real-time activity feed
 
-### Enterprise Security (Phase 4)
+### Enterprise Security
 - LDAP/Active Directory integration
 - OAuth2/OIDC authentication
 - Role-based access control (RBAC) with 25+ permissions
@@ -60,7 +60,7 @@ A unified, multi-paradigm database platform built in Rust. Combines relational, 
 - Comprehensive audit logging (100k+ entries)
 - Compliance reporting and export
 
-### SDKs and Integrations (Phase 5)
+### SDKs and Integrations
 - **Python SDK** - Async-first with aiohttp, query builder, transactions
 - **JavaScript/TypeScript SDK** - Full type definitions, streaming support
 - **Grafana Data Source** - SQL, time series, annotations, variables
