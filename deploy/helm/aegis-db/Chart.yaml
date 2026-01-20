@@ -1,0 +1,20 @@
+apiVersion: v2
+name: aegis-db
+description: Aegis Database Platform - Unified multi-paradigm database
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - database
+  - sql
+  - timeseries
+  - document
+  - streaming
+  - distributed
+maintainers:
+  - name: AutomataNexus Development Team
+    email: team@aegis-db.io
+home: https://aegis-db.io
+sources:
+  - https://github.com/automatanexus/aegis-db
+dependencies: []

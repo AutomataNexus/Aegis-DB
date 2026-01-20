@@ -1,0 +1,179 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "aegis-db.fullname" . }}
+  labels:
+    {{- include "aegis-db.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "aegis-db.fullname" . }}-headless
+  replicas: {{ .Values.cluster.replicas }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "aegis-db.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aegis-db.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "aegis-db.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.security.podSecurityContext | nindent 8 }}
+      {{- with .Values.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: aegis-db
+          securityContext:
+            {{- toYaml .Values.security.containerSecurityContext | nindent 12 }}
+          image: {{ include "aegis-db.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.httpPort }}
+              protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.server.grpcPort }}
+              protocol: TCP
+            - name: raft
+              containerPort: {{ .Values.server.raftPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.server.metricsPort }}
+              protocol: TCP
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: AEGIS_NODE_ID
+              value: "$(POD_NAME)"
+            - name: AEGIS_CLUSTER_NAME
+              value: {{ .Values.cluster.name | quote }}
+            - name: AEGIS_HTTP_PORT
+              value: {{ .Values.server.httpPort | quote }}
+            - name: AEGIS_GRPC_PORT
+              value: {{ .Values.server.grpcPort | quote }}
+            - name: AEGIS_RAFT_PORT
+              value: {{ .Values.server.raftPort | quote }}
+            - name: AEGIS_METRICS_PORT
+              value: {{ .Values.server.metricsPort | quote }}
+            - name: AEGIS_DATA_DIR
+              value: "/data"
+            - name: AEGIS_WAL_DIR
+              value: "/wal"
+            - name: AEGIS_LOG_LEVEL
+              value: {{ .Values.logging.level | quote }}
+            - name: AEGIS_LOG_FORMAT
+              value: {{ .Values.logging.format | quote }}
+            - name: AEGIS_REPLICATION_FACTOR
+              value: {{ .Values.cluster.replicationFactor | quote }}
+            - name: AEGIS_BUFFER_POOL_SIZE
+              value: {{ .Values.memory.bufferPoolSize | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.monitoring.healthCheck.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: {{ .Values.monitoring.healthCheck.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.monitoring.healthCheck.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.monitoring.healthCheck.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.monitoring.healthCheck.livenessProbe.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: {{ .Values.monitoring.healthCheck.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.monitoring.healthCheck.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.monitoring.healthCheck.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.monitoring.healthCheck.readinessProbe.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: wal
+              mountPath: /wal
+            - name: config
+              mountPath: /etc/aegis
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "aegis-db.fullname" . }}-config
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.storage.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - {{ .Values.storage.accessMode }}
+        {{- $storageClass := include "aegis-db.storageClass" . }}
+        {{- if $storageClass }}
+        storageClassName: {{ $storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.dataSize }}
+    - metadata:
+        name: wal
+      spec:
+        accessModes:
+          - {{ .Values.storage.accessMode }}
+        {{- if $storageClass }}
+        storageClassName: {{ $storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.walSize }}
+  {{- end }}

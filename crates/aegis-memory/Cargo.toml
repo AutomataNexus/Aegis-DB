@@ -1,0 +1,16 @@
+[package]
+name = "aegis-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Memory management for Aegis database"
+
+[dependencies]
+aegis-common = { workspace = true }
+parking_lot = { workspace = true }
+crossbeam = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }

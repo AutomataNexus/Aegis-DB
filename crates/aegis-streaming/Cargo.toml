@@ -1,0 +1,16 @@
+[package]
+name = "aegis-streaming"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Real-time streaming for Aegis database"
+
+[dependencies]
+aegis-common = { workspace = true }
+aegis-storage = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

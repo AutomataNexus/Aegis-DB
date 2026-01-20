@@ -1,0 +1,15 @@
+[package]
+name = "aegis-timeseries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Time series engine for Aegis database"
+
+[dependencies]
+aegis-common = { workspace = true }
+aegis-storage = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+regex = "1.10"

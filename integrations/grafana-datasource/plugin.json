@@ -1,0 +1,33 @@
+{
+  "type": "datasource",
+  "name": "Aegis DB",
+  "id": "aegis-db-datasource",
+  "info": {
+    "description": "Aegis Database data source for Grafana",
+    "author": {
+      "name": "AutomataNexus Development Team"
+    },
+    "keywords": ["database", "aegis", "sql", "timeseries"],
+    "version": "1.0.0",
+    "updated": "2026-01-19"
+  },
+  "includes": [
+    {
+      "type": "dashboard",
+      "name": "Aegis Overview",
+      "path": "dashboards/overview.json"
+    }
+  ],
+  "dependencies": {
+    "grafanaVersion": "9.0.x",
+    "plugins": []
+  },
+  "metrics": true,
+  "annotations": true,
+  "alerting": true,
+  "logs": true,
+  "backend": false,
+  "queryOptions": {
+    "maxDataPoints": true
+  }
+}

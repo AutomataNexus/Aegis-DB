@@ -1,0 +1,5 @@
+#!/bin/bash
+# Aegis DB CLI Wrapper
+# Usage: ./aegis start | stop | restart | status | build | logs
+
+exec "$(dirname "$0")/scripts/dev.sh" "$@"

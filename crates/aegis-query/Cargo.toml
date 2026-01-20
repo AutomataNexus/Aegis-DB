@@ -1,0 +1,19 @@
+[package]
+name = "aegis-query"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Query engine for Aegis database"
+
+[dependencies]
+aegis-common = { workspace = true }
+aegis-storage = { workspace = true }
+aegis-memory = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+sqlparser = "0.53"
+
+[dev-dependencies]
+proptest = { workspace = true }

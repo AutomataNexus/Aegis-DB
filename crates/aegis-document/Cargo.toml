@@ -1,0 +1,15 @@
+[package]
+name = "aegis-document"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Document store engine for Aegis database"
+
+[dependencies]
+aegis-common = { workspace = true }
+aegis-storage = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = "1.10"

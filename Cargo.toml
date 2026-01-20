@@ -1,0 +1,122 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aegis-common",
+    "crates/aegis-storage",
+    "crates/aegis-memory",
+    "crates/aegis-query",
+    "crates/aegis-server",
+    "crates/aegis-client",
+    "crates/aegis-cli",
+    "crates/aegis-replication",
+    "crates/aegis-timeseries",
+    "crates/aegis-document",
+    "crates/aegis-streaming",
+    "crates/aegis-monitoring",
+]
+# WASM crates built separately with Trunk
+exclude = [
+    "crates/aegis-dashboard",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["AutomataNexus Development Team"]
+license = "Apache-2.0"
+repository = "https://github.com/automatanexus/aegis-db"
+homepage = "https://aegis-db.io"
+description = "Unified multi-paradigm database platform"
+keywords = ["database", "sql", "timeseries", "document", "streaming"]
+categories = ["database", "data-structures"]
+
+[workspace.dependencies]
+# Core async runtime
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+rmp-serde = "1.1"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Bytes and memory
+bytes = "1.5"
+zerocopy = "0.7"
+memmap2 = "0.9"
+
+# Hashing and checksums
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+crc32fast = "1.3"
+
+# Compression
+lz4_flex = "0.11"
+zstd = "0.13"
+snap = "1.1"
+
+# Cryptography
+ring = "0.17"
+aes-gcm = "0.10"
+
+# Networking
+axum = "0.7"
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
+hyper = { version = "1.1", features = ["full"] }
+tonic = "0.11"
+prost = "0.12"
+
+# Database primitives
+crossbeam = "0.8"
+parking_lot = "0.12"
+dashmap = "5.5"
+
+# Indexing
+roaring = "0.10"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Identifiers
+uuid = { version = "1.6", features = ["v4"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive", "env"] }
+
+# Testing
+criterion = "0.5"
+proptest = "1.4"
+tempfile = "3.10"
+
+# Internal crates
+aegis-common = { path = "crates/aegis-common" }
+aegis-storage = { path = "crates/aegis-storage" }
+aegis-memory = { path = "crates/aegis-memory" }
+aegis-query = { path = "crates/aegis-query" }
+aegis-server = { path = "crates/aegis-server" }
+aegis-client = { path = "crates/aegis-client" }
+aegis-replication = { path = "crates/aegis-replication" }
+aegis-timeseries = { path = "crates/aegis-timeseries" }
+aegis-document = { path = "crates/aegis-document" }
+aegis-streaming = { path = "crates/aegis-streaming" }
+aegis-monitoring = { path = "crates/aegis-monitoring" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+
+[profile.bench]
+inherits = "release"
+debug = true
