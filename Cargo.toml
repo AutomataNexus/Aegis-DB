@@ -20,13 +20,13 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.75"
 authors = ["AutomataNexus Development Team"]
 license = "Apache-2.0"
-repository = "https://github.com/automatanexus/aegis-db"
-homepage = "https://aegis-db.io"
+repository = "https://github.com/AutomataNexus/Aegis-DB"
+homepage = "https://automatanexus.com"
 description = "Unified multi-paradigm database platform"
 keywords = ["database", "sql", "timeseries", "document", "streaming"]
 categories = ["database", "data-structures"]
@@ -100,17 +100,17 @@ proptest = "1.4"
 tempfile = "3.10"
 
 # Internal crates
-aegis-common = { version = "0.1.0", path = "crates/aegis-common" }
-aegis-storage = { version = "0.1.0", path = "crates/aegis-storage" }
-aegis-memory = { version = "0.1.0", path = "crates/aegis-memory" }
-aegis-query = { version = "0.1.0", path = "crates/aegis-query" }
-aegis-server = { version = "0.1.0", path = "crates/aegis-server" }
-aegis-client = { version = "0.1.0", path = "crates/aegis-client" }
-aegis-replication = { version = "0.1.0", path = "crates/aegis-replication" }
-aegis-timeseries = { version = "0.1.0", path = "crates/aegis-timeseries" }
-aegis-document = { version = "0.1.0", path = "crates/aegis-document" }
-aegis-streaming = { version = "0.1.0", path = "crates/aegis-streaming" }
-aegis-monitoring = { version = "0.1.0", path = "crates/aegis-monitoring" }
+aegis-common = { version = "0.1.1", path = "crates/aegis-common" }
+aegis-storage = { version = "0.1.1", path = "crates/aegis-storage" }
+aegis-memory = { version = "0.1.1", path = "crates/aegis-memory" }
+aegis-query = { version = "0.1.1", path = "crates/aegis-query" }
+aegis-server = { version = "0.1.1", path = "crates/aegis-server" }
+aegis-client = { version = "0.1.1", path = "crates/aegis-client" }
+aegis-replication = { version = "0.1.1", path = "crates/aegis-replication" }
+aegis-timeseries = { version = "0.1.1", path = "crates/aegis-timeseries" }
+aegis-document = { version = "0.1.1", path = "crates/aegis-document" }
+aegis-streaming = { version = "0.1.1", path = "crates/aegis-streaming" }
+aegis-monitoring = { version = "0.1.1", path = "crates/aegis-monitoring" }
 
 [profile.release]
 lto = "thin"

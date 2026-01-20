@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../../AegisDB-logo.png" alt="AegisDB Logo" width="300">
+  <img src="https://raw.githubusercontent.com/AutomataNexus/Aegis-DB/main/AegisDB-logo.png" alt="AegisDB Logo" width="300">
 </p>
 
 # aegis-streaming
