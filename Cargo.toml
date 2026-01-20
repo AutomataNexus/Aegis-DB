@@ -100,17 +100,17 @@ proptest = "1.4"
 tempfile = "3.10"
 
 # Internal crates
-aegis-common = { path = "crates/aegis-common" }
-aegis-storage = { path = "crates/aegis-storage" }
-aegis-memory = { path = "crates/aegis-memory" }
-aegis-query = { path = "crates/aegis-query" }
-aegis-server = { path = "crates/aegis-server" }
-aegis-client = { path = "crates/aegis-client" }
-aegis-replication = { path = "crates/aegis-replication" }
-aegis-timeseries = { path = "crates/aegis-timeseries" }
-aegis-document = { path = "crates/aegis-document" }
-aegis-streaming = { path = "crates/aegis-streaming" }
-aegis-monitoring = { path = "crates/aegis-monitoring" }
+aegis-common = { version = "0.1.0", path = "crates/aegis-common" }
+aegis-storage = { version = "0.1.0", path = "crates/aegis-storage" }
+aegis-memory = { version = "0.1.0", path = "crates/aegis-memory" }
+aegis-query = { version = "0.1.0", path = "crates/aegis-query" }
+aegis-server = { version = "0.1.0", path = "crates/aegis-server" }
+aegis-client = { version = "0.1.0", path = "crates/aegis-client" }
+aegis-replication = { version = "0.1.0", path = "crates/aegis-replication" }
+aegis-timeseries = { version = "0.1.0", path = "crates/aegis-timeseries" }
+aegis-document = { version = "0.1.0", path = "crates/aegis-document" }
+aegis-streaming = { version = "0.1.0", path = "crates/aegis-streaming" }
+aegis-monitoring = { version = "0.1.0", path = "crates/aegis-monitoring" }
 
 [profile.release]
 lto = "thin"

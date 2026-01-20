@@ -103,7 +103,6 @@ impl QueryEngine {
         let plan = self.planner.plan(statement)
             .map_err(|e| QueryError::Plan(e.to_string()))?;
 
-        let context = self.context.blocking_read();
         let executor = Executor::new(ExecutionContext::new());
         let result = executor.execute(&plan)
             .map_err(|e| QueryError::Execute(e.to_string()))?;
