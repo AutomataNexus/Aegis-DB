@@ -5,7 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Client SDK for Aegis database"
+readme = "README.md"
 
 [dependencies]
 aegis-common = { workspace = true }
