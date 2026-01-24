@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use sysinfo::{Disks, System};
 
 // =============================================================================
 // Health Status
@@ -179,16 +180,34 @@ impl HealthCheck for MemoryHealthCheck {
     }
 
     fn check(&self) -> HealthCheckResult {
-        // Simulated memory check (in real impl, would check actual memory)
-        let usage = 50.0; // Simulated 50% usage
+        let mut sys = System::new();
+        sys.refresh_memory();
+
+        let total_memory = sys.total_memory();
+        let used_memory = sys.used_memory();
+
+        // Handle edge case where total_memory is 0
+        if total_memory == 0 {
+            return HealthCheckResult::unhealthy(self.name(), "Unable to read system memory");
+        }
+
+        let usage = (used_memory as f64 / total_memory as f64) * 100.0;
 
         if usage >= self.max_usage_percent {
-            HealthCheckResult::unhealthy(self.name(), &format!("Memory usage at {}%", usage))
+            HealthCheckResult::unhealthy(self.name(), &format!("Memory usage at {:.1}%", usage))
+                .with_detail("usage_percent", &format!("{:.1}", usage))
+                .with_detail("total_bytes", &total_memory.to_string())
+                .with_detail("used_bytes", &used_memory.to_string())
         } else if usage >= self.max_usage_percent * 0.8 {
-            HealthCheckResult::degraded(self.name(), &format!("Memory usage at {}%", usage))
+            HealthCheckResult::degraded(self.name(), &format!("Memory usage at {:.1}%", usage))
+                .with_detail("usage_percent", &format!("{:.1}", usage))
+                .with_detail("total_bytes", &total_memory.to_string())
+                .with_detail("used_bytes", &used_memory.to_string())
         } else {
             HealthCheckResult::healthy(self.name())
                 .with_detail("usage_percent", &format!("{:.1}", usage))
+                .with_detail("total_bytes", &total_memory.to_string())
+                .with_detail("used_bytes", &used_memory.to_string())
         }
     }
 }
@@ -215,8 +234,47 @@ impl HealthCheck for DiskHealthCheck {
     }
 
     fn check(&self) -> HealthCheckResult {
-        // Simulated disk check
-        let free_bytes = 10_000_000_000u64; // 10GB simulated
+        let disks = Disks::new_with_refreshed_list();
+
+        // Find the disk that contains our path
+        let mut best_match: Option<(&sysinfo::Disk, usize)> = None;
+
+        for disk in disks.list() {
+            let mount_point = disk.mount_point().to_string_lossy();
+            if self.path.starts_with(mount_point.as_ref()) {
+                let mount_len = mount_point.len();
+                match &best_match {
+                    Some((_, len)) if mount_len > *len => {
+                        best_match = Some((disk, mount_len));
+                    }
+                    None => {
+                        best_match = Some((disk, mount_len));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let (total_bytes, free_bytes) = match best_match {
+            Some((disk, _)) => (disk.total_space(), disk.available_space()),
+            None => {
+                // If we can't find a specific disk, try to find the root disk
+                if let Some(disk) = disks.list().iter().find(|d| {
+                    let mp = d.mount_point().to_string_lossy();
+                    mp == "/" || mp == "C:\\"
+                }) {
+                    (disk.total_space(), disk.available_space())
+                } else if let Some(disk) = disks.list().first() {
+                    // Fall back to the first disk if available
+                    (disk.total_space(), disk.available_space())
+                } else {
+                    return HealthCheckResult::unhealthy(
+                        self.name(),
+                        &format!("Unable to read disk information for path: {}", self.path),
+                    );
+                }
+            }
+        };
 
         if free_bytes < self.min_free_bytes {
             HealthCheckResult::unhealthy(
@@ -226,14 +284,21 @@ impl HealthCheck for DiskHealthCheck {
                     free_bytes, self.path
                 ),
             )
+            .with_detail("free_bytes", &free_bytes.to_string())
+            .with_detail("total_bytes", &total_bytes.to_string())
+            .with_detail("path", &self.path)
         } else if free_bytes < self.min_free_bytes * 2 {
             HealthCheckResult::degraded(
                 self.name(),
                 &format!("Disk space warning: {} bytes free", free_bytes),
             )
+            .with_detail("free_bytes", &free_bytes.to_string())
+            .with_detail("total_bytes", &total_bytes.to_string())
+            .with_detail("path", &self.path)
         } else {
             HealthCheckResult::healthy(self.name())
                 .with_detail("free_bytes", &free_bytes.to_string())
+                .with_detail("total_bytes", &total_bytes.to_string())
                 .with_detail("path", &self.path)
         }
     }

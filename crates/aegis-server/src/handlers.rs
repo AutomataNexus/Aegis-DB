@@ -235,41 +235,90 @@ pub async fn get_query_stats(State(state): State<AppState>) -> Json<QueryStats> 
     Json(state.admin.get_query_stats())
 }
 
+/// Get database statistics (key counts, document counts, etc.)
+pub async fn get_database_stats(State(state): State<AppState>) -> Json<crate::state::DatabaseStats> {
+    Json(state.get_database_stats())
+}
+
 /// Alert response structure.
 #[derive(Debug, Serialize)]
 pub struct AlertsResponse {
     pub alerts: Vec<AlertInfo>,
 }
 
-/// Get active alerts.
+/// Get active alerts based on real system conditions.
 pub async fn get_alerts(State(_state): State<AppState>) -> Json<AlertsResponse> {
-    let alerts = vec![
-        AlertInfo {
-            id: "alert-001".to_string(),
-            severity: AlertSeverity::Warning,
-            source: "node-1".to_string(),
-            message: "High memory usage detected (>80%)".to_string(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-            acknowledged: false,
-            resolved: false,
-        },
-        AlertInfo {
-            id: "alert-002".to_string(),
-            severity: AlertSeverity::Info,
-            source: "system".to_string(),
-            message: "Scheduled backup completed successfully".to_string(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64
-                - 3600000,
-            acknowledged: true,
-            resolved: true,
-        },
-    ];
+    use sysinfo::{System, Disks};
+
+    let mut alerts = Vec::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // Check memory usage
+    let mut sys = System::new();
+    sys.refresh_memory();
+
+    let memory_total = sys.total_memory();
+    let memory_used = sys.used_memory();
+    if memory_total > 0 {
+        let memory_percent = (memory_used as f64 / memory_total as f64) * 100.0;
+        if memory_percent > 90.0 {
+            alerts.push(AlertInfo {
+                id: "mem-critical".to_string(),
+                severity: AlertSeverity::Critical,
+                source: "system".to_string(),
+                message: format!("Critical memory usage: {:.1}%", memory_percent),
+                timestamp: now,
+                acknowledged: false,
+                resolved: false,
+            });
+        } else if memory_percent > 80.0 {
+            alerts.push(AlertInfo {
+                id: "mem-warning".to_string(),
+                severity: AlertSeverity::Warning,
+                source: "system".to_string(),
+                message: format!("High memory usage: {:.1}%", memory_percent),
+                timestamp: now,
+                acknowledged: false,
+                resolved: false,
+            });
+        }
+    }
+
+    // Check disk usage
+    let disks = Disks::new_with_refreshed_list();
+    for disk in disks.list() {
+        let total = disk.total_space();
+        let available = disk.available_space();
+        if total > 0 {
+            let used_percent = ((total - available) as f64 / total as f64) * 100.0;
+            let mount = disk.mount_point().to_string_lossy();
+            if used_percent > 95.0 {
+                alerts.push(AlertInfo {
+                    id: format!("disk-critical-{}", mount.replace("/", "_")),
+                    severity: AlertSeverity::Critical,
+                    source: "system".to_string(),
+                    message: format!("Critical disk usage on {}: {:.1}%", mount, used_percent),
+                    timestamp: now,
+                    acknowledged: false,
+                    resolved: false,
+                });
+            } else if used_percent > 85.0 {
+                alerts.push(AlertInfo {
+                    id: format!("disk-warning-{}", mount.replace("/", "_")),
+                    severity: AlertSeverity::Warning,
+                    source: "system".to_string(),
+                    message: format!("High disk usage on {}: {:.1}%", mount, used_percent),
+                    timestamp: now,
+                    acknowledged: false,
+                    resolved: false,
+                });
+            }
+        }
+    }
+
     Json(AlertsResponse { alerts })
 }
 
@@ -610,6 +659,120 @@ pub async fn get_document(
     }
 }
 
+/// Delete a document from a collection.
+pub async fn delete_document(
+    State(state): State<AppState>,
+    Path((collection, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    state.activity.log(ActivityType::Delete, &format!("Delete document: {}/{}", collection, id));
+
+    let doc_id = DocumentId::new(&id);
+    match state.document_engine.delete(&collection, &doc_id) {
+        Ok(doc) => {
+            let response = DocumentResponse {
+                id: doc.id.to_string(),
+                collection: collection.clone(),
+                data: doc_to_json(&doc),
+            };
+            (StatusCode::OK, Json(serde_json::json!({"success": true, "deleted": response})))
+        }
+        Err(e) => {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": e.to_string()})))
+        }
+    }
+}
+
+/// Update document request.
+#[derive(Debug, Deserialize)]
+pub struct UpdateDocumentRequest {
+    pub document: serde_json::Value,
+}
+
+/// Update a document in a collection (full replacement).
+pub async fn update_document(
+    State(state): State<AppState>,
+    Path((collection, id)): Path<(String, String)>,
+    Json(request): Json<UpdateDocumentRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Update document: {}/{}", collection, id), None);
+
+    let doc_id = DocumentId::new(&id);
+
+    // Convert JSON to Document, preserving the ID
+    let mut doc = json_to_doc(request.document);
+    doc.id = doc_id.clone();
+
+    match state.document_engine.update(&collection, &doc_id, doc) {
+        Ok(()) => {
+            // Fetch the updated document to return it
+            match state.document_engine.get(&collection, &doc_id) {
+                Ok(Some(updated_doc)) => {
+                    let response = DocumentResponse {
+                        id: updated_doc.id.to_string(),
+                        collection: collection.clone(),
+                        data: doc_to_json(&updated_doc),
+                    };
+                    (StatusCode::OK, Json(serde_json::json!({"success": true, "document": response})))
+                }
+                _ => (StatusCode::OK, Json(serde_json::json!({"success": true, "id": id}))),
+            }
+        }
+        Err(e) => {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": e.to_string()})))
+        }
+    }
+}
+
+/// Partially update a document (merge fields).
+pub async fn patch_document(
+    State(state): State<AppState>,
+    Path((collection, id)): Path<(String, String)>,
+    Json(request): Json<UpdateDocumentRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Patch document: {}/{}", collection, id), None);
+
+    let doc_id = DocumentId::new(&id);
+
+    // First get the existing document
+    let existing = match state.document_engine.get(&collection, &doc_id) {
+        Ok(Some(doc)) => doc,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": "Document not found"})));
+        }
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e.to_string()})));
+        }
+    };
+
+    // Merge the patch into the existing document
+    let mut updated_doc = existing.clone();
+    if let serde_json::Value::Object(patch_map) = request.document {
+        for (key, value) in patch_map {
+            updated_doc.set(&key, json_to_doc_value(value));
+        }
+    }
+
+    match state.document_engine.update(&collection, &doc_id, updated_doc) {
+        Ok(()) => {
+            // Fetch the updated document to return it
+            match state.document_engine.get(&collection, &doc_id) {
+                Ok(Some(final_doc)) => {
+                    let response = DocumentResponse {
+                        id: final_doc.id.to_string(),
+                        collection: collection.clone(),
+                        data: doc_to_json(&final_doc),
+                    };
+                    (StatusCode::OK, Json(serde_json::json!({"success": true, "document": response})))
+                }
+                _ => (StatusCode::OK, Json(serde_json::json!({"success": true, "id": id}))),
+            }
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"success": false, "error": e.to_string()})))
+        }
+    }
+}
+
 /// Create collection request.
 #[derive(Debug, Deserialize)]
 pub struct CreateCollectionRequest {
@@ -632,6 +795,8 @@ pub async fn create_collection(
 /// Insert document request.
 #[derive(Debug, Deserialize)]
 pub struct InsertDocumentRequest {
+    /// Optional explicit document ID (takes precedence over _id in document)
+    pub id: Option<String>,
     pub document: serde_json::Value,
 }
 
@@ -643,7 +808,18 @@ pub async fn insert_document(
 ) -> impl IntoResponse {
     state.activity.log_write(&format!("Insert document into: {}", collection), None);
 
-    let doc = json_to_doc(request.document);
+    // If id is provided at top level, inject it into the document
+    let doc_json = if let Some(id) = request.id {
+        let mut doc = request.document;
+        if let serde_json::Value::Object(ref mut map) = doc {
+            map.insert("_id".to_string(), serde_json::Value::String(id));
+        }
+        doc
+    } else {
+        request.document
+    };
+
+    let doc = json_to_doc(doc_json);
     match state.document_engine.insert(&collection, doc) {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"success": true, "id": id.to_string()}))),
         Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e.to_string()}))),
@@ -688,10 +864,23 @@ fn aegis_doc_value_to_json(value: &aegis_document::Value) -> serde_json::Value {
 
 /// Helper to convert JSON to Document.
 fn json_to_doc(json: serde_json::Value) -> Document {
-    let mut doc = Document::new();
+    // Check for _id or id field to use as document ID
+    // Priority: _id > id
+    let doc_id = json.get("_id")
+        .or_else(|| json.get("id"))
+        .and_then(|v| v.as_str());
+
+    let mut doc = match doc_id {
+        Some(id) => Document::with_id(id),
+        None => Document::new(),
+    };
+
     if let serde_json::Value::Object(map) = json {
         for (key, value) in map {
-            doc.set(&key, json_to_doc_value(value));
+            // Only skip _id (internal ID field), preserve all other fields including "id"
+            if key != "_id" {
+                doc.set(&key, json_to_doc_value(value));
+            }
         }
     }
     doc
@@ -720,6 +909,306 @@ fn json_to_doc_value(json: serde_json::Value) -> aegis_document::Value {
                 map.into_iter().map(|(k, v)| (k, json_to_doc_value(v))).collect()
             )
         }
+    }
+}
+
+/// List documents in a collection (GET /collections/:name/documents).
+pub async fn list_collection_documents(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    state.activity.log(ActivityType::Query, &format!("List documents in: {}", collection));
+
+    let limit = params.get("limit").and_then(|s| s.parse().ok());
+    let skip = params.get("skip").and_then(|s| s.parse().ok());
+
+    let mut query = DocQuery::new();
+    if let Some(limit) = limit {
+        query = query.with_limit(limit);
+    }
+    if let Some(skip) = skip {
+        query = query.with_skip(skip);
+    }
+
+    match state.document_engine.find(&collection, &query) {
+        Ok(result) => {
+            let docs: Vec<DocumentResponse> = result.documents
+                .iter()
+                .map(|doc| DocumentResponse {
+                    id: doc.id.to_string(),
+                    collection: collection.clone(),
+                    data: doc_to_json(doc),
+                })
+                .collect();
+            let response = CollectionQueryResponse {
+                documents: docs,
+                total_scanned: result.total_scanned,
+                execution_time_ms: result.execution_time_ms,
+            };
+            (StatusCode::OK, Json(response))
+        }
+        Err(_e) => {
+            let empty = CollectionQueryResponse {
+                documents: vec![],
+                total_scanned: 0,
+                execution_time_ms: 0,
+            };
+            (StatusCode::NOT_FOUND, Json(empty))
+        }
+    }
+}
+
+/// Document query request with MongoDB-style filter operators.
+#[derive(Debug, Deserialize)]
+pub struct DocumentQueryRequest {
+    #[serde(default)]
+    pub filter: serde_json::Value,
+    pub limit: Option<usize>,
+    pub skip: Option<usize>,
+    pub sort: Option<SortSpec>,
+}
+
+/// Sort specification for queries.
+#[derive(Debug, Deserialize)]
+pub struct SortSpec {
+    pub field: String,
+    #[serde(default = "default_ascending")]
+    pub ascending: bool,
+}
+
+fn default_ascending() -> bool {
+    true
+}
+
+/// Query documents with filter operators (POST /collections/:name/query).
+/// Supports MongoDB-style operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $regex, $and, $or
+pub async fn query_collection_documents(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+    Json(request): Json<DocumentQueryRequest>,
+) -> impl IntoResponse {
+    state.activity.log(ActivityType::Query, &format!("Query collection: {}", collection));
+
+    // Parse the filter into Query filters
+    let mut query = DocQuery::new();
+
+    if let serde_json::Value::Object(filter_map) = &request.filter {
+        for (field, condition) in filter_map {
+            if let Some(filter) = parse_filter_condition(field, condition) {
+                query = query.with_filter(filter);
+            }
+        }
+    }
+
+    if let Some(limit) = request.limit {
+        query = query.with_limit(limit);
+    }
+    if let Some(skip) = request.skip {
+        query = query.with_skip(skip);
+    }
+    if let Some(ref sort) = request.sort {
+        query = query.with_sort(&sort.field, sort.ascending);
+    }
+
+    match state.document_engine.find(&collection, &query) {
+        Ok(result) => {
+            let docs: Vec<DocumentResponse> = result.documents
+                .iter()
+                .map(|doc| DocumentResponse {
+                    id: doc.id.to_string(),
+                    collection: collection.clone(),
+                    data: doc_to_json(doc),
+                })
+                .collect();
+            let response = CollectionQueryResponse {
+                documents: docs,
+                total_scanned: result.total_scanned,
+                execution_time_ms: result.execution_time_ms,
+            };
+            (StatusCode::OK, Json(response))
+        }
+        Err(_) => {
+            let empty = CollectionQueryResponse {
+                documents: vec![],
+                total_scanned: 0,
+                execution_time_ms: 0,
+            };
+            (StatusCode::NOT_FOUND, Json(empty))
+        }
+    }
+}
+
+/// Parse a filter condition with MongoDB-style operators.
+fn parse_filter_condition(field: &str, condition: &serde_json::Value) -> Option<aegis_document::query::Filter> {
+    use aegis_document::query::Filter;
+
+    match condition {
+        // Direct value comparison (implicit $eq)
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {
+            Some(Filter::Eq {
+                field: field.to_string(),
+                value: json_to_doc_value(condition.clone()),
+            })
+        }
+        // Operator object
+        serde_json::Value::Object(ops) => {
+            // Handle $and and $or at the top level
+            if field == "$and" {
+                if let serde_json::Value::Array(arr) = condition {
+                    let filters: Vec<Filter> = arr
+                        .iter()
+                        .filter_map(|item| {
+                            if let serde_json::Value::Object(obj) = item {
+                                obj.iter()
+                                    .filter_map(|(k, v)| parse_filter_condition(k, v))
+                                    .next()
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    return Some(Filter::And(filters));
+                }
+                return None;
+            }
+            if field == "$or" {
+                if let serde_json::Value::Array(arr) = condition {
+                    let filters: Vec<Filter> = arr
+                        .iter()
+                        .filter_map(|item| {
+                            if let serde_json::Value::Object(obj) = item {
+                                obj.iter()
+                                    .filter_map(|(k, v)| parse_filter_condition(k, v))
+                                    .next()
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    return Some(Filter::Or(filters));
+                }
+                return None;
+            }
+
+            // Single operator or multiple operators on same field
+            let mut filters: Vec<Filter> = Vec::new();
+
+            for (op, value) in ops {
+                let filter = match op.as_str() {
+                    "$eq" => Some(Filter::Eq {
+                        field: field.to_string(),
+                        value: json_to_doc_value(value.clone()),
+                    }),
+                    "$ne" => Some(Filter::Ne {
+                        field: field.to_string(),
+                        value: json_to_doc_value(value.clone()),
+                    }),
+                    "$gt" => Some(Filter::Gt {
+                        field: field.to_string(),
+                        value: json_to_doc_value(value.clone()),
+                    }),
+                    "$gte" => Some(Filter::Gte {
+                        field: field.to_string(),
+                        value: json_to_doc_value(value.clone()),
+                    }),
+                    "$lt" => Some(Filter::Lt {
+                        field: field.to_string(),
+                        value: json_to_doc_value(value.clone()),
+                    }),
+                    "$lte" => Some(Filter::Lte {
+                        field: field.to_string(),
+                        value: json_to_doc_value(value.clone()),
+                    }),
+                    "$in" => {
+                        if let serde_json::Value::Array(arr) = value {
+                            Some(Filter::In {
+                                field: field.to_string(),
+                                values: arr.iter().map(|v| json_to_doc_value(v.clone())).collect(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    "$nin" => {
+                        if let serde_json::Value::Array(arr) = value {
+                            Some(Filter::Nin {
+                                field: field.to_string(),
+                                values: arr.iter().map(|v| json_to_doc_value(v.clone())).collect(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    "$exists" => {
+                        if let serde_json::Value::Bool(b) = value {
+                            Some(Filter::Exists {
+                                field: field.to_string(),
+                                exists: *b,
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    "$regex" => {
+                        if let serde_json::Value::String(pattern) = value {
+                            Some(Filter::Regex {
+                                field: field.to_string(),
+                                pattern: pattern.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    "$contains" => {
+                        if let serde_json::Value::String(s) = value {
+                            Some(Filter::Contains {
+                                field: field.to_string(),
+                                value: s.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    "$startsWith" => {
+                        if let serde_json::Value::String(s) = value {
+                            Some(Filter::StartsWith {
+                                field: field.to_string(),
+                                value: s.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    "$endsWith" => {
+                        if let serde_json::Value::String(s) = value {
+                            Some(Filter::EndsWith {
+                                field: field.to_string(),
+                                value: s.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                if let Some(f) = filter {
+                    filters.push(f);
+                }
+            }
+
+            // If multiple operators on same field, combine with AND
+            match filters.len() {
+                0 => None,
+                1 => filters.into_iter().next(),
+                _ => Some(Filter::And(filters)),
+            }
+        }
+        serde_json::Value::Array(_) => None,
     }
 }
 

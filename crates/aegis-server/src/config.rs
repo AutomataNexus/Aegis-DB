@@ -22,6 +22,7 @@ pub struct ServerConfig {
     pub body_limit_bytes: usize,
     pub enable_cors: bool,
     pub tls: Option<TlsConfig>,
+    pub data_dir: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -34,6 +35,7 @@ impl Default for ServerConfig {
             body_limit_bytes: 10 * 1024 * 1024, // 10MB
             enable_cors: true,
             tls: None,
+            data_dir: None,
         }
     }
 }
@@ -73,6 +75,12 @@ impl ServerConfig {
     /// Set the request timeout in seconds.
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.request_timeout_secs = secs;
+        self
+    }
+
+    /// Set the data directory for persistence.
+    pub fn with_data_dir(mut self, data_dir: Option<String>) -> Self {
+        self.data_dir = data_dir;
         self
     }
 }

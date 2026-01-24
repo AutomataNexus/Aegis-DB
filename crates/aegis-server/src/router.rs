@@ -10,7 +10,7 @@ use crate::handlers;
 use crate::middleware;
 use crate::state::AppState;
 use axum::{
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -43,6 +43,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/nodes/:node_id", delete(handlers::remove_node))
         .route("/storage", get(handlers::get_storage_info))
         .route("/stats", get(handlers::get_query_stats))
+        .route("/database", get(handlers::get_database_stats))
         .route("/alerts", get(handlers::get_alerts))
         .route("/activities", get(handlers::get_activities));
 
@@ -65,8 +66,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/collections", get(handlers::list_collections))
         .route("/collections", post(handlers::create_collection))
         .route("/collections/:name", get(handlers::get_collection_documents))
+        .route("/collections/:name/documents", get(handlers::list_collection_documents))
         .route("/collections/:name/documents", post(handlers::insert_document))
-        .route("/collections/:name/documents/:id", get(handlers::get_document));
+        .route("/collections/:name/documents/:id", get(handlers::get_document))
+        .route("/collections/:name/documents/:id", put(handlers::update_document))
+        .route("/collections/:name/documents/:id", patch(handlers::patch_document))
+        .route("/collections/:name/documents/:id", delete(handlers::delete_document))
+        .route("/collections/:name/query", post(handlers::query_collection_documents));
 
     // Time series routes
     let timeseries_routes = Router::new()

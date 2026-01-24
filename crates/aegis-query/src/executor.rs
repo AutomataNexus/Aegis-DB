@@ -13,13 +13,14 @@
 //! @author AutomataNexus Development Team
 
 use crate::planner::{
-    AggregateFunction, JoinStrategy,
+    AggregateFunction, CreateIndexNode, CreateTableConstraint, CreateTableNode,
+    DeleteNode, DropIndexNode, DropTableNode, InsertNode, InsertPlanSource, JoinStrategy,
     PlanBinaryOp, PlanExpression, PlanJoinType, PlanLiteral, PlanNode, PlanUnaryOp,
-    QueryPlan, ScanNode,
+    QueryPlan, ScanNode, UpdateNode,
 };
 use aegis_common::{DataType, Row, Value};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 // =============================================================================
@@ -55,7 +56,9 @@ pub type ExecutorResult<T> = Result<T, ExecutorError>;
 
 /// Context for query execution.
 pub struct ExecutionContext {
-    tables: HashMap<String, Arc<TableData>>,
+    tables: HashMap<String, Arc<RwLock<TableData>>>,
+    table_schemas: HashMap<String, TableSchema>,
+    indexes: HashMap<String, Vec<IndexSchema>>,
     batch_size: usize,
 }
 
@@ -67,10 +70,38 @@ pub struct TableData {
     pub rows: Vec<Row>,
 }
 
+/// Table schema information.
+#[derive(Debug, Clone)]
+pub struct TableSchema {
+    pub name: String,
+    pub columns: Vec<ColumnSchema>,
+    pub primary_key: Option<Vec<String>>,
+}
+
+/// Column schema information.
+#[derive(Debug, Clone)]
+pub struct ColumnSchema {
+    pub name: String,
+    pub data_type: DataType,
+    pub nullable: bool,
+    pub default: Option<Value>,
+}
+
+/// Index schema information.
+#[derive(Debug, Clone)]
+pub struct IndexSchema {
+    pub name: String,
+    pub table: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+}
+
 impl ExecutionContext {
     pub fn new() -> Self {
         Self {
             tables: HashMap::new(),
+            table_schemas: HashMap::new(),
+            indexes: HashMap::new(),
             batch_size: 1024,
         }
     }
@@ -81,15 +112,255 @@ impl ExecutionContext {
     }
 
     pub fn add_table(&mut self, table: TableData) {
-        self.tables.insert(table.name.clone(), Arc::new(table));
+        self.tables.insert(table.name.clone(), Arc::new(RwLock::new(table)));
     }
 
-    pub fn get_table(&self, name: &str) -> Option<Arc<TableData>> {
+    pub fn get_table(&self, name: &str) -> Option<Arc<RwLock<TableData>>> {
         self.tables.get(name).cloned()
     }
 
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    // ==========================================================================
+    // DDL Operations
+    // ==========================================================================
+
+    /// Create a new table.
+    pub fn create_table(
+        &mut self,
+        name: String,
+        columns: Vec<ColumnSchema>,
+        primary_key: Option<Vec<String>>,
+        if_not_exists: bool,
+    ) -> ExecutorResult<()> {
+        if self.tables.contains_key(&name) {
+            if if_not_exists {
+                return Ok(());
+            }
+            return Err(ExecutorError::InvalidOperation(format!(
+                "Table '{}' already exists",
+                name
+            )));
+        }
+
+        let column_names: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
+
+        // Create table schema
+        let schema = TableSchema {
+            name: name.clone(),
+            columns,
+            primary_key,
+        };
+        self.table_schemas.insert(name.clone(), schema);
+
+        // Create empty table data
+        let table_data = TableData {
+            name: name.clone(),
+            columns: column_names,
+            rows: Vec::new(),
+        };
+        self.tables.insert(name, Arc::new(RwLock::new(table_data)));
+
+        Ok(())
+    }
+
+    /// Drop a table.
+    pub fn drop_table(&mut self, name: &str, if_exists: bool) -> ExecutorResult<()> {
+        if !self.tables.contains_key(name) {
+            if if_exists {
+                return Ok(());
+            }
+            return Err(ExecutorError::TableNotFound(name.to_string()));
+        }
+
+        self.tables.remove(name);
+        self.table_schemas.remove(name);
+        self.indexes.remove(name);
+
+        Ok(())
+    }
+
+    /// Create an index.
+    pub fn create_index(
+        &mut self,
+        name: String,
+        table: String,
+        columns: Vec<String>,
+        unique: bool,
+        if_not_exists: bool,
+    ) -> ExecutorResult<()> {
+        if !self.tables.contains_key(&table) {
+            return Err(ExecutorError::TableNotFound(table));
+        }
+
+        let indexes = self.indexes.entry(table.clone()).or_default();
+
+        // Check if index already exists
+        if indexes.iter().any(|idx| idx.name == name) {
+            if if_not_exists {
+                return Ok(());
+            }
+            return Err(ExecutorError::InvalidOperation(format!(
+                "Index '{}' already exists",
+                name
+            )));
+        }
+
+        indexes.push(IndexSchema {
+            name,
+            table,
+            columns,
+            unique,
+        });
+
+        Ok(())
+    }
+
+    /// Drop an index.
+    pub fn drop_index(&mut self, name: &str, if_exists: bool) -> ExecutorResult<()> {
+        let mut found = false;
+        for indexes in self.indexes.values_mut() {
+            if let Some(pos) = indexes.iter().position(|idx| idx.name == name) {
+                indexes.remove(pos);
+                found = true;
+                break;
+            }
+        }
+
+        if !found && !if_exists {
+            return Err(ExecutorError::InvalidOperation(format!(
+                "Index '{}' not found",
+                name
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Get table schema.
+    pub fn get_table_schema(&self, name: &str) -> Option<&TableSchema> {
+        self.table_schemas.get(name)
+    }
+
+    /// List all table names.
+    pub fn list_tables(&self) -> Vec<String> {
+        self.tables.keys().cloned().collect()
+    }
+
+    // ==========================================================================
+    // DML Operations
+    // ==========================================================================
+
+    /// Insert rows into a table.
+    pub fn insert_rows(
+        &self,
+        table_name: &str,
+        columns: &[String],
+        rows: Vec<Vec<Value>>,
+    ) -> ExecutorResult<u64> {
+        let table = self.get_table(table_name)
+            .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
+
+        let mut table_data = table.write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        // If no columns specified, use all columns in order
+        let target_columns: Vec<String> = if columns.is_empty() {
+            table_data.columns.clone()
+        } else {
+            columns.to_vec()
+        };
+
+        // Build column index mapping
+        let mut column_indices: Vec<usize> = Vec::new();
+        for col in &target_columns {
+            let idx = table_data.columns.iter().position(|c| c == col)
+                .ok_or_else(|| ExecutorError::ColumnNotFound(col.clone()))?;
+            column_indices.push(idx);
+        }
+
+        let mut inserted = 0u64;
+        let num_columns = table_data.columns.len();
+
+        for row_values in rows {
+            // Create a new row with nulls
+            let mut new_row: Vec<Value> = vec![Value::Null; num_columns];
+
+            // Fill in the provided values
+            for (i, &col_idx) in column_indices.iter().enumerate() {
+                if let Some(value) = row_values.get(i) {
+                    new_row[col_idx] = value.clone();
+                }
+            }
+
+            table_data.rows.push(Row { values: new_row });
+            inserted += 1;
+        }
+
+        Ok(inserted)
+    }
+
+    /// Update rows in a table.
+    pub fn update_rows(
+        &self,
+        table_name: &str,
+        assignments: &[(String, Value)],
+        predicate: Option<&dyn Fn(&Row, &[String]) -> bool>,
+    ) -> ExecutorResult<u64> {
+        let table = self.get_table(table_name)
+            .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
+
+        let mut table_data = table.write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+        let columns = table_data.columns.clone();
+
+        // Build assignment index mapping
+        let mut assignment_indices: Vec<(usize, Value)> = Vec::new();
+        for (col, val) in assignments {
+            let idx = columns.iter().position(|c| c == col)
+                .ok_or_else(|| ExecutorError::ColumnNotFound(col.clone()))?;
+            assignment_indices.push((idx, val.clone()));
+        }
+
+        let mut updated = 0u64;
+
+        for row in &mut table_data.rows {
+            let should_update = predicate.map(|p| p(row, &columns)).unwrap_or(true);
+            if should_update {
+                for (col_idx, value) in &assignment_indices {
+                    row.values[*col_idx] = value.clone();
+                }
+                updated += 1;
+            }
+        }
+
+        Ok(updated)
+    }
+
+    /// Delete rows from a table.
+    pub fn delete_rows(
+        &self,
+        table_name: &str,
+        predicate: Option<&dyn Fn(&Row, &[String]) -> bool>,
+    ) -> ExecutorResult<u64> {
+        let table = self.get_table(table_name)
+            .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
+
+        let mut table_data = table.write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+        let columns = table_data.columns.clone();
+
+        let original_len = table_data.rows.len();
+
+        if let Some(pred) = predicate {
+            table_data.rows.retain(|row| !pred(row, &columns));
+        } else {
+            table_data.rows.clear();
+        }
+
+        Ok((original_len - table_data.rows.len()) as u64)
     }
 }
 
@@ -168,17 +439,42 @@ impl QueryResult {
 
 /// Query executor.
 pub struct Executor {
-    context: ExecutionContext,
+    context: Arc<RwLock<ExecutionContext>>,
 }
 
 impl Executor {
     pub fn new(context: ExecutionContext) -> Self {
+        Self { context: Arc::new(RwLock::new(context)) }
+    }
+
+    /// Create executor with a shared context (for persistent DDL across queries).
+    pub fn with_shared_context(context: Arc<RwLock<ExecutionContext>>) -> Self {
         Self { context }
     }
 
     /// Execute a query plan.
     pub fn execute(&self, plan: &QueryPlan) -> ExecutorResult<QueryResult> {
-        let mut operator = self.create_operator(&plan.root)?;
+        match &plan.root {
+            // DDL operations
+            PlanNode::CreateTable(node) => self.execute_create_table(node),
+            PlanNode::DropTable(node) => self.execute_drop_table(node),
+            PlanNode::CreateIndex(node) => self.execute_create_index(node),
+            PlanNode::DropIndex(node) => self.execute_drop_index(node),
+
+            // DML operations
+            PlanNode::Insert(node) => self.execute_insert(node),
+            PlanNode::Update(node) => self.execute_update(node),
+            PlanNode::Delete(node) => self.execute_delete(node),
+
+            // Query operations (SELECT)
+            _ => self.execute_query(&plan.root),
+        }
+    }
+
+    /// Execute a SELECT query.
+    fn execute_query(&self, root: &PlanNode) -> ExecutorResult<QueryResult> {
+        let context = self.context.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+        let mut operator = self.create_operator(root, &context)?;
         let mut all_rows = Vec::new();
         let mut columns = Vec::new();
 
@@ -192,13 +488,209 @@ impl Executor {
         Ok(QueryResult::new(columns, all_rows))
     }
 
+    /// Execute CREATE TABLE.
+    fn execute_create_table(&self, node: &CreateTableNode) -> ExecutorResult<QueryResult> {
+        let columns: Vec<ColumnSchema> = node.columns.iter().map(|col| {
+            ColumnSchema {
+                name: col.name.clone(),
+                data_type: col.data_type.clone(),
+                nullable: col.nullable,
+                default: None, // TODO: evaluate default expression
+            }
+        }).collect();
+
+        // Extract primary key from constraints
+        let primary_key = node.constraints.iter()
+            .find_map(|c| {
+                if let CreateTableConstraint::PrimaryKey { columns } = c {
+                    Some(columns.clone())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                // Check column-level primary key
+                let pk_cols: Vec<String> = node.columns.iter()
+                    .filter(|c| c.primary_key)
+                    .map(|c| c.name.clone())
+                    .collect();
+                if pk_cols.is_empty() { None } else { Some(pk_cols) }
+            });
+
+        self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?.create_table(
+            node.table_name.clone(),
+            columns,
+            primary_key,
+            node.if_not_exists,
+        )?;
+
+        Ok(QueryResult {
+            columns: vec!["result".to_string()],
+            rows: vec![Row { values: vec![Value::String(format!("Table '{}' created", node.table_name))] }],
+            rows_affected: 0,
+        })
+    }
+
+    /// Execute DROP TABLE.
+    fn execute_drop_table(&self, node: &DropTableNode) -> ExecutorResult<QueryResult> {
+        self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?.drop_table(&node.table_name, node.if_exists)?;
+
+        Ok(QueryResult {
+            columns: vec!["result".to_string()],
+            rows: vec![Row { values: vec![Value::String(format!("Table '{}' dropped", node.table_name))] }],
+            rows_affected: 0,
+        })
+    }
+
+    /// Execute CREATE INDEX.
+    fn execute_create_index(&self, node: &CreateIndexNode) -> ExecutorResult<QueryResult> {
+        self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?.create_index(
+            node.index_name.clone(),
+            node.table_name.clone(),
+            node.columns.clone(),
+            node.unique,
+            node.if_not_exists,
+        )?;
+
+        Ok(QueryResult {
+            columns: vec!["result".to_string()],
+            rows: vec![Row { values: vec![Value::String(format!("Index '{}' created", node.index_name))] }],
+            rows_affected: 0,
+        })
+    }
+
+    /// Execute DROP INDEX.
+    fn execute_drop_index(&self, node: &DropIndexNode) -> ExecutorResult<QueryResult> {
+        self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?.drop_index(&node.index_name, node.if_exists)?;
+
+        Ok(QueryResult {
+            columns: vec!["result".to_string()],
+            rows: vec![Row { values: vec![Value::String(format!("Index '{}' dropped", node.index_name))] }],
+            rows_affected: 0,
+        })
+    }
+
+    /// Execute INSERT.
+    fn execute_insert(&self, node: &InsertNode) -> ExecutorResult<QueryResult> {
+        let rows: Vec<Vec<Value>> = match &node.source {
+            InsertPlanSource::Values(values) => {
+                // Evaluate all value expressions
+                let empty_row = Row { values: vec![] };
+                let empty_columns: Vec<String> = vec![];
+
+                values.iter()
+                    .map(|row_exprs| {
+                        row_exprs.iter()
+                            .map(|expr| evaluate_expression(expr, &empty_row, &empty_columns))
+                            .collect::<ExecutorResult<Vec<_>>>()
+                    })
+                    .collect::<ExecutorResult<Vec<_>>>()?
+            }
+            InsertPlanSource::Query(subquery) => {
+                // Execute the subquery and use its results as the insert data
+                let context = self.context.read()
+                    .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+                let mut operator = self.create_operator(subquery, &context)?;
+                let mut all_rows = Vec::new();
+
+                while let Some(batch) = operator.next_batch()? {
+                    for row in batch.rows {
+                        all_rows.push(row.values);
+                    }
+                }
+
+                all_rows
+            }
+        };
+
+        let inserted = self.context.read()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?
+            .insert_rows(&node.table_name, &node.columns, rows)?;
+
+        Ok(QueryResult {
+            columns: vec!["rows_affected".to_string()],
+            rows: vec![Row { values: vec![Value::Integer(inserted as i64)] }],
+            rows_affected: inserted,
+        })
+    }
+
+    /// Execute UPDATE.
+    fn execute_update(&self, node: &UpdateNode) -> ExecutorResult<QueryResult> {
+        let context = self.context.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        // Get table columns for expression evaluation
+        let table = context.get_table(&node.table_name)
+            .ok_or_else(|| ExecutorError::TableNotFound(node.table_name.clone()))?;
+        let table_data = table.read()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+        let _columns = table_data.columns.clone();
+        drop(table_data);
+
+        // Evaluate assignment values
+        let empty_row = Row { values: vec![] };
+        let assignments: Vec<(String, Value)> = node.assignments.iter()
+            .map(|(col, expr)| {
+                let value = evaluate_expression(expr, &empty_row, &[])?;
+                Ok((col.clone(), value))
+            })
+            .collect::<ExecutorResult<Vec<_>>>()?;
+
+        // Create predicate closure if where clause exists
+        let where_clause = node.where_clause.clone();
+        let predicate: Option<Box<dyn Fn(&Row, &[String]) -> bool>> = where_clause.map(|wc| {
+            Box::new(move |row: &Row, cols: &[String]| {
+                evaluate_expression(&wc, row, cols)
+                    .map(|v| matches!(v, Value::Boolean(true)))
+                    .unwrap_or(false)
+            }) as Box<dyn Fn(&Row, &[String]) -> bool>
+        });
+
+        let updated = context.update_rows(
+            &node.table_name,
+            &assignments,
+            predicate.as_ref().map(|p| p.as_ref()),
+        )?;
+
+        Ok(QueryResult {
+            columns: vec!["rows_affected".to_string()],
+            rows: vec![Row { values: vec![Value::Integer(updated as i64)] }],
+            rows_affected: updated,
+        })
+    }
+
+    /// Execute DELETE.
+    fn execute_delete(&self, node: &DeleteNode) -> ExecutorResult<QueryResult> {
+        let context = self.context.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        // Create predicate closure if where clause exists
+        let where_clause = node.where_clause.clone();
+        let predicate: Option<Box<dyn Fn(&Row, &[String]) -> bool>> = where_clause.map(|wc| {
+            Box::new(move |row: &Row, cols: &[String]| {
+                evaluate_expression(&wc, row, cols)
+                    .map(|v| matches!(v, Value::Boolean(true)))
+                    .unwrap_or(false)
+            }) as Box<dyn Fn(&Row, &[String]) -> bool>
+        });
+
+        let deleted = context.delete_rows(
+            &node.table_name,
+            predicate.as_ref().map(|p| p.as_ref()),
+        )?;
+
+        Ok(QueryResult {
+            columns: vec!["rows_affected".to_string()],
+            rows: vec![Row { values: vec![Value::Integer(deleted as i64)] }],
+            rows_affected: deleted,
+        })
+    }
+
     /// Create an operator tree from a plan node.
-    fn create_operator(&self, node: &PlanNode) -> ExecutorResult<Box<dyn Operator>> {
+    fn create_operator<'a>(&'a self, node: &PlanNode, context: &'a ExecutionContext) -> ExecutorResult<Box<dyn Operator + 'a>> {
         match node {
-            PlanNode::Scan(scan) => Ok(Box::new(ScanOperator::new(scan.clone(), &self.context)?)),
+            PlanNode::Scan(scan) => Ok(Box::new(ScanOperator::new(scan.clone(), context)?)),
 
             PlanNode::Filter(filter) => {
-                let input = self.create_operator(&filter.input)?;
+                let input = self.create_operator(&filter.input, context)?;
                 Ok(Box::new(FilterOperator::new(
                     input,
                     filter.predicate.clone(),
@@ -206,7 +698,7 @@ impl Executor {
             }
 
             PlanNode::Project(project) => {
-                let input = self.create_operator(&project.input)?;
+                let input = self.create_operator(&project.input, context)?;
                 Ok(Box::new(ProjectOperator::new(
                     input,
                     project.expressions.clone(),
@@ -214,8 +706,8 @@ impl Executor {
             }
 
             PlanNode::Join(join) => {
-                let left = self.create_operator(&join.left)?;
-                let right = self.create_operator(&join.right)?;
+                let left = self.create_operator(&join.left, context)?;
+                let right = self.create_operator(&join.right, context)?;
                 Ok(Box::new(JoinOperator::new(
                     left,
                     right,
@@ -226,7 +718,7 @@ impl Executor {
             }
 
             PlanNode::Aggregate(agg) => {
-                let input = self.create_operator(&agg.input)?;
+                let input = self.create_operator(&agg.input, context)?;
                 Ok(Box::new(AggregateOperator::new(
                     input,
                     agg.group_by.clone(),
@@ -235,16 +727,23 @@ impl Executor {
             }
 
             PlanNode::Sort(sort) => {
-                let input = self.create_operator(&sort.input)?;
+                let input = self.create_operator(&sort.input, context)?;
                 Ok(Box::new(SortOperator::new(input, sort.order_by.clone())))
             }
 
             PlanNode::Limit(limit) => {
-                let input = self.create_operator(&limit.input)?;
+                let input = self.create_operator(&limit.input, context)?;
                 Ok(Box::new(LimitOperator::new(input, limit.limit, limit.offset)))
             }
 
             PlanNode::Empty => Ok(Box::new(EmptyOperator::new())),
+
+            // DDL and DML nodes are handled in execute(), not here
+            PlanNode::CreateTable(_) | PlanNode::DropTable(_) |
+            PlanNode::CreateIndex(_) | PlanNode::DropIndex(_) |
+            PlanNode::Insert(_) | PlanNode::Update(_) | PlanNode::Delete(_) => {
+                Err(ExecutorError::Internal("DDL/DML nodes should not be in operator tree".to_string()))
+            }
         }
     }
 }
@@ -254,7 +753,7 @@ impl Executor {
 // =============================================================================
 
 /// Operator in the execution pipeline.
-pub trait Operator: Send {
+pub trait Operator {
     /// Get the next batch of results.
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>>;
 
@@ -267,10 +766,12 @@ pub trait Operator: Send {
 // =============================================================================
 
 struct ScanOperator {
-    table: Arc<TableData>,
+    table: Arc<RwLock<TableData>>,
     columns: Vec<String>,
     position: usize,
     batch_size: usize,
+    // Cache the rows to avoid repeated locking
+    cached_rows: Option<Vec<Row>>,
 }
 
 impl ScanOperator {
@@ -279,32 +780,45 @@ impl ScanOperator {
             .get_table(&scan.table_name)
             .ok_or_else(|| ExecutorError::TableNotFound(scan.table_name.clone()))?;
 
-        let columns = if scan.columns.is_empty() {
-            table.columns.clone()
-        } else {
-            scan.columns.clone()
-        };
+        // Read columns under lock, then release lock before moving table into struct
+        let columns = {
+            let table_data = table.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+            if scan.columns.is_empty() {
+                table_data.columns.clone()
+            } else {
+                scan.columns.clone()
+            }
+        }; // table_data guard dropped here
 
         Ok(Self {
             table,
             columns,
             position: 0,
             batch_size: context.batch_size(),
+            cached_rows: None,
         })
     }
 }
 
 impl Operator for ScanOperator {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
-        if self.position >= self.table.rows.len() {
+        // Cache rows on first access
+        if self.cached_rows.is_none() {
+            let table_data = self.table.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+            self.cached_rows = Some(table_data.rows.clone());
+        }
+
+        let rows = self.cached_rows.as_ref().unwrap();
+
+        if self.position >= rows.len() {
             return Ok(None);
         }
 
-        let end = (self.position + self.batch_size).min(self.table.rows.len());
-        let rows: Vec<Row> = self.table.rows[self.position..end].to_vec();
+        let end = (self.position + self.batch_size).min(rows.len());
+        let batch_rows: Vec<Row> = rows[self.position..end].to_vec();
         self.position = end;
 
-        Ok(Some(ResultBatch::with_rows(self.columns.clone(), rows)))
+        Ok(Some(ResultBatch::with_rows(self.columns.clone(), batch_rows)))
     }
 
     fn columns(&self) -> &[String] {
@@ -316,14 +830,14 @@ impl Operator for ScanOperator {
 // Filter Operator
 // =============================================================================
 
-struct FilterOperator {
-    input: Box<dyn Operator>,
+struct FilterOperator<'a> {
+    input: Box<dyn Operator + 'a>,
     predicate: PlanExpression,
     columns: Vec<String>,
 }
 
-impl FilterOperator {
-    fn new(input: Box<dyn Operator>, predicate: PlanExpression) -> Self {
+impl<'a> FilterOperator<'a> {
+    fn new(input: Box<dyn Operator + 'a>, predicate: PlanExpression) -> Self {
         let columns = input.columns().to_vec();
         Self {
             input,
@@ -345,7 +859,7 @@ impl FilterOperator {
     }
 }
 
-impl Operator for FilterOperator {
+impl<'a> Operator for FilterOperator<'a> {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
         while let Some(batch) = self.input.next_batch()? {
             let filtered: Vec<Row> = batch
@@ -370,24 +884,26 @@ impl Operator for FilterOperator {
 // Project Operator
 // =============================================================================
 
-struct ProjectOperator {
-    input: Box<dyn Operator>,
+struct ProjectOperator<'a> {
+    input: Box<dyn Operator + 'a>,
     expressions: Vec<crate::planner::ProjectionExpr>,
     columns: Vec<String>,
     input_columns: Vec<String>,
 }
 
-impl ProjectOperator {
-    fn new(input: Box<dyn Operator>, expressions: Vec<crate::planner::ProjectionExpr>) -> Self {
+impl<'a> ProjectOperator<'a> {
+    fn new(input: Box<dyn Operator + 'a>, expressions: Vec<crate::planner::ProjectionExpr>) -> Self {
         let input_columns = input.columns().to_vec();
 
         let columns: Vec<String> = expressions
             .iter()
             .enumerate()
-            .map(|(i, expr)| {
-                expr.alias
-                    .clone()
-                    .unwrap_or_else(|| format!("column_{}", i))
+            .map(|(i, proj_expr)| {
+                // Use alias if provided, otherwise try to extract name from expression
+                proj_expr.alias.clone().unwrap_or_else(|| {
+                    extract_column_name(&proj_expr.expr)
+                        .unwrap_or_else(|| format!("column_{}", i))
+                })
             })
             .collect();
 
@@ -400,7 +916,18 @@ impl ProjectOperator {
     }
 }
 
-impl Operator for ProjectOperator {
+/// Extract a meaningful column name from a PlanExpression.
+fn extract_column_name(expr: &PlanExpression) -> Option<String> {
+    match expr {
+        PlanExpression::Column { name, .. } => Some(name.clone()),
+        PlanExpression::Function { name, .. } => Some(name.clone()),
+        PlanExpression::Cast { expr, .. } => extract_column_name(expr),
+        PlanExpression::UnaryOp { expr, .. } => extract_column_name(expr),
+        _ => None,
+    }
+}
+
+impl<'a> Operator for ProjectOperator<'a> {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
         if let Some(batch) = self.input.next_batch()? {
             let mut result_rows = Vec::with_capacity(batch.rows.len());
@@ -437,9 +964,9 @@ impl Operator for ProjectOperator {
 // =============================================================================
 
 #[allow(dead_code)]
-struct JoinOperator {
-    left: Box<dyn Operator>,
-    right: Box<dyn Operator>,
+struct JoinOperator<'a> {
+    left: Box<dyn Operator + 'a>,
+    right: Box<dyn Operator + 'a>,
     join_type: PlanJoinType,
     condition: Option<PlanExpression>,
     _strategy: JoinStrategy,
@@ -452,10 +979,10 @@ struct JoinOperator {
     right_row_idx: usize,
 }
 
-impl JoinOperator {
+impl<'a> JoinOperator<'a> {
     fn new(
-        left: Box<dyn Operator>,
-        right: Box<dyn Operator>,
+        left: Box<dyn Operator + 'a>,
+        right: Box<dyn Operator + 'a>,
         join_type: PlanJoinType,
         condition: Option<PlanExpression>,
         strategy: JoinStrategy,
@@ -514,7 +1041,7 @@ impl JoinOperator {
     }
 }
 
-impl Operator for JoinOperator {
+impl<'a> Operator for JoinOperator<'a> {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
         self.materialize_right()?;
         let right_data = self.right_data.as_ref().unwrap();
@@ -581,8 +1108,8 @@ impl Operator for JoinOperator {
 // Aggregate Operator
 // =============================================================================
 
-struct AggregateOperator {
-    input: Box<dyn Operator>,
+struct AggregateOperator<'a> {
+    input: Box<dyn Operator + 'a>,
     _group_by: Vec<PlanExpression>,
     aggregates: Vec<crate::planner::AggregateExpr>,
     columns: Vec<String>,
@@ -590,9 +1117,9 @@ struct AggregateOperator {
     done: bool,
 }
 
-impl AggregateOperator {
+impl<'a> AggregateOperator<'a> {
     fn new(
-        input: Box<dyn Operator>,
+        input: Box<dyn Operator + 'a>,
         group_by: Vec<PlanExpression>,
         aggregates: Vec<crate::planner::AggregateExpr>,
     ) -> Self {
@@ -619,7 +1146,7 @@ impl AggregateOperator {
     }
 }
 
-impl Operator for AggregateOperator {
+impl<'a> Operator for AggregateOperator<'a> {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
         if self.done {
             return Ok(None);
@@ -729,16 +1256,16 @@ impl Accumulator {
 // Sort Operator
 // =============================================================================
 
-struct SortOperator {
-    input: Box<dyn Operator>,
+struct SortOperator<'a> {
+    input: Box<dyn Operator + 'a>,
     order_by: Vec<crate::planner::SortKey>,
     columns: Vec<String>,
     sorted_data: Option<Vec<Row>>,
     position: usize,
 }
 
-impl SortOperator {
-    fn new(input: Box<dyn Operator>, order_by: Vec<crate::planner::SortKey>) -> Self {
+impl<'a> SortOperator<'a> {
+    fn new(input: Box<dyn Operator + 'a>, order_by: Vec<crate::planner::SortKey>) -> Self {
         let columns = input.columns().to_vec();
         Self {
             input,
@@ -750,7 +1277,7 @@ impl SortOperator {
     }
 }
 
-impl Operator for SortOperator {
+impl<'a> Operator for SortOperator<'a> {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
         if self.sorted_data.is_none() {
             let mut all_rows = Vec::new();
@@ -804,8 +1331,8 @@ impl Operator for SortOperator {
 // Limit Operator
 // =============================================================================
 
-struct LimitOperator {
-    input: Box<dyn Operator>,
+struct LimitOperator<'a> {
+    input: Box<dyn Operator + 'a>,
     limit: Option<u64>,
     offset: Option<u64>,
     columns: Vec<String>,
@@ -813,8 +1340,8 @@ struct LimitOperator {
     rows_returned: u64,
 }
 
-impl LimitOperator {
-    fn new(input: Box<dyn Operator>, limit: Option<u64>, offset: Option<u64>) -> Self {
+impl<'a> LimitOperator<'a> {
+    fn new(input: Box<dyn Operator + 'a>, limit: Option<u64>, offset: Option<u64>) -> Self {
         let columns = input.columns().to_vec();
         Self {
             input,
@@ -827,7 +1354,7 @@ impl LimitOperator {
     }
 }
 
-impl Operator for LimitOperator {
+impl<'a> Operator for LimitOperator<'a> {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
         if let Some(limit) = self.limit {
             if self.rows_returned >= limit {
@@ -960,6 +1487,151 @@ fn evaluate_expression(
                 .map(|a| evaluate_expression(a, row, columns))
                 .collect::<ExecutorResult<Vec<_>>>()?;
             evaluate_function(name, &arg_values)
+        }
+
+        PlanExpression::Case { operand, conditions, else_result } => {
+            match operand {
+                Some(operand_expr) => {
+                    // CASE operand WHEN value THEN result ... END
+                    let operand_val = evaluate_expression(operand_expr, row, columns)?;
+                    for (when_expr, then_expr) in conditions {
+                        let when_val = evaluate_expression(when_expr, row, columns)?;
+                        if compare_values(&operand_val, &when_val)? == std::cmp::Ordering::Equal {
+                            return evaluate_expression(then_expr, row, columns);
+                        }
+                    }
+                }
+                None => {
+                    // CASE WHEN condition THEN result ... END
+                    for (when_expr, then_expr) in conditions {
+                        let when_val = evaluate_expression(when_expr, row, columns)?;
+                        if matches!(when_val, Value::Boolean(true)) {
+                            return evaluate_expression(then_expr, row, columns);
+                        }
+                    }
+                }
+            }
+            // Return ELSE result or NULL
+            match else_result {
+                Some(else_expr) => evaluate_expression(else_expr, row, columns),
+                None => Ok(Value::Null),
+            }
+        }
+
+        PlanExpression::InList { expr, list, negated } => {
+            let val = evaluate_expression(expr, row, columns)?;
+            let mut found = false;
+            for item in list {
+                let item_val = evaluate_expression(item, row, columns)?;
+                if compare_values(&val, &item_val)? == std::cmp::Ordering::Equal {
+                    found = true;
+                    break;
+                }
+            }
+            Ok(Value::Boolean(if *negated { !found } else { found }))
+        }
+
+        PlanExpression::Between { expr, low, high, negated } => {
+            let val = evaluate_expression(expr, row, columns)?;
+            let low_val = evaluate_expression(low, row, columns)?;
+            let high_val = evaluate_expression(high, row, columns)?;
+
+            let ge_low = compare_values(&val, &low_val)? != std::cmp::Ordering::Less;
+            let le_high = compare_values(&val, &high_val)? != std::cmp::Ordering::Greater;
+            let in_range = ge_low && le_high;
+
+            Ok(Value::Boolean(if *negated { !in_range } else { in_range }))
+        }
+
+        PlanExpression::Like { expr, pattern, negated } => {
+            let val = evaluate_expression(expr, row, columns)?;
+            let pattern_val = evaluate_expression(pattern, row, columns)?;
+
+            let val_str = match val {
+                Value::String(s) => s,
+                Value::Null => return Ok(Value::Null),
+                Value::Integer(i) => i.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Boolean(b) => b.to_string(),
+                Value::Bytes(b) => String::from_utf8_lossy(&b).to_string(),
+                Value::Timestamp(t) => t.to_rfc3339(),
+                Value::Array(_) | Value::Object(_) => return Ok(Value::Boolean(false)),
+            };
+
+            let pattern_str = match pattern_val {
+                Value::String(s) => s,
+                Value::Null => return Ok(Value::Null),
+                Value::Integer(i) => i.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Boolean(b) => b.to_string(),
+                Value::Bytes(b) => String::from_utf8_lossy(&b).to_string(),
+                Value::Timestamp(t) => t.to_rfc3339(),
+                Value::Array(_) | Value::Object(_) => return Ok(Value::Boolean(false)),
+            };
+
+            // Convert SQL LIKE pattern to regex
+            let regex_pattern = pattern_str
+                .replace('%', ".*")
+                .replace('_', ".");
+            let regex_pattern = format!("^{}$", regex_pattern);
+
+            // Simple pattern matching (could use regex crate for full support)
+            let matches = if regex_pattern == "^.*$" {
+                true
+            } else if regex_pattern.starts_with("^") && regex_pattern.ends_with("$") {
+                let inner = &regex_pattern[1..regex_pattern.len()-1];
+                if inner.contains(".*") || inner.contains('.') {
+                    // For patterns with wildcards, do simple matching
+                    let parts: Vec<&str> = inner.split(".*").collect();
+                    if parts.len() == 1 {
+                        val_str == parts[0]
+                    } else {
+                        let mut pos = 0;
+                        let mut matched = true;
+                        for (i, part) in parts.iter().enumerate() {
+                            if part.is_empty() { continue; }
+                            if let Some(found_pos) = val_str[pos..].find(part) {
+                                if i == 0 && found_pos != 0 {
+                                    matched = false;
+                                    break;
+                                }
+                                pos += found_pos + part.len();
+                            } else {
+                                matched = false;
+                                break;
+                            }
+                        }
+                        matched
+                    }
+                } else {
+                    val_str == inner
+                }
+            } else {
+                val_str.contains(&pattern_str)
+            };
+
+            Ok(Value::Boolean(if *negated { !matches } else { matches }))
+        }
+
+        PlanExpression::InSubquery { .. } => {
+            // Subquery evaluation requires execution context, return placeholder for now
+            // This would need to execute the subquery and check if value is in results
+            Err(ExecutorError::Internal("IN subquery evaluation requires execution context".to_string()))
+        }
+
+        PlanExpression::Exists { .. } => {
+            // EXISTS subquery evaluation requires execution context
+            Err(ExecutorError::Internal("EXISTS subquery evaluation requires execution context".to_string()))
+        }
+
+        PlanExpression::ScalarSubquery(_) => {
+            // Scalar subquery evaluation requires execution context
+            Err(ExecutorError::Internal("Scalar subquery evaluation requires execution context".to_string()))
+        }
+
+        PlanExpression::Placeholder(idx) => {
+            // Placeholders should be replaced before execution
+            Err(ExecutorError::Internal(format!("Unresolved placeholder ${}", idx)))
         }
     }
 }
@@ -1333,5 +2005,562 @@ mod tests {
         let result = executor.execute(&plan).unwrap();
 
         assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_create_table() {
+        use crate::planner::{CreateTableNode, CreateColumnDef};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        let plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "test_table".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "name".to_string(),
+                        data_type: DataType::Text,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+
+        let result = executor.execute(&plan).unwrap();
+        match &result.rows[0].values[0] {
+            Value::String(s) => assert!(s.contains("created")),
+            _ => panic!("Expected string result"),
+        }
+
+        // Verify table exists by listing tables
+        let tables = executor.context.read().unwrap().list_tables();
+        assert!(tables.contains(&"test_table".to_string()));
+    }
+
+    #[test]
+    fn test_insert_into_table() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // First create a table
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "test_insert".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "value".to_string(),
+                        data_type: DataType::Text,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Now insert data
+        let insert_plan = QueryPlan {
+            root: PlanNode::Insert(InsertNode {
+                table_name: "test_insert".to_string(),
+                columns: vec!["id".to_string(), "value".to_string()],
+                source: InsertPlanSource::Values(vec![
+                    vec![
+                        PlanExpression::Literal(PlanLiteral::Integer(1)),
+                        PlanExpression::Literal(PlanLiteral::String("hello".to_string())),
+                    ],
+                    vec![
+                        PlanExpression::Literal(PlanLiteral::Integer(2)),
+                        PlanExpression::Literal(PlanLiteral::String("world".to_string())),
+                    ],
+                ]),
+            }),
+            estimated_cost: 2.0,
+            estimated_rows: 2,
+        };
+
+        let result = executor.execute(&insert_plan).unwrap();
+        assert_eq!(result.rows_affected, 2);
+
+        // Query the data
+        let query_plan = QueryPlan {
+            root: PlanNode::Project(ProjectNode {
+                input: Box::new(PlanNode::Scan(ScanNode {
+                    table_name: "test_insert".to_string(),
+                    alias: None,
+                    columns: vec!["id".to_string(), "value".to_string()],
+                    index_scan: None,
+                })),
+                expressions: vec![
+                    ProjectionExpr {
+                        expr: PlanExpression::Column {
+                            table: None,
+                            name: "id".to_string(),
+                            data_type: DataType::Integer,
+                        },
+                        alias: Some("id".to_string()),
+                    },
+                ],
+            }),
+            estimated_cost: 100.0,
+            estimated_rows: 2,
+        };
+
+        let query_result = executor.execute(&query_plan).unwrap();
+        assert_eq!(query_result.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_drop_table() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, DropTableNode};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // Create a table
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "to_drop".to_string(),
+                columns: vec![CreateColumnDef {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                    default: None,
+                    primary_key: true,
+                    unique: false,
+                }],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Verify it exists
+        let tables = executor.context.read().unwrap().list_tables();
+        assert!(tables.contains(&"to_drop".to_string()));
+
+        // Drop the table
+        let drop_plan = QueryPlan {
+            root: PlanNode::DropTable(DropTableNode {
+                table_name: "to_drop".to_string(),
+                if_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&drop_plan).unwrap();
+
+        // Verify it's gone
+        let tables = executor.context.read().unwrap().list_tables();
+        assert!(!tables.contains(&"to_drop".to_string()));
+    }
+
+    #[test]
+    fn test_shared_context_persistence() {
+        use crate::planner::{CreateTableNode, CreateColumnDef};
+        use std::sync::{Arc, RwLock};
+
+        // Create a shared context
+        let shared_context = Arc::new(RwLock::new(ExecutionContext::new()));
+
+        // Create executor with shared context
+        let executor = Executor::with_shared_context(shared_context.clone());
+
+        // Create a table
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "shared_table".to_string(),
+                columns: vec![CreateColumnDef {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                    default: None,
+                    primary_key: true,
+                    unique: false,
+                }],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Create a new executor with the SAME shared context
+        let executor2 = Executor::with_shared_context(shared_context.clone());
+
+        // Verify the table exists from the second executor's perspective
+        let tables = executor2.context.read().unwrap().list_tables();
+        assert!(tables.contains(&"shared_table".to_string()));
+    }
+
+    #[test]
+    fn test_insert_select() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource, FilterNode};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // Create source table
+        let create_source = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "source_table".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "value".to_string(),
+                        data_type: DataType::Text,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_source).unwrap();
+
+        // Create destination table
+        let create_dest = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "dest_table".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "value".to_string(),
+                        data_type: DataType::Text,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_dest).unwrap();
+
+        // Insert data into source table
+        let insert_source = QueryPlan {
+            root: PlanNode::Insert(InsertNode {
+                table_name: "source_table".to_string(),
+                columns: vec!["id".to_string(), "value".to_string()],
+                source: InsertPlanSource::Values(vec![
+                    vec![
+                        PlanExpression::Literal(PlanLiteral::Integer(1)),
+                        PlanExpression::Literal(PlanLiteral::String("one".to_string())),
+                    ],
+                    vec![
+                        PlanExpression::Literal(PlanLiteral::Integer(2)),
+                        PlanExpression::Literal(PlanLiteral::String("two".to_string())),
+                    ],
+                    vec![
+                        PlanExpression::Literal(PlanLiteral::Integer(3)),
+                        PlanExpression::Literal(PlanLiteral::String("three".to_string())),
+                    ],
+                ]),
+            }),
+            estimated_cost: 3.0,
+            estimated_rows: 3,
+        };
+        executor.execute(&insert_source).unwrap();
+
+        // INSERT INTO dest_table SELECT * FROM source_table WHERE id > 1
+        let insert_select = QueryPlan {
+            root: PlanNode::Insert(InsertNode {
+                table_name: "dest_table".to_string(),
+                columns: vec!["id".to_string(), "value".to_string()],
+                source: InsertPlanSource::Query(Box::new(
+                    PlanNode::Project(ProjectNode {
+                        input: Box::new(PlanNode::Filter(FilterNode {
+                            input: Box::new(PlanNode::Scan(ScanNode {
+                                table_name: "source_table".to_string(),
+                                alias: None,
+                                columns: vec!["id".to_string(), "value".to_string()],
+                                index_scan: None,
+                            })),
+                            predicate: PlanExpression::BinaryOp {
+                                left: Box::new(PlanExpression::Column {
+                                    table: None,
+                                    name: "id".to_string(),
+                                    data_type: DataType::Integer,
+                                }),
+                                op: PlanBinaryOp::GreaterThan,
+                                right: Box::new(PlanExpression::Literal(PlanLiteral::Integer(1))),
+                            },
+                        })),
+                        expressions: vec![
+                            ProjectionExpr {
+                                expr: PlanExpression::Column {
+                                    table: None,
+                                    name: "id".to_string(),
+                                    data_type: DataType::Integer,
+                                },
+                                alias: Some("id".to_string()),
+                            },
+                            ProjectionExpr {
+                                expr: PlanExpression::Column {
+                                    table: None,
+                                    name: "value".to_string(),
+                                    data_type: DataType::Text,
+                                },
+                                alias: Some("value".to_string()),
+                            },
+                        ],
+                    })
+                )),
+            }),
+            estimated_cost: 2.0,
+            estimated_rows: 2,
+        };
+
+        let result = executor.execute(&insert_select).unwrap();
+        assert_eq!(result.rows_affected, 2); // Only rows with id > 1 (id=2 and id=3)
+
+        // Query dest_table to verify
+        let query_plan = QueryPlan {
+            root: PlanNode::Project(ProjectNode {
+                input: Box::new(PlanNode::Scan(ScanNode {
+                    table_name: "dest_table".to_string(),
+                    alias: None,
+                    columns: vec!["id".to_string(), "value".to_string()],
+                    index_scan: None,
+                })),
+                expressions: vec![
+                    ProjectionExpr {
+                        expr: PlanExpression::Column {
+                            table: None,
+                            name: "id".to_string(),
+                            data_type: DataType::Integer,
+                        },
+                        alias: Some("id".to_string()),
+                    },
+                ],
+            }),
+            estimated_cost: 100.0,
+            estimated_rows: 2,
+        };
+
+        let query_result = executor.execute(&query_plan).unwrap();
+        assert_eq!(query_result.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_case_expression() {
+        let row = Row { values: vec![Value::Integer(2)] };
+        let columns = vec!["status".to_string()];
+
+        // CASE WHEN status = 1 THEN 'one' WHEN status = 2 THEN 'two' ELSE 'other' END
+        let case_expr = PlanExpression::Case {
+            operand: None,
+            conditions: vec![
+                (
+                    PlanExpression::BinaryOp {
+                        left: Box::new(PlanExpression::Column {
+                            table: None,
+                            name: "status".to_string(),
+                            data_type: DataType::Integer,
+                        }),
+                        op: PlanBinaryOp::Equal,
+                        right: Box::new(PlanExpression::Literal(PlanLiteral::Integer(1))),
+                    },
+                    PlanExpression::Literal(PlanLiteral::String("one".to_string())),
+                ),
+                (
+                    PlanExpression::BinaryOp {
+                        left: Box::new(PlanExpression::Column {
+                            table: None,
+                            name: "status".to_string(),
+                            data_type: DataType::Integer,
+                        }),
+                        op: PlanBinaryOp::Equal,
+                        right: Box::new(PlanExpression::Literal(PlanLiteral::Integer(2))),
+                    },
+                    PlanExpression::Literal(PlanLiteral::String("two".to_string())),
+                ),
+            ],
+            else_result: Some(Box::new(PlanExpression::Literal(PlanLiteral::String("other".to_string())))),
+        };
+
+        let result = evaluate_expression(&case_expr, &row, &columns).unwrap();
+        assert_eq!(result, Value::String("two".to_string()));
+    }
+
+    #[test]
+    fn test_in_list_expression() {
+        let row = Row { values: vec![Value::Integer(3)] };
+        let columns = vec!["id".to_string()];
+
+        // id IN (1, 2, 3, 4, 5)
+        let in_expr = PlanExpression::InList {
+            expr: Box::new(PlanExpression::Column {
+                table: None,
+                name: "id".to_string(),
+                data_type: DataType::Integer,
+            }),
+            list: vec![
+                PlanExpression::Literal(PlanLiteral::Integer(1)),
+                PlanExpression::Literal(PlanLiteral::Integer(2)),
+                PlanExpression::Literal(PlanLiteral::Integer(3)),
+                PlanExpression::Literal(PlanLiteral::Integer(4)),
+                PlanExpression::Literal(PlanLiteral::Integer(5)),
+            ],
+            negated: false,
+        };
+
+        let result = evaluate_expression(&in_expr, &row, &columns).unwrap();
+        assert_eq!(result, Value::Boolean(true));
+
+        // id NOT IN (1, 2, 3, 4, 5) - should be false
+        let not_in_expr = PlanExpression::InList {
+            expr: Box::new(PlanExpression::Column {
+                table: None,
+                name: "id".to_string(),
+                data_type: DataType::Integer,
+            }),
+            list: vec![
+                PlanExpression::Literal(PlanLiteral::Integer(1)),
+                PlanExpression::Literal(PlanLiteral::Integer(2)),
+                PlanExpression::Literal(PlanLiteral::Integer(3)),
+            ],
+            negated: true,
+        };
+
+        let result = evaluate_expression(&not_in_expr, &row, &columns).unwrap();
+        assert_eq!(result, Value::Boolean(false));
+    }
+
+    #[test]
+    fn test_between_expression() {
+        let row = Row { values: vec![Value::Integer(50)] };
+        let columns = vec!["value".to_string()];
+
+        // value BETWEEN 10 AND 100
+        let between_expr = PlanExpression::Between {
+            expr: Box::new(PlanExpression::Column {
+                table: None,
+                name: "value".to_string(),
+                data_type: DataType::Integer,
+            }),
+            low: Box::new(PlanExpression::Literal(PlanLiteral::Integer(10))),
+            high: Box::new(PlanExpression::Literal(PlanLiteral::Integer(100))),
+            negated: false,
+        };
+
+        let result = evaluate_expression(&between_expr, &row, &columns).unwrap();
+        assert_eq!(result, Value::Boolean(true));
+
+        // value NOT BETWEEN 10 AND 40 (50 is outside, should be true)
+        let not_between_expr = PlanExpression::Between {
+            expr: Box::new(PlanExpression::Column {
+                table: None,
+                name: "value".to_string(),
+                data_type: DataType::Integer,
+            }),
+            low: Box::new(PlanExpression::Literal(PlanLiteral::Integer(10))),
+            high: Box::new(PlanExpression::Literal(PlanLiteral::Integer(40))),
+            negated: true,
+        };
+
+        let result = evaluate_expression(&not_between_expr, &row, &columns).unwrap();
+        assert_eq!(result, Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_like_expression() {
+        let row = Row { values: vec![Value::String("hello world".to_string())] };
+        let columns = vec!["text".to_string()];
+
+        // text LIKE 'hello%'
+        let like_expr = PlanExpression::Like {
+            expr: Box::new(PlanExpression::Column {
+                table: None,
+                name: "text".to_string(),
+                data_type: DataType::Text,
+            }),
+            pattern: Box::new(PlanExpression::Literal(PlanLiteral::String("hello%".to_string()))),
+            negated: false,
+        };
+
+        let result = evaluate_expression(&like_expr, &row, &columns).unwrap();
+        assert_eq!(result, Value::Boolean(true));
+
+        // text LIKE '%world'
+        let like_expr2 = PlanExpression::Like {
+            expr: Box::new(PlanExpression::Column {
+                table: None,
+                name: "text".to_string(),
+                data_type: DataType::Text,
+            }),
+            pattern: Box::new(PlanExpression::Literal(PlanLiteral::String("%world".to_string()))),
+            negated: false,
+        };
+
+        let result = evaluate_expression(&like_expr2, &row, &columns).unwrap();
+        assert_eq!(result, Value::Boolean(true));
+
+        // text NOT LIKE '%foo%' (should be true since 'foo' is not in 'hello world')
+        let not_like_expr = PlanExpression::Like {
+            expr: Box::new(PlanExpression::Column {
+                table: None,
+                name: "text".to_string(),
+                data_type: DataType::Text,
+            }),
+            pattern: Box::new(PlanExpression::Literal(PlanLiteral::String("%foo%".to_string()))),
+            negated: true,
+        };
+
+        let result = evaluate_expression(&not_like_expr, &row, &columns).unwrap();
+        assert_eq!(result, Value::Boolean(true));
     }
 }

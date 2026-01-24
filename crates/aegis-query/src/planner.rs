@@ -65,6 +65,15 @@ pub enum PlanNode {
     Sort(SortNode),
     Limit(LimitNode),
     Empty,
+    // DDL nodes
+    CreateTable(CreateTableNode),
+    DropTable(DropTableNode),
+    CreateIndex(CreateIndexNode),
+    DropIndex(DropIndexNode),
+    // DML nodes
+    Insert(InsertNode),
+    Update(UpdateNode),
+    Delete(DeleteNode),
 }
 
 // =============================================================================
@@ -196,6 +205,103 @@ pub struct LimitNode {
 }
 
 // =============================================================================
+// DDL Plan Nodes
+// =============================================================================
+
+/// CREATE TABLE operation.
+#[derive(Debug, Clone)]
+pub struct CreateTableNode {
+    pub table_name: String,
+    pub columns: Vec<CreateColumnDef>,
+    pub constraints: Vec<CreateTableConstraint>,
+    pub if_not_exists: bool,
+}
+
+/// Column definition for CREATE TABLE.
+#[derive(Debug, Clone)]
+pub struct CreateColumnDef {
+    pub name: String,
+    pub data_type: DataType,
+    pub nullable: bool,
+    pub default: Option<PlanExpression>,
+    pub primary_key: bool,
+    pub unique: bool,
+}
+
+/// Table constraint for CREATE TABLE.
+#[derive(Debug, Clone)]
+pub enum CreateTableConstraint {
+    PrimaryKey { columns: Vec<String> },
+    Unique { columns: Vec<String> },
+    ForeignKey {
+        columns: Vec<String>,
+        ref_table: String,
+        ref_columns: Vec<String>,
+    },
+    Check { expression: PlanExpression },
+}
+
+/// DROP TABLE operation.
+#[derive(Debug, Clone)]
+pub struct DropTableNode {
+    pub table_name: String,
+    pub if_exists: bool,
+}
+
+/// CREATE INDEX operation.
+#[derive(Debug, Clone)]
+pub struct CreateIndexNode {
+    pub index_name: String,
+    pub table_name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub if_not_exists: bool,
+}
+
+/// DROP INDEX operation.
+#[derive(Debug, Clone)]
+pub struct DropIndexNode {
+    pub index_name: String,
+    pub if_exists: bool,
+}
+
+// =============================================================================
+// DML Plan Nodes
+// =============================================================================
+
+/// Source for INSERT data in a query plan.
+#[derive(Debug, Clone)]
+pub enum InsertPlanSource {
+    /// Direct values (INSERT INTO ... VALUES ...)
+    Values(Vec<Vec<PlanExpression>>),
+    /// Subquery (INSERT INTO ... SELECT ...)
+    Query(Box<PlanNode>),
+}
+
+/// INSERT operation.
+#[derive(Debug, Clone)]
+pub struct InsertNode {
+    pub table_name: String,
+    pub columns: Vec<String>,
+    pub source: InsertPlanSource,
+}
+
+/// UPDATE operation.
+#[derive(Debug, Clone)]
+pub struct UpdateNode {
+    pub table_name: String,
+    pub assignments: Vec<(String, PlanExpression)>,
+    pub where_clause: Option<PlanExpression>,
+}
+
+/// DELETE operation.
+#[derive(Debug, Clone)]
+pub struct DeleteNode {
+    pub table_name: String,
+    pub where_clause: Option<PlanExpression>,
+}
+
+// =============================================================================
 // Plan Expressions
 // =============================================================================
 
@@ -230,6 +336,46 @@ pub enum PlanExpression {
         expr: Box<PlanExpression>,
         negated: bool,
     },
+    /// CASE expression
+    Case {
+        operand: Option<Box<PlanExpression>>,
+        conditions: Vec<(PlanExpression, PlanExpression)>,
+        else_result: Option<Box<PlanExpression>>,
+    },
+    /// IN list expression (e.g., x IN (1, 2, 3))
+    InList {
+        expr: Box<PlanExpression>,
+        list: Vec<PlanExpression>,
+        negated: bool,
+    },
+    /// BETWEEN expression (e.g., x BETWEEN 1 AND 10)
+    Between {
+        expr: Box<PlanExpression>,
+        low: Box<PlanExpression>,
+        high: Box<PlanExpression>,
+        negated: bool,
+    },
+    /// LIKE pattern matching expression
+    Like {
+        expr: Box<PlanExpression>,
+        pattern: Box<PlanExpression>,
+        negated: bool,
+    },
+    /// IN subquery expression (e.g., x IN (SELECT y FROM t))
+    InSubquery {
+        expr: Box<PlanExpression>,
+        subquery: Box<PlanNode>,
+        negated: bool,
+    },
+    /// EXISTS subquery expression
+    Exists {
+        subquery: Box<PlanNode>,
+        negated: bool,
+    },
+    /// Scalar subquery (returns single value)
+    ScalarSubquery(Box<PlanNode>),
+    /// Placeholder for parameterized queries ($1, $2, etc.)
+    Placeholder(usize),
 }
 
 /// Literal values in plan.
@@ -346,19 +492,196 @@ impl Planner {
     pub fn plan(&self, statement: &Statement) -> PlannerResult<QueryPlan> {
         match statement {
             Statement::Select(select) => self.plan_select(select),
-            Statement::Insert(_) => Err(PlannerError::UnsupportedOperation(
-                "INSERT planning not yet implemented".to_string(),
-            )),
-            Statement::Update(_) => Err(PlannerError::UnsupportedOperation(
-                "UPDATE planning not yet implemented".to_string(),
-            )),
-            Statement::Delete(_) => Err(PlannerError::UnsupportedOperation(
-                "DELETE planning not yet implemented".to_string(),
-            )),
-            _ => Err(PlannerError::UnsupportedOperation(
-                "DDL planning not yet implemented".to_string(),
-            )),
+            Statement::Insert(insert) => self.plan_insert(insert),
+            Statement::Update(update) => self.plan_update(update),
+            Statement::Delete(delete) => self.plan_delete(delete),
+            Statement::CreateTable(create) => self.plan_create_table(create),
+            Statement::DropTable(drop) => self.plan_drop_table(drop),
+            Statement::CreateIndex(create) => self.plan_create_index(create),
+            Statement::DropIndex(drop) => self.plan_drop_index(drop),
+            Statement::Begin | Statement::Commit | Statement::Rollback => {
+                // Transaction control statements return empty plan
+                Ok(QueryPlan {
+                    root: PlanNode::Empty,
+                    estimated_cost: 0.0,
+                    estimated_rows: 0,
+                })
+            }
         }
+    }
+
+    /// Plan a CREATE TABLE statement.
+    fn plan_create_table(&self, create: &crate::ast::CreateTableStatement) -> PlannerResult<QueryPlan> {
+        let mut columns: Vec<CreateColumnDef> = Vec::new();
+        for col in &create.columns {
+            let primary_key = col.constraints.iter().any(|c| matches!(c, crate::ast::ColumnConstraint::PrimaryKey));
+            let unique = col.constraints.iter().any(|c| matches!(c, crate::ast::ColumnConstraint::Unique));
+
+            let default = match &col.default {
+                Some(e) => Some(self.plan_expression(e)?),
+                None => None,
+            };
+
+            columns.push(CreateColumnDef {
+                name: col.name.clone(),
+                data_type: col.data_type.clone(),
+                nullable: col.nullable,
+                default,
+                primary_key,
+                unique,
+            });
+        }
+
+        let constraints: Vec<CreateTableConstraint> = create.constraints.iter().map(|c| {
+            match c {
+                crate::ast::TableConstraint::PrimaryKey { columns } => {
+                    Ok(CreateTableConstraint::PrimaryKey { columns: columns.clone() })
+                }
+                crate::ast::TableConstraint::Unique { columns } => {
+                    Ok(CreateTableConstraint::Unique { columns: columns.clone() })
+                }
+                crate::ast::TableConstraint::ForeignKey { columns, ref_table, ref_columns } => {
+                    Ok(CreateTableConstraint::ForeignKey {
+                        columns: columns.clone(),
+                        ref_table: ref_table.clone(),
+                        ref_columns: ref_columns.clone(),
+                    })
+                }
+                crate::ast::TableConstraint::Check { expression } => {
+                    Ok(CreateTableConstraint::Check {
+                        expression: self.plan_expression(expression)?,
+                    })
+                }
+            }
+        }).collect::<PlannerResult<Vec<_>>>()?;
+
+        Ok(QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: create.name.clone(),
+                columns,
+                constraints,
+                if_not_exists: create.if_not_exists,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        })
+    }
+
+    /// Plan a DROP TABLE statement.
+    fn plan_drop_table(&self, drop: &crate::ast::DropTableStatement) -> PlannerResult<QueryPlan> {
+        Ok(QueryPlan {
+            root: PlanNode::DropTable(DropTableNode {
+                table_name: drop.name.clone(),
+                if_exists: drop.if_exists,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        })
+    }
+
+    /// Plan a CREATE INDEX statement.
+    fn plan_create_index(&self, create: &crate::ast::CreateIndexStatement) -> PlannerResult<QueryPlan> {
+        Ok(QueryPlan {
+            root: PlanNode::CreateIndex(CreateIndexNode {
+                index_name: create.name.clone(),
+                table_name: create.table.clone(),
+                columns: create.columns.clone(),
+                unique: create.unique,
+                if_not_exists: create.if_not_exists,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        })
+    }
+
+    /// Plan a DROP INDEX statement.
+    fn plan_drop_index(&self, drop: &crate::ast::DropIndexStatement) -> PlannerResult<QueryPlan> {
+        Ok(QueryPlan {
+            root: PlanNode::DropIndex(DropIndexNode {
+                index_name: drop.name.clone(),
+                if_exists: drop.if_exists,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        })
+    }
+
+    /// Plan an INSERT statement.
+    fn plan_insert(&self, insert: &crate::ast::InsertStatement) -> PlannerResult<QueryPlan> {
+        let columns = insert.columns.clone().unwrap_or_default();
+
+        let (source, estimated_rows) = match &insert.source {
+            crate::ast::InsertSource::Values(rows) => {
+                let values = rows.iter().map(|row| {
+                    row.iter().map(|expr| self.plan_expression(expr)).collect::<PlannerResult<Vec<_>>>()
+                }).collect::<PlannerResult<Vec<_>>>()?;
+                let num_rows = values.len() as u64;
+                (InsertPlanSource::Values(values), num_rows)
+            }
+            crate::ast::InsertSource::Query(select) => {
+                // Plan the SELECT subquery
+                let subquery_plan = self.plan_select(select)?;
+                let estimated_rows = subquery_plan.estimated_rows;
+                (InsertPlanSource::Query(Box::new(subquery_plan.root)), estimated_rows)
+            }
+        };
+
+        Ok(QueryPlan {
+            root: PlanNode::Insert(InsertNode {
+                table_name: insert.table.clone(),
+                columns,
+                source,
+            }),
+            estimated_cost: estimated_rows as f64,
+            estimated_rows,
+        })
+    }
+
+    /// Plan an UPDATE statement.
+    fn plan_update(&self, update: &crate::ast::UpdateStatement) -> PlannerResult<QueryPlan> {
+        let assignments: Vec<(String, PlanExpression)> = update.assignments.iter()
+            .map(|a| Ok((a.column.clone(), self.plan_expression(&a.value)?)))
+            .collect::<PlannerResult<Vec<_>>>()?;
+
+        let where_clause = update.where_clause.as_ref()
+            .map(|e| self.plan_expression(e))
+            .transpose()?;
+
+        // Estimate rows based on table info
+        let estimated_rows = self.schema.get_table(&update.table)
+            .map(|t| t.row_count)
+            .unwrap_or(100);
+
+        Ok(QueryPlan {
+            root: PlanNode::Update(UpdateNode {
+                table_name: update.table.clone(),
+                assignments,
+                where_clause,
+            }),
+            estimated_cost: estimated_rows as f64,
+            estimated_rows,
+        })
+    }
+
+    /// Plan a DELETE statement.
+    fn plan_delete(&self, delete: &crate::ast::DeleteStatement) -> PlannerResult<QueryPlan> {
+        let where_clause = delete.where_clause.as_ref()
+            .map(|e| self.plan_expression(e))
+            .transpose()?;
+
+        // Estimate rows based on table info
+        let estimated_rows = self.schema.get_table(&delete.table)
+            .map(|t| t.row_count)
+            .unwrap_or(100);
+
+        Ok(QueryPlan {
+            root: PlanNode::Delete(DeleteNode {
+                table_name: delete.table.clone(),
+                where_clause,
+            }),
+            estimated_cost: estimated_rows as f64,
+            estimated_rows,
+        })
     }
 
     /// Plan a SELECT statement.
@@ -717,10 +1040,82 @@ impl Planner {
                 target_type: data_type.clone(),
             }),
 
-            _ => Err(PlannerError::UnsupportedOperation(format!(
-                "Expression type not yet supported: {:?}",
-                expr
-            ))),
+            Expression::Case { operand, conditions, else_result } => {
+                let planned_operand = operand
+                    .as_ref()
+                    .map(|e| self.plan_expression(e))
+                    .transpose()?
+                    .map(Box::new);
+
+                let planned_conditions = conditions
+                    .iter()
+                    .map(|(cond, result)| {
+                        Ok((self.plan_expression(cond)?, self.plan_expression(result)?))
+                    })
+                    .collect::<PlannerResult<Vec<_>>>()?;
+
+                let planned_else = else_result
+                    .as_ref()
+                    .map(|e| self.plan_expression(e))
+                    .transpose()?
+                    .map(Box::new);
+
+                Ok(PlanExpression::Case {
+                    operand: planned_operand,
+                    conditions: planned_conditions,
+                    else_result: planned_else,
+                })
+            }
+
+            Expression::InList { expr, list, negated } => {
+                let planned_list = list
+                    .iter()
+                    .map(|e| self.plan_expression(e))
+                    .collect::<PlannerResult<Vec<_>>>()?;
+
+                Ok(PlanExpression::InList {
+                    expr: Box::new(self.plan_expression(expr)?),
+                    list: planned_list,
+                    negated: *negated,
+                })
+            }
+
+            Expression::Between { expr, low, high, negated } => Ok(PlanExpression::Between {
+                expr: Box::new(self.plan_expression(expr)?),
+                low: Box::new(self.plan_expression(low)?),
+                high: Box::new(self.plan_expression(high)?),
+                negated: *negated,
+            }),
+
+            Expression::Like { expr, pattern, negated } => Ok(PlanExpression::Like {
+                expr: Box::new(self.plan_expression(expr)?),
+                pattern: Box::new(self.plan_expression(pattern)?),
+                negated: *negated,
+            }),
+
+            Expression::InSubquery { expr, subquery, negated } => {
+                let subquery_plan = self.plan_select(subquery)?;
+                Ok(PlanExpression::InSubquery {
+                    expr: Box::new(self.plan_expression(expr)?),
+                    subquery: Box::new(subquery_plan.root),
+                    negated: *negated,
+                })
+            }
+
+            Expression::Exists { subquery, negated } => {
+                let subquery_plan = self.plan_select(subquery)?;
+                Ok(PlanExpression::Exists {
+                    subquery: Box::new(subquery_plan.root),
+                    negated: *negated,
+                })
+            }
+
+            Expression::Subquery(subquery) => {
+                let subquery_plan = self.plan_select(subquery)?;
+                Ok(PlanExpression::ScalarSubquery(Box::new(subquery_plan.root)))
+            }
+
+            Expression::Placeholder(idx) => Ok(PlanExpression::Placeholder(*idx)),
         }
     }
 
@@ -799,6 +1194,36 @@ impl Planner {
             }
 
             PlanNode::Empty => (0.0, 1),
+
+            // DDL operations have minimal cost
+            PlanNode::CreateTable(_) => (1.0, 0),
+            PlanNode::DropTable(_) => (1.0, 0),
+            PlanNode::CreateIndex(_) => (1.0, 0),
+            PlanNode::DropIndex(_) => (1.0, 0),
+
+            // DML operations
+            PlanNode::Insert(insert) => {
+                let rows = match &insert.source {
+                    InsertPlanSource::Values(values) => values.len() as u64,
+                    InsertPlanSource::Query(subquery) => {
+                        let (_, estimated_rows) = self.estimate_cost(subquery);
+                        estimated_rows
+                    }
+                };
+                (rows as f64, rows)
+            }
+            PlanNode::Update(update) => {
+                let rows = self.schema.get_table(&update.table_name)
+                    .map(|t| t.row_count)
+                    .unwrap_or(100);
+                (rows as f64, rows)
+            }
+            PlanNode::Delete(delete) => {
+                let rows = self.schema.get_table(&delete.table_name)
+                    .map(|t| t.row_count)
+                    .unwrap_or(100);
+                (rows as f64, rows)
+            }
         }
     }
 }
