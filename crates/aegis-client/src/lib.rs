@@ -39,7 +39,10 @@ pub struct AegisClient {
 impl AegisClient {
     /// Create a new client with the given configuration.
     pub async fn new(config: ClientConfig) -> Result<Self, ClientError> {
-        let pool = ConnectionPool::new(config.pool.clone()).await?;
+        let pool = ConnectionPool::with_connection_config(
+            config.pool.clone(),
+            config.connection.clone(),
+        ).await?;
         Ok(Self { config, pool })
     }
 
@@ -114,9 +117,9 @@ mod tests {
 
     #[test]
     fn test_client_config_from_url() {
-        let config = ClientConfig::from_url("aegis://localhost:5432/testdb").unwrap();
+        let config = ClientConfig::from_url("aegis://localhost:9090/testdb").unwrap();
         assert_eq!(config.connection.host, "localhost");
-        assert_eq!(config.connection.port, 5432);
+        assert_eq!(config.connection.port, 9090);
         assert_eq!(config.connection.database, "testdb");
     }
 }

@@ -6,6 +6,9 @@
 //! @author AutomataNexus Development Team
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::RwLock;
+use sysinfo::{System, Disks};
 
 // =============================================================================
 // Cluster Info
@@ -448,17 +451,108 @@ pub struct AlertSummary {
 // Admin API Service
 // =============================================================================
 
-/// Admin API service for dashboard operations.
+/// Admin API service for dashboard operations with real system metrics.
 pub struct AdminService {
     start_time: std::time::Instant,
+    node_id: String,
+    bind_address: String,
+    // Query statistics tracking
+    total_queries: AtomicU64,
+    failed_queries: AtomicU64,
+    slow_queries: AtomicU64,
+    total_query_time_ns: AtomicU64,
+    active_connections: AtomicU64,
+    // Latency tracking (stored as microseconds for precision)
+    latencies: RwLock<Vec<u64>>,
+    // Network tracking
+    bytes_in: AtomicU64,
+    bytes_out: AtomicU64,
 }
 
 impl AdminService {
     /// Create a new admin service.
     pub fn new() -> Self {
+        Self::with_config("node-0", "127.0.0.1:9090")
+    }
+
+    /// Create admin service with custom node config.
+    pub fn with_config(node_id: &str, bind_address: &str) -> Self {
         Self {
             start_time: std::time::Instant::now(),
+            node_id: node_id.to_string(),
+            bind_address: bind_address.to_string(),
+            total_queries: AtomicU64::new(0),
+            failed_queries: AtomicU64::new(0),
+            slow_queries: AtomicU64::new(0),
+            total_query_time_ns: AtomicU64::new(0),
+            active_connections: AtomicU64::new(0),
+            latencies: RwLock::new(Vec::with_capacity(1000)),
+            bytes_in: AtomicU64::new(0),
+            bytes_out: AtomicU64::new(0),
         }
+    }
+
+    /// Record a query execution for statistics.
+    pub fn record_query(&self, duration_ms: f64, success: bool) {
+        self.total_queries.fetch_add(1, Ordering::Relaxed);
+        self.total_query_time_ns.fetch_add((duration_ms * 1_000_000.0) as u64, Ordering::Relaxed);
+
+        if !success {
+            self.failed_queries.fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Track slow queries (> 100ms)
+        if duration_ms > 100.0 {
+            self.slow_queries.fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Track latency for percentile calculations
+        let latency_us = (duration_ms * 1000.0) as u64;
+        if let Ok(mut latencies) = self.latencies.write() {
+            if latencies.len() >= 10000 {
+                latencies.remove(0);
+            }
+            latencies.push(latency_us);
+        }
+    }
+
+    /// Record network bytes.
+    pub fn record_network(&self, bytes_in: u64, bytes_out: u64) {
+        self.bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
+        self.bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
+    }
+
+    /// Increment active connections.
+    pub fn connection_opened(&self) {
+        self.active_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement active connections.
+    pub fn connection_closed(&self) {
+        self.active_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Get real system metrics.
+    fn get_system_metrics(&self) -> (f64, u64, u64, u64, u64) {
+        let mut sys = System::new();
+        sys.refresh_all();
+
+        // Get CPU usage (average across all CPUs)
+        let cpu_usage = sys.cpus().iter()
+            .map(|cpu| cpu.cpu_usage() as f64)
+            .sum::<f64>() / sys.cpus().len().max(1) as f64;
+
+        let memory_used = sys.used_memory();
+        let memory_total = sys.total_memory();
+
+        // Get disk metrics
+        let disks = Disks::new_with_refreshed_list();
+        let (disk_used, disk_total) = disks.list().iter()
+            .fold((0u64, 0u64), |(used, total), disk| {
+                (used + (disk.total_space() - disk.available_space()), total + disk.total_space())
+            });
+
+        (cpu_usage, memory_used, memory_total, disk_used, disk_total)
     }
 
     /// Get cluster information.
@@ -466,158 +560,193 @@ impl AdminService {
         ClusterInfo {
             name: "aegis-cluster".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            node_count: 3,
-            leader_id: Some("node-0".to_string()),
+            node_count: 1, // Single node mode
+            leader_id: Some(self.node_id.clone()),
             state: ClusterState::Healthy,
             uptime_seconds: self.start_time.elapsed().as_secs(),
         }
     }
 
-    /// Get dashboard summary.
+    /// Get dashboard summary with real metrics.
     pub fn get_dashboard_summary(&self) -> DashboardSummary {
+        let (cpu_usage, memory_used, memory_total, disk_used, disk_total) = self.get_system_metrics();
+        let memory_percent = if memory_total > 0 {
+            (memory_used as f64 / memory_total as f64) * 100.0
+        } else {
+            0.0
+        };
+        let storage_percent = if disk_total > 0 {
+            (disk_used as f64 / disk_total as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let uptime = self.start_time.elapsed().as_secs();
+        let total_queries = self.total_queries.load(Ordering::Relaxed);
+        let qps = if uptime > 0 { total_queries as f64 / uptime as f64 } else { 0.0 };
+        let total_time_ns = self.total_query_time_ns.load(Ordering::Relaxed);
+        let avg_latency = if total_queries > 0 {
+            (total_time_ns as f64 / total_queries as f64) / 1_000_000.0
+        } else {
+            0.0
+        };
+
         DashboardSummary {
             cluster: ClusterSummary {
                 state: "Healthy".to_string(),
-                node_count: 3,
-                healthy_nodes: 3,
-                leader_id: Some("node-0".to_string()),
+                node_count: 1,
+                healthy_nodes: 1,
+                leader_id: Some(self.node_id.clone()),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             performance: PerformanceSummary {
-                queries_per_second: 1250.0,
-                avg_latency_ms: 2.5,
-                active_connections: 45,
-                cpu_usage_percent: 35.0,
-                memory_usage_percent: 62.0,
+                queries_per_second: qps,
+                avg_latency_ms: avg_latency,
+                active_connections: self.active_connections.load(Ordering::Relaxed),
+                cpu_usage_percent: cpu_usage,
+                memory_usage_percent: memory_percent,
             },
             storage: StorageSummary {
-                total_bytes: 100_000_000_000,
-                used_bytes: 45_000_000_000,
-                usage_percent: 45.0,
-                database_count: 5,
-                table_count: 42,
+                total_bytes: disk_total,
+                used_bytes: disk_used,
+                usage_percent: storage_percent,
+                database_count: 1, // Single default database
+                table_count: 0, // Would need schema tracking
             },
             alerts: AlertSummary {
-                total: 3,
+                total: 0,
                 critical: 0,
-                warning: 2,
-                unacknowledged: 1,
+                warning: 0,
+                unacknowledged: 0,
             },
         }
     }
 
-    /// Get list of nodes.
+    /// Get list of nodes (single node in standalone mode).
     pub fn get_nodes(&self) -> Vec<NodeInfo> {
         let uptime = self.start_time.elapsed().as_secs();
+        let (cpu_usage, memory_used, memory_total, disk_used, disk_total) = self.get_system_metrics();
+
+        let total_queries = self.total_queries.load(Ordering::Relaxed);
+        let qps = if uptime > 0 { total_queries as f64 / uptime as f64 } else { 0.0 };
+
+        // Calculate latency percentiles
+        let (p50, p90, p95, p99, max) = self.calculate_latency_percentiles();
+
         vec![
             NodeInfo {
-                id: "node-0".to_string(),
-                address: "10.0.0.1:9090".to_string(),
+                id: self.node_id.clone(),
+                address: self.bind_address.clone(),
                 role: NodeRole::Leader,
                 status: NodeStatus::Online,
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 uptime_seconds: uptime,
                 last_heartbeat: Self::now(),
                 metrics: NodeMetrics {
-                    cpu_usage_percent: 35.0,
-                    memory_usage_bytes: 2_000_000_000,
-                    memory_total_bytes: 8_000_000_000,
-                    disk_usage_bytes: 50_000_000_000,
-                    disk_total_bytes: 100_000_000_000,
-                    connections_active: 15,
-                    queries_per_second: 450.0,
-                    network_bytes_in: 125_000_000 * uptime,
-                    network_bytes_out: 98_000_000 * uptime,
-                    network_packets_in: 850_000 * uptime,
-                    network_packets_out: 720_000 * uptime,
-                    latency_p50_ms: 0.8,
-                    latency_p90_ms: 2.1,
-                    latency_p95_ms: 3.5,
-                    latency_p99_ms: 8.2,
-                    latency_max_ms: 45.0,
-                },
-            },
-            NodeInfo {
-                id: "node-1".to_string(),
-                address: "10.0.0.2:9090".to_string(),
-                role: NodeRole::Follower,
-                status: NodeStatus::Online,
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                uptime_seconds: uptime.saturating_sub(100),
-                last_heartbeat: Self::now(),
-                metrics: NodeMetrics {
-                    cpu_usage_percent: 28.0,
-                    memory_usage_bytes: 1_800_000_000,
-                    memory_total_bytes: 8_000_000_000,
-                    disk_usage_bytes: 48_000_000_000,
-                    disk_total_bytes: 100_000_000_000,
-                    connections_active: 12,
-                    queries_per_second: 380.0,
-                    network_bytes_in: 98_000_000 * uptime.saturating_sub(100),
-                    network_bytes_out: 76_000_000 * uptime.saturating_sub(100),
-                    network_packets_in: 720_000 * uptime.saturating_sub(100),
-                    network_packets_out: 580_000 * uptime.saturating_sub(100),
-                    latency_p50_ms: 0.9,
-                    latency_p90_ms: 2.3,
-                    latency_p95_ms: 3.8,
-                    latency_p99_ms: 9.1,
-                    latency_max_ms: 52.0,
-                },
-            },
-            NodeInfo {
-                id: "node-2".to_string(),
-                address: "10.0.0.3:9090".to_string(),
-                role: NodeRole::Follower,
-                status: NodeStatus::Online,
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                uptime_seconds: uptime.saturating_sub(50),
-                last_heartbeat: Self::now(),
-                metrics: NodeMetrics {
-                    cpu_usage_percent: 32.0,
-                    memory_usage_bytes: 1_900_000_000,
-                    memory_total_bytes: 8_000_000_000,
-                    disk_usage_bytes: 49_000_000_000,
-                    disk_total_bytes: 100_000_000_000,
-                    connections_active: 18,
-                    queries_per_second: 420.0,
-                    network_bytes_in: 105_000_000 * uptime.saturating_sub(50),
-                    network_bytes_out: 82_000_000 * uptime.saturating_sub(50),
-                    network_packets_in: 780_000 * uptime.saturating_sub(50),
-                    network_packets_out: 620_000 * uptime.saturating_sub(50),
-                    latency_p50_ms: 1.1,
-                    latency_p90_ms: 2.8,
-                    latency_p95_ms: 4.2,
-                    latency_p99_ms: 10.5,
-                    latency_max_ms: 58.0,
+                    cpu_usage_percent: cpu_usage,
+                    memory_usage_bytes: memory_used,
+                    memory_total_bytes: memory_total,
+                    disk_usage_bytes: disk_used,
+                    disk_total_bytes: disk_total,
+                    connections_active: self.active_connections.load(Ordering::Relaxed),
+                    queries_per_second: qps,
+                    network_bytes_in: self.bytes_in.load(Ordering::Relaxed),
+                    network_bytes_out: self.bytes_out.load(Ordering::Relaxed),
+                    network_packets_in: 0, // Would need packet counting
+                    network_packets_out: 0,
+                    latency_p50_ms: p50,
+                    latency_p90_ms: p90,
+                    latency_p95_ms: p95,
+                    latency_p99_ms: p99,
+                    latency_max_ms: max,
                 },
             },
         ]
     }
 
-    /// Get storage information.
+    /// Calculate latency percentiles from recorded data.
+    fn calculate_latency_percentiles(&self) -> (f64, f64, f64, f64, f64) {
+        let latencies = match self.latencies.read() {
+            Ok(l) => l.clone(),
+            Err(_) => return (0.0, 0.0, 0.0, 0.0, 0.0),
+        };
+
+        if latencies.is_empty() {
+            return (0.0, 0.0, 0.0, 0.0, 0.0);
+        }
+
+        let mut sorted = latencies.clone();
+        sorted.sort_unstable();
+
+        let len = sorted.len();
+        let p50_idx = (len as f64 * 0.50) as usize;
+        let p90_idx = (len as f64 * 0.90) as usize;
+        let p95_idx = (len as f64 * 0.95) as usize;
+        let p99_idx = (len as f64 * 0.99) as usize;
+
+        let to_ms = |us: u64| us as f64 / 1000.0;
+
+        (
+            to_ms(sorted.get(p50_idx).copied().unwrap_or(0)),
+            to_ms(sorted.get(p90_idx).copied().unwrap_or(0)),
+            to_ms(sorted.get(p95_idx).copied().unwrap_or(0)),
+            to_ms(sorted.get(p99_idx.min(len - 1)).copied().unwrap_or(0)),
+            to_ms(sorted.last().copied().unwrap_or(0)),
+        )
+    }
+
+    /// Get storage information with real disk metrics.
     pub fn get_storage_info(&self) -> StorageInfo {
+        let disks = Disks::new_with_refreshed_list();
+
+        let (total, available) = disks.list().iter()
+            .fold((0u64, 0u64), |(total, avail), disk| {
+                (total + disk.total_space(), avail + disk.available_space())
+            });
+
+        let used = total.saturating_sub(available);
+
+        // Estimate breakdown (would need actual tracking for precise values)
+        let data_bytes = (used as f64 * 0.75) as u64;
+        let index_bytes = (used as f64 * 0.15) as u64;
+        let wal_bytes = (used as f64 * 0.08) as u64;
+        let temp_bytes = (used as f64 * 0.02) as u64;
+
         StorageInfo {
-            total_bytes: 100_000_000_000,
-            used_bytes: 45_000_000_000,
-            available_bytes: 55_000_000_000,
-            data_bytes: 35_000_000_000,
-            index_bytes: 8_000_000_000,
-            wal_bytes: 1_500_000_000,
-            temp_bytes: 500_000_000,
+            total_bytes: total,
+            used_bytes: used,
+            available_bytes: available,
+            data_bytes,
+            index_bytes,
+            wal_bytes,
+            temp_bytes,
         }
     }
 
-    /// Get query statistics.
+    /// Get query statistics with real data.
     pub fn get_query_stats(&self) -> QueryStats {
+        let uptime = self.start_time.elapsed().as_secs();
+        let total_queries = self.total_queries.load(Ordering::Relaxed);
+        let qps = if uptime > 0 { total_queries as f64 / uptime as f64 } else { 0.0 };
+
+        let total_time_ns = self.total_query_time_ns.load(Ordering::Relaxed);
+        let avg_duration = if total_queries > 0 {
+            (total_time_ns as f64 / total_queries as f64) / 1_000_000.0
+        } else {
+            0.0
+        };
+
+        let (p50, _, p95, p99, _) = self.calculate_latency_percentiles();
+
         QueryStats {
-            total_queries: 1_250_000,
-            queries_per_second: 1250.0,
-            avg_duration_ms: 2.5,
-            p50_duration_ms: 1.2,
-            p95_duration_ms: 8.5,
-            p99_duration_ms: 25.0,
-            slow_queries: 150,
-            failed_queries: 12,
+            total_queries,
+            queries_per_second: qps,
+            avg_duration_ms: avg_duration,
+            p50_duration_ms: p50,
+            p95_duration_ms: p95,
+            p99_duration_ms: p99,
+            slow_queries: self.slow_queries.load(Ordering::Relaxed),
+            failed_queries: self.failed_queries.load(Ordering::Relaxed),
         }
     }
 
@@ -658,8 +787,14 @@ mod tests {
         let service = AdminService::new();
         let summary = service.get_dashboard_summary();
 
-        assert_eq!(summary.cluster.node_count, 3);
-        assert!(summary.performance.queries_per_second > 0.0);
+        // Single node mode
+        assert_eq!(summary.cluster.node_count, 1);
+        assert_eq!(summary.cluster.healthy_nodes, 1);
+        // CPU and memory should be valid percentages
+        assert!(summary.performance.cpu_usage_percent >= 0.0);
+        assert!(summary.performance.cpu_usage_percent <= 100.0);
+        assert!(summary.performance.memory_usage_percent >= 0.0);
+        assert!(summary.performance.memory_usage_percent <= 100.0);
     }
 
     #[test]
@@ -667,9 +802,10 @@ mod tests {
         let service = AdminService::new();
         let nodes = service.get_nodes();
 
-        assert_eq!(nodes.len(), 3);
+        // Single node in standalone mode
+        assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].role, NodeRole::Leader);
-        assert_eq!(nodes[1].role, NodeRole::Follower);
+        assert_eq!(nodes[0].status, NodeStatus::Online);
     }
 
     #[test]
@@ -677,7 +813,9 @@ mod tests {
         let service = AdminService::new();
         let storage = service.get_storage_info();
 
-        assert!(storage.total_bytes > storage.used_bytes);
+        // Real disk metrics - total should be positive
+        assert!(storage.total_bytes > 0);
+        assert!(storage.available_bytes <= storage.total_bytes);
         assert_eq!(
             storage.available_bytes,
             storage.total_bytes - storage.used_bytes
@@ -687,11 +825,18 @@ mod tests {
     #[test]
     fn test_query_stats() {
         let service = AdminService::new();
+
+        // Record some queries to have data
+        service.record_query(1.5, true);
+        service.record_query(2.0, true);
+        service.record_query(3.5, true);
+        service.record_query(150.0, false); // slow + failed
+
         let stats = service.get_query_stats();
 
-        assert!(stats.total_queries > 0);
-        assert!(stats.p50_duration_ms < stats.p95_duration_ms);
-        assert!(stats.p95_duration_ms < stats.p99_duration_ms);
+        assert_eq!(stats.total_queries, 4);
+        assert_eq!(stats.failed_queries, 1);
+        assert_eq!(stats.slow_queries, 1);
     }
 
     #[test]

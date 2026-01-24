@@ -97,6 +97,9 @@ pub struct DatabaseStats {
     pub total_graph_edges: u64,
     pub storage_used: u64,
     pub storage_total: u64,
+    pub data_bytes: u64,
+    pub wal_bytes: u64,
+    pub index_bytes: u64,
     pub cache_hit_rate: f64,
     pub ops_last_minute: u64,
 }

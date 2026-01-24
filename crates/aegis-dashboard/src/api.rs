@@ -172,14 +172,17 @@ impl AegisClient {
 
         let storage: ServerStorageInfo = response.json().await?;
         Ok(DatabaseStats {
-            total_keys: 0, // Would come from storage engine
+            total_keys: 0, // Would need separate endpoint
             total_documents: 0,
             total_graph_nodes: 0,
             total_graph_edges: 0,
             storage_used: storage.used_bytes,
             storage_total: storage.total_bytes,
-            cache_hit_rate: 95.0, // Would come from cache metrics
-            ops_last_minute: 0, // Would come from query metrics
+            data_bytes: storage.data_bytes,
+            wal_bytes: storage.wal_bytes,
+            index_bytes: storage.index_bytes,
+            cache_hit_rate: 0.0, // Would need cache metrics endpoint
+            ops_last_minute: 0, // Would need query metrics endpoint
         })
     }
 

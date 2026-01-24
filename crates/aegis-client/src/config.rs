@@ -71,7 +71,7 @@ impl ClientConfig {
                 .map_err(|_| ClientError::InvalidUrl("Invalid port".to_string()))?;
             (parts[0].to_string(), port)
         } else {
-            (host_port.to_string(), 5432)
+            (host_port.to_string(), 9090) // Aegis default port
         };
 
         let database = if path.is_empty() {
@@ -144,7 +144,7 @@ impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 5432,
+            port: 9090, // Aegis default port
             database: "default".to_string(),
             username: None,
             password: None,
@@ -308,21 +308,21 @@ mod tests {
     fn test_client_config_default() {
         let config = ClientConfig::default();
         assert_eq!(config.connection.host, "localhost");
-        assert_eq!(config.connection.port, 5432);
+        assert_eq!(config.connection.port, 9090);
         assert_eq!(config.pool.max_connections, 10);
     }
 
     #[test]
     fn test_from_url_simple() {
-        let config = ClientConfig::from_url("aegis://localhost:5432/testdb").unwrap();
+        let config = ClientConfig::from_url("aegis://localhost:9090/testdb").unwrap();
         assert_eq!(config.connection.host, "localhost");
-        assert_eq!(config.connection.port, 5432);
+        assert_eq!(config.connection.port, 9090);
         assert_eq!(config.connection.database, "testdb");
     }
 
     #[test]
     fn test_from_url_with_auth() {
-        let config = ClientConfig::from_url("aegis://user:pass@localhost:5432/testdb").unwrap();
+        let config = ClientConfig::from_url("aegis://user:pass@localhost:9090/testdb").unwrap();
         assert_eq!(config.connection.host, "localhost");
         assert_eq!(config.connection.username, Some("user".to_string()));
         assert_eq!(config.connection.password, Some("pass".to_string()));
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn test_from_url_default_port() {
         let config = ClientConfig::from_url("aegis://localhost/testdb").unwrap();
-        assert_eq!(config.connection.port, 5432);
+        assert_eq!(config.connection.port, 9090);
     }
 
     #[test]

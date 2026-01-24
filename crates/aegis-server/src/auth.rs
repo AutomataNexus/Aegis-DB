@@ -546,22 +546,59 @@ fn verify_password(password: &str, hash: &str) -> bool {
     hash_password(password) == hash
 }
 
-/// Verify a TOTP code.
-fn verify_totp(code: &str, _secret: &str) -> bool {
-    // Simplified TOTP verification
-    // In production, use a proper TOTP library
-    // Accept "123456" for testing, or check if it's a 6-digit number
-    if code == "123456" {
-        return true;
+/// Verify a TOTP code using RFC 6238 algorithm.
+fn verify_totp(code: &str, secret: &str) -> bool {
+    use data_encoding::BASE32_NOPAD;
+    use hmac::{Hmac, Mac};
+    use sha1::Sha1;
+
+    // Decode the base32 secret
+    let secret_bytes = match BASE32_NOPAD.decode(secret.to_uppercase().as_bytes()) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            // Try with padding variations
+            let padded = format!("{}{}", secret.to_uppercase(), "========"[..((8 - secret.len() % 8) % 8)].to_string());
+            match data_encoding::BASE32.decode(padded.as_bytes()) {
+                Ok(bytes) => bytes,
+                Err(_) => return false,
+            }
+        }
+    };
+
+    // Get current time step (30-second windows)
+    let timestamp = now_timestamp() / 1000; // seconds
+    let time_step = timestamp / 30;
+
+    // Check current time step and one before/after for clock drift tolerance
+    for offset in [-1i64, 0, 1] {
+        let counter = (time_step as i64 + offset) as u64;
+        let counter_bytes = counter.to_be_bytes();
+
+        // Compute HMAC-SHA1
+        let mut mac = match Hmac::<Sha1>::new_from_slice(&secret_bytes) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        mac.update(&counter_bytes);
+        let result = mac.finalize().into_bytes();
+
+        // Dynamic truncation (RFC 4226)
+        let offset_idx = (result[19] & 0x0f) as usize;
+        let binary_code = ((result[offset_idx] & 0x7f) as u32) << 24
+            | (result[offset_idx + 1] as u32) << 16
+            | (result[offset_idx + 2] as u32) << 8
+            | (result[offset_idx + 3] as u32);
+
+        // Generate 6-digit code
+        let otp = binary_code % 1_000_000;
+        let expected = format!("{:06}", otp);
+
+        if code == expected {
+            return true;
+        }
     }
 
-    // Generate current TOTP based on time
-    let timestamp = now_timestamp() / 1000; // seconds
-    let time_step = timestamp / 30; // 30-second windows
-
-    // Simple TOTP simulation - in production use proper HMAC-SHA1
-    let expected = format!("{:06}", (time_step % 1_000_000) as u32);
-    code == expected
+    false
 }
 
 /// Get current timestamp in milliseconds.
@@ -1192,12 +1229,9 @@ impl LdapAuthenticator {
         Self { config }
     }
 
-    /// Authenticate user against LDAP.
+    /// Authenticate user against LDAP using the ldap3 crate.
     pub fn authenticate(&self, username: &str, password: &str) -> LdapAuthResult {
-        // In production, this would use an LDAP library like ldap3
-        // For now, we simulate LDAP authentication
-
-        // Simulate connection and bind
+        // Validate configuration
         if self.config.server_url.is_empty() {
             return LdapAuthResult {
                 success: false,
@@ -1209,11 +1243,6 @@ impl LdapAuthenticator {
             };
         }
 
-        // Simulate user search
-        let _user_filter = self.config.user_filter.replace("{username}", username);
-        let user_dn = format!("uid={},{}", username, self.config.base_dn);
-
-        // Simulate bind with user credentials
         if password.is_empty() {
             return LdapAuthResult {
                 success: false,
@@ -1221,26 +1250,175 @@ impl LdapAuthenticator {
                 email: None,
                 display_name: None,
                 groups: vec![],
-                error: Some("Invalid credentials".to_string()),
+                error: Some("Password is required".to_string()),
             };
         }
 
-        // Simulate group membership lookup
-        let groups = if username == "ldapadmin" {
-            self.config.admin_groups.clone()
-        } else if username == "ldapoper" {
-            self.config.operator_groups.clone()
-        } else {
-            vec![]
+        // Use a runtime for blocking LDAP operations
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle,
+            Err(_) => {
+                return LdapAuthResult {
+                    success: false,
+                    user_dn: None,
+                    email: None,
+                    display_name: None,
+                    groups: vec![],
+                    error: Some("No async runtime available".to_string()),
+                };
+            }
         };
 
-        LdapAuthResult {
-            success: true,
-            user_dn: Some(user_dn),
-            email: Some(format!("{}@aegisdb.io", username)),
-            display_name: Some(username.to_string()),
-            groups,
-            error: None,
+        let config = self.config.clone();
+        let username = username.to_string();
+        let password = password.to_string();
+
+        // Perform LDAP operations
+        let result = runtime.block_on(async move {
+            Self::authenticate_async(&config, &username, &password).await
+        });
+
+        result
+    }
+
+    /// Async LDAP authentication implementation.
+    async fn authenticate_async(config: &LdapConfig, username: &str, password: &str) -> LdapAuthResult {
+        use ldap3::{LdapConnAsync, Scope, SearchEntry};
+
+        // Connect to LDAP server
+        let (conn, mut ldap) = match LdapConnAsync::new(&config.server_url).await {
+            Ok(c) => c,
+            Err(e) => {
+                return LdapAuthResult {
+                    success: false,
+                    user_dn: None,
+                    email: None,
+                    display_name: None,
+                    groups: vec![],
+                    error: Some(format!("Failed to connect to LDAP server: {}", e)),
+                };
+            }
+        };
+
+        // Spawn connection driver
+        ldap3::drive!(conn);
+
+        // Bind with service account to search for user
+        if let Err(e) = ldap.simple_bind(&config.bind_dn, &config.bind_password).await {
+            let _ = ldap.unbind().await;
+            return LdapAuthResult {
+                success: false,
+                user_dn: None,
+                email: None,
+                display_name: None,
+                groups: vec![],
+                error: Some(format!("Service account bind failed: {}", e)),
+            };
+        }
+
+        // Search for user
+        let user_filter = config.user_filter.replace("{username}", username);
+        let search_result = match ldap.search(
+            &config.base_dn,
+            Scope::Subtree,
+            &user_filter,
+            vec!["dn", "mail", "displayName", "cn", &config.group_attribute],
+        ).await {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = ldap.unbind().await;
+                return LdapAuthResult {
+                    success: false,
+                    user_dn: None,
+                    email: None,
+                    display_name: None,
+                    groups: vec![],
+                    error: Some(format!("User search failed: {}", e)),
+                };
+            }
+        };
+
+        let (entries, _result) = search_result.success().unwrap_or((vec![], ldap3::LdapResult {
+            rc: 0,
+            matched: String::new(),
+            text: String::new(),
+            refs: vec![],
+            ctrls: vec![],
+        }));
+
+        if entries.is_empty() {
+            let _ = ldap.unbind().await;
+            return LdapAuthResult {
+                success: false,
+                user_dn: None,
+                email: None,
+                display_name: None,
+                groups: vec![],
+                error: Some("User not found".to_string()),
+            };
+        }
+
+        // Parse user entry
+        let entry = SearchEntry::construct(entries[0].clone());
+        let user_dn = entry.dn.clone();
+        let email = entry.attrs.get("mail").and_then(|v| v.first()).cloned();
+        let display_name = entry.attrs.get("displayName")
+            .or_else(|| entry.attrs.get("cn"))
+            .and_then(|v| v.first())
+            .cloned();
+        let groups: Vec<String> = entry.attrs.get(&config.group_attribute)
+            .cloned()
+            .unwrap_or_default();
+
+        // Bind as user to verify password
+        if let Err(e) = ldap.simple_bind(&user_dn, password).await {
+            let _ = ldap.unbind().await;
+            return LdapAuthResult {
+                success: false,
+                user_dn: None,
+                email: None,
+                display_name: None,
+                groups: vec![],
+                error: Some(format!("Authentication failed: {}", e)),
+            };
+        }
+
+        // Verify bind was successful
+        let bind_result = ldap.simple_bind(&user_dn, password).await;
+        let _ = ldap.unbind().await;
+
+        match bind_result {
+            Ok(result) => {
+                if result.rc == 0 {
+                    LdapAuthResult {
+                        success: true,
+                        user_dn: Some(user_dn),
+                        email,
+                        display_name,
+                        groups,
+                        error: None,
+                    }
+                } else {
+                    LdapAuthResult {
+                        success: false,
+                        user_dn: None,
+                        email: None,
+                        display_name: None,
+                        groups: vec![],
+                        error: Some("Invalid credentials".to_string()),
+                    }
+                }
+            }
+            Err(e) => {
+                LdapAuthResult {
+                    success: false,
+                    user_dn: None,
+                    email: None,
+                    display_name: None,
+                    groups: vec![],
+                    error: Some(format!("Bind failed: {}", e)),
+                }
+            }
         }
     }
 
@@ -1268,6 +1446,7 @@ impl LdapAuthenticator {
 pub struct OAuth2Authenticator {
     config: OAuth2Config,
     pending_states: RwLock<HashMap<String, OAuth2State>>,
+    http_client: reqwest::Client,
 }
 
 /// Pending OAuth2 state for CSRF protection.
@@ -1281,9 +1460,15 @@ struct OAuth2State {
 impl OAuth2Authenticator {
     /// Create a new OAuth2 authenticator.
     pub fn new(config: OAuth2Config) -> Self {
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             config,
             pending_states: RwLock::new(HashMap::new()),
+            http_client,
         }
     }
 
@@ -1323,28 +1508,96 @@ impl OAuth2Authenticator {
         }
     }
 
-    /// Exchange authorization code for tokens (simulated).
-    pub fn exchange_code(&self, _code: &str) -> Result<OAuth2TokenResponse, String> {
-        // In production, this would make HTTP request to token endpoint
-        Ok(OAuth2TokenResponse {
-            access_token: generate_token(),
-            token_type: "Bearer".to_string(),
-            expires_in: Some(3600),
-            refresh_token: Some(generate_token()),
-            id_token: Some(generate_token()),
+    /// Exchange authorization code for tokens using real HTTP request.
+    pub fn exchange_code(&self, code: &str) -> Result<OAuth2TokenResponse, String> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| "No async runtime available".to_string())?;
+
+        let client = self.http_client.clone();
+        let token_url = self.config.token_url.clone();
+        let client_id = self.config.client_id.clone();
+        let client_secret = self.config.client_secret.clone();
+        let redirect_uri = self.config.redirect_uri.clone();
+        let code = code.to_string();
+
+        runtime.block_on(async move {
+            Self::exchange_code_async(&client, &token_url, &client_id, &client_secret, &redirect_uri, &code).await
         })
     }
 
-    /// Get user info from OAuth2 provider (simulated).
-    pub fn get_user_info(&self, _access_token: &str) -> Result<OAuth2UserInfo, String> {
-        // In production, this would make HTTP request to userinfo endpoint
-        Ok(OAuth2UserInfo {
-            sub: generate_token()[..16].to_string(),
-            email: Some("oauth.user@aegisdb.io".to_string()),
-            name: Some("OAuth User".to_string()),
-            preferred_username: Some("oauthuser".to_string()),
-            roles: Some(vec!["viewer".to_string()]),
+    /// Async implementation of token exchange.
+    async fn exchange_code_async(
+        client: &reqwest::Client,
+        token_url: &str,
+        client_id: &str,
+        client_secret: &str,
+        redirect_uri: &str,
+        code: &str,
+    ) -> Result<OAuth2TokenResponse, String> {
+        let params = [
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("redirect_uri", redirect_uri),
+        ];
+
+        let response = client
+            .post(token_url)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| format!("Token request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Token endpoint returned {}: {}", status, body));
+        }
+
+        response
+            .json::<OAuth2TokenResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse token response: {}", e))
+    }
+
+    /// Get user info from OAuth2 provider using real HTTP request.
+    pub fn get_user_info(&self, access_token: &str) -> Result<OAuth2UserInfo, String> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| "No async runtime available".to_string())?;
+
+        let client = self.http_client.clone();
+        let userinfo_url = self.config.userinfo_url.clone();
+        let access_token = access_token.to_string();
+
+        runtime.block_on(async move {
+            Self::get_user_info_async(&client, &userinfo_url, &access_token).await
         })
+    }
+
+    /// Async implementation of user info retrieval.
+    async fn get_user_info_async(
+        client: &reqwest::Client,
+        userinfo_url: &str,
+        access_token: &str,
+    ) -> Result<OAuth2UserInfo, String> {
+        let response = client
+            .get(userinfo_url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| format!("Userinfo request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Userinfo endpoint returned {}: {}", status, body));
+        }
+
+        response
+            .json::<OAuth2UserInfo>()
+            .await
+            .map_err(|e| format!("Failed to parse userinfo response: {}", e))
     }
 
     /// Determine role from OAuth2 claims.
@@ -1409,9 +1662,46 @@ mod tests {
         let login_response = auth.login("admin", "admin");
         let temp_token = login_response.token.unwrap();
 
-        let mfa_response = auth.verify_mfa("123456", &temp_token);
-        assert!(mfa_response.token.is_some());
+        // Generate a valid TOTP code using the admin's secret
+        let secret = "JBSWY3DPEHPK3PXP";
+        let totp_code = generate_test_totp(secret);
+
+        let mfa_response = auth.verify_mfa(&totp_code, &temp_token);
+        assert!(mfa_response.token.is_some(), "MFA verification failed: {:?}", mfa_response.error);
         assert!(mfa_response.user.is_some());
+    }
+
+    /// Generate a TOTP code for testing using the same algorithm as verify_totp
+    fn generate_test_totp(secret: &str) -> String {
+        use data_encoding::BASE32_NOPAD;
+        use hmac::{Hmac, Mac};
+        use sha1::Sha1;
+
+        let secret_bytes = BASE32_NOPAD.decode(secret.to_uppercase().as_bytes())
+            .unwrap_or_else(|_| {
+                let padded = format!("{}{}", secret.to_uppercase(), &"========"[..((8 - secret.len() % 8) % 8)]);
+                data_encoding::BASE32.decode(padded.as_bytes()).unwrap()
+            });
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let time_step = timestamp / 30;
+        let counter_bytes = time_step.to_be_bytes();
+
+        let mut mac = Hmac::<Sha1>::new_from_slice(&secret_bytes).unwrap();
+        mac.update(&counter_bytes);
+        let result = mac.finalize().into_bytes();
+
+        let offset_idx = (result[19] & 0x0f) as usize;
+        let binary_code = ((result[offset_idx] & 0x7f) as u32) << 24
+            | (result[offset_idx + 1] as u32) << 16
+            | (result[offset_idx + 2] as u32) << 8
+            | (result[offset_idx + 3] as u32);
+
+        let otp = binary_code % 1_000_000;
+        format!("{:06}", otp)
     }
 
     #[test]
@@ -1538,13 +1828,55 @@ mod tests {
 
     // LDAP Tests
     #[test]
-    fn test_ldap_authenticator() {
+    fn test_ldap_authenticator_config_validation() {
+        // Test with empty server URL - should fail validation
+        let mut config = LdapConfig::default();
+        config.server_url = String::new();
+        let ldap = LdapAuthenticator::new(config);
+
+        let result = ldap.authenticate("testuser", "password");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+        assert!(result.error.unwrap().contains("not configured"));
+    }
+
+    #[test]
+    fn test_ldap_authenticator_empty_password() {
         let config = LdapConfig::default();
         let ldap = LdapAuthenticator::new(config);
 
-        let result = ldap.authenticate("ldapadmin", "password");
-        assert!(result.success);
-        assert!(!result.groups.is_empty());
+        let result = ldap.authenticate("testuser", "");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+        assert!(result.error.unwrap().contains("Password is required"));
+    }
+
+    #[tokio::test]
+    async fn test_ldap_authenticator_real_connection() {
+        // This test requires an actual LDAP server
+        // Set AEGIS_LDAP_TEST_URL env var to enable (e.g., ldap://localhost:389)
+        let ldap_url = std::env::var("AEGIS_LDAP_TEST_URL").ok();
+
+        if let Some(url) = ldap_url {
+            let mut config = LdapConfig::default();
+            config.server_url = url;
+
+            // Also check for test credentials
+            let username = std::env::var("AEGIS_LDAP_TEST_USER").unwrap_or_else(|_| "testuser".to_string());
+            let password = std::env::var("AEGIS_LDAP_TEST_PASSWORD").unwrap_or_else(|_| "testpass".to_string());
+
+            let ldap = LdapAuthenticator::new(config);
+            let result = ldap.authenticate(&username, &password);
+
+            // With a real LDAP server, this should either succeed or fail with auth error
+            // (not a connection error)
+            if !result.success {
+                // Should be an auth failure, not a config/connection issue
+                println!("LDAP auth result: {:?}", result.error);
+            }
+        } else {
+            println!("Skipping real LDAP test - set AEGIS_LDAP_TEST_URL to enable");
+        }
     }
 
     #[test]

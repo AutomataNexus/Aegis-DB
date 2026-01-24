@@ -8,8 +8,8 @@
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status">
-  <img src="https://img.shields.io/badge/tests-424%20passing-brightgreen.svg" alt="Tests">
-  <img src="https://img.shields.io/badge/version-0.1.1-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/tests-462%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/version-0.1.7-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg" alt="Platform">
 </p>
 
@@ -193,34 +193,6 @@ cargo run -p aegis-server
 cd crates/aegis-dashboard
 trunk build --release
 ```
-
-## Test Results
-
-```
-aegis-common:       4 tests
-aegis-storage:     23 tests
-aegis-memory:       5 tests
-aegis-query:       17 tests
-aegis-server:      38 tests + 23 E2E (includes RBAC, LDAP, OAuth2, Audit)
-aegis-client:      45 tests
-aegis-replication: 136 tests
-aegis-timeseries:  31 tests
-aegis-document:    36 tests
-aegis-streaming:   31 tests
-aegis-monitoring:  35 tests
-─────────────────────────────
-Total:            424 tests
-```
-
-## Development Phases
-
-- [x] **Phase 1: Core Foundation** - Storage, memory, query engine, REST API
-- [x] **Phase 2: Multi-Paradigm Support** - Time series, document store, streaming
-- [x] **Phase 3: Distribution & Scale** - Raft consensus, sharding, monitoring, web dashboard
-- [x] **Phase 4: Enterprise Features** - LDAP/OAuth2 auth, RBAC, audit logging, Grafana plugin
-- [x] **Phase 5: Ecosystem & Growth** - Python SDK, JavaScript SDK
-
-All phases complete with 424 tests passing.
 
 ## License
 

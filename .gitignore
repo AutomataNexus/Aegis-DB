@@ -40,3 +40,4 @@ progress.txt
 # Coverage
 /coverage/
 *.lcov
+CLAUDE.md

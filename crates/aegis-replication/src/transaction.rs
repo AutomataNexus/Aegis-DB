@@ -599,12 +599,56 @@ impl TransactionCoordinator {
 // Transaction Participant Handler
 // =============================================================================
 
-/// Handler for transaction participants.
+/// Callback type for validating operations before prepare.
+pub type ValidationCallback = Box<dyn Fn(&TransactionId, &[TransactionOperation]) -> ValidationResult + Send + Sync>;
+
+/// Callback type for committing operations.
+pub type CommitCallback = Box<dyn Fn(&TransactionId, &[TransactionOperation]) -> Result<(), String> + Send + Sync>;
+
+/// Callback type for aborting/rolling back operations.
+pub type AbortCallback = Box<dyn Fn(&TransactionId) -> Result<(), String> + Send + Sync>;
+
+/// Result of validating operations for 2PC prepare.
+#[derive(Debug, Clone)]
+pub struct ValidationResult {
+    /// Whether validation succeeded.
+    pub success: bool,
+    /// Error message if validation failed.
+    pub error: Option<String>,
+    /// Keys that were locked for this transaction.
+    pub locked_keys: Vec<String>,
+}
+
+impl ValidationResult {
+    /// Create a successful validation result.
+    pub fn success(locked_keys: Vec<String>) -> Self {
+        Self {
+            success: true,
+            error: None,
+            locked_keys,
+        }
+    }
+
+    /// Create a failed validation result.
+    pub fn failure(error: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            error: Some(error.into()),
+            locked_keys: vec![],
+        }
+    }
+}
+
+/// Handler for transaction participants with storage integration.
 pub struct ParticipantHandler {
     node_id: NodeId,
     pending_prepares: RwLock<HashMap<TransactionId, Vec<TransactionOperation>>>,
     prepared: RwLock<HashSet<TransactionId>>,
     committed: RwLock<HashSet<TransactionId>>,
+    locked_keys: RwLock<HashMap<TransactionId, Vec<String>>>,
+    validation_callback: RwLock<Option<ValidationCallback>>,
+    commit_callback: RwLock<Option<CommitCallback>>,
+    abort_callback: RwLock<Option<AbortCallback>>,
 }
 
 impl ParticipantHandler {
@@ -615,21 +659,61 @@ impl ParticipantHandler {
             pending_prepares: RwLock::new(HashMap::new()),
             prepared: RwLock::new(HashSet::new()),
             committed: RwLock::new(HashSet::new()),
+            locked_keys: RwLock::new(HashMap::new()),
+            validation_callback: RwLock::new(None),
+            commit_callback: RwLock::new(None),
+            abort_callback: RwLock::new(None),
         }
     }
 
-    /// Handle prepare request.
+    /// Set the validation callback for prepare phase.
+    pub fn set_validation_callback(&self, callback: ValidationCallback) {
+        *self.validation_callback.write().unwrap() = Some(callback);
+    }
+
+    /// Set the commit callback for commit phase.
+    pub fn set_commit_callback(&self, callback: CommitCallback) {
+        *self.commit_callback.write().unwrap() = Some(callback);
+    }
+
+    /// Set the abort callback for abort/rollback phase.
+    pub fn set_abort_callback(&self, callback: AbortCallback) {
+        *self.abort_callback.write().unwrap() = Some(callback);
+    }
+
+    /// Handle prepare request with full storage integration.
     pub fn handle_prepare(
         &self,
         txn_id: &TransactionId,
         operations: Vec<TransactionOperation>,
     ) -> TwoPhaseMessage {
-        // In a real implementation, this would:
-        // 1. Acquire locks on all keys
-        // 2. Validate all operations can succeed
-        // 3. Write to WAL
-        // For now, we simulate success
+        // Check if there's a validation callback
+        let validation_result = {
+            let callback_guard = self.validation_callback.read().unwrap();
+            if let Some(ref callback) = *callback_guard {
+                // Run validation against storage
+                callback(txn_id, &operations)
+            } else {
+                // No callback - perform basic validation (key conflict check)
+                self.basic_validation(txn_id, &operations)
+            }
+        };
 
+        if !validation_result.success {
+            return TwoPhaseMessage::PrepareResponse {
+                txn_id: txn_id.clone(),
+                vote: ParticipantVote::Abort,
+                participant: self.node_id.clone(),
+            };
+        }
+
+        // Store locked keys for later release
+        self.locked_keys
+            .write()
+            .unwrap()
+            .insert(txn_id.clone(), validation_result.locked_keys);
+
+        // Store operations for commit phase
         self.pending_prepares
             .write()
             .unwrap()
@@ -641,6 +725,48 @@ impl ParticipantHandler {
             vote: ParticipantVote::Commit,
             participant: self.node_id.clone(),
         }
+    }
+
+    /// Basic validation when no custom callback is provided.
+    fn basic_validation(&self, txn_id: &TransactionId, operations: &[TransactionOperation]) -> ValidationResult {
+        // Check for key conflicts with other pending transactions
+        let pending = self.pending_prepares.read().unwrap();
+        let locked = self.locked_keys.read().unwrap();
+
+        let mut keys_to_lock = Vec::new();
+        for op in operations {
+            let key = op.key().to_string();
+
+            // Check if key is locked by another transaction
+            for (other_txn_id, other_keys) in locked.iter() {
+                if other_txn_id != txn_id && other_keys.contains(&key) {
+                    return ValidationResult::failure(format!(
+                        "Key '{}' is locked by transaction {}",
+                        key, other_txn_id
+                    ));
+                }
+            }
+
+            // Check if key is being modified by another pending transaction
+            for (other_txn_id, other_ops) in pending.iter() {
+                if other_txn_id != txn_id {
+                    for other_op in other_ops {
+                        if other_op.key() == key && other_op.is_write() && op.is_write() {
+                            return ValidationResult::failure(format!(
+                                "Write conflict on key '{}' with transaction {}",
+                                key, other_txn_id
+                            ));
+                        }
+                    }
+                }
+            }
+
+            if op.is_write() {
+                keys_to_lock.push(key);
+            }
+        }
+
+        ValidationResult::success(keys_to_lock)
     }
 
     /// Handle prepare with validation function.
@@ -671,11 +797,24 @@ impl ParticipantHandler {
         }
     }
 
-    /// Handle commit request.
+    /// Handle commit request with storage integration.
     pub fn handle_commit(&self, txn_id: &TransactionId) -> TwoPhaseMessage {
-        // Apply the prepared operations
-        self.pending_prepares.write().unwrap().remove(txn_id);
+        // Get the operations to commit
+        let operations = self.pending_prepares.write().unwrap().remove(txn_id);
+
+        // Execute commit callback if set
+        if let Some(ref callback) = *self.commit_callback.read().unwrap() {
+            if let Some(ops) = &operations {
+                if let Err(e) = callback(txn_id, ops) {
+                    // Log error but continue - we must commit after prepare
+                    tracing::error!("Commit callback failed for {}: {}", txn_id, e);
+                }
+            }
+        }
+
+        // Clean up state
         self.prepared.write().unwrap().remove(txn_id);
+        self.locked_keys.write().unwrap().remove(txn_id);
         self.committed.write().unwrap().insert(txn_id.clone());
 
         TwoPhaseMessage::CommitAck {
@@ -684,16 +823,45 @@ impl ParticipantHandler {
         }
     }
 
-    /// Handle abort request.
+    /// Handle abort request with proper cleanup.
     pub fn handle_abort(&self, txn_id: &TransactionId) -> TwoPhaseMessage {
-        // Rollback any prepared state
+        // Execute abort callback if set
+        if let Some(ref callback) = *self.abort_callback.read().unwrap() {
+            if let Err(e) = callback(txn_id) {
+                tracing::error!("Abort callback failed for {}: {}", txn_id, e);
+            }
+        }
+
+        // Rollback any prepared state and release locks
         self.pending_prepares.write().unwrap().remove(txn_id);
         self.prepared.write().unwrap().remove(txn_id);
+        self.locked_keys.write().unwrap().remove(txn_id);
 
         TwoPhaseMessage::AbortAck {
             txn_id: txn_id.clone(),
             participant: self.node_id.clone(),
         }
+    }
+
+    /// Get currently locked keys for a transaction.
+    pub fn get_locked_keys(&self, txn_id: &TransactionId) -> Vec<String> {
+        self.locked_keys
+            .read()
+            .unwrap()
+            .get(txn_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Check if a key is locked by any transaction.
+    pub fn is_key_locked(&self, key: &str) -> Option<TransactionId> {
+        let locked = self.locked_keys.read().unwrap();
+        for (txn_id, keys) in locked.iter() {
+            if keys.iter().any(|k| k == key) {
+                return Some(txn_id.clone());
+            }
+        }
+        None
     }
 
     /// Check if a transaction is prepared.

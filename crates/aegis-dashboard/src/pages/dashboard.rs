@@ -1331,9 +1331,13 @@ pub fn Dashboard() -> impl IntoView {
                                 </div>
                                 <div class="chart-body">
                                     {move || db_stats.get().map(|stats| {
-                                        let used_pct = (stats.storage_used as f64 / stats.storage_total as f64 * 100.0) as u32;
-                                        let wal_pct = 15; // Simulated
-                                        let data_pct = used_pct - wal_pct;
+                                        let used_pct = if stats.storage_total > 0 {
+                                            (stats.storage_used as f64 / stats.storage_total as f64 * 100.0) as u32
+                                        } else { 0 };
+                                        let wal_pct = if stats.storage_used > 0 {
+                                            (stats.wal_bytes as f64 / stats.storage_used as f64 * used_pct as f64) as u32
+                                        } else { 0 };
+                                        let data_pct = used_pct.saturating_sub(wal_pct);
                                         view! {
                                             <div class="storage-visual">
                                                 <div class="storage-ring-container">
@@ -1356,12 +1360,12 @@ pub fn Dashboard() -> impl IntoView {
                                                     <div class="storage-row">
                                                         <div class="storage-color data"></div>
                                                         <span class="storage-name">"Data Files"</span>
-                                                        <span class="storage-size">{format_bytes(stats.storage_used - stats.storage_used / 5)}</span>
+                                                        <span class="storage-size">{format_bytes(stats.data_bytes)}</span>
                                                     </div>
                                                     <div class="storage-row">
                                                         <div class="storage-color wal"></div>
                                                         <span class="storage-name">"WAL"</span>
-                                                        <span class="storage-size">{format_bytes(stats.storage_used / 5)}</span>
+                                                        <span class="storage-size">{format_bytes(stats.wal_bytes)}</span>
                                                     </div>
                                                     <div class="storage-row">
                                                         <div class="storage-color free"></div>
