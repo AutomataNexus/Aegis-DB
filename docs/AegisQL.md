@@ -236,6 +236,70 @@ DROP TABLE products;
 DROP TABLE IF EXISTS temp_data;
 ```
 
+### ALTER TABLE
+
+```sql
+ALTER TABLE table_name operation [, operation, ...];
+```
+
+**Operations:**
+
+| Operation | Syntax |
+|-----------|--------|
+| Add Column | `ADD COLUMN column_name data_type [constraints]` |
+| Drop Column | `DROP COLUMN [IF EXISTS] column_name` |
+| Rename Column | `RENAME COLUMN old_name TO new_name` |
+| Alter Column Type | `ALTER COLUMN column_name SET DATA TYPE data_type` |
+| Set Not Null | `ALTER COLUMN column_name SET NOT NULL` |
+| Drop Not Null | `ALTER COLUMN column_name DROP NOT NULL` |
+| Set Default | `ALTER COLUMN column_name SET DEFAULT expression` |
+| Drop Default | `ALTER COLUMN column_name DROP DEFAULT` |
+| Rename Table | `RENAME TO new_table_name` |
+| Drop Constraint | `DROP CONSTRAINT constraint_name` |
+
+**Examples:**
+
+```sql
+-- Add a column
+ALTER TABLE users ADD COLUMN phone VARCHAR(20);
+
+-- Add column with constraints
+ALTER TABLE users ADD COLUMN status VARCHAR(10) NOT NULL DEFAULT 'active';
+
+-- Drop a column
+ALTER TABLE users DROP COLUMN phone;
+
+-- Drop column if exists
+ALTER TABLE users DROP COLUMN IF EXISTS temp_field;
+
+-- Rename a column
+ALTER TABLE users RENAME COLUMN name TO full_name;
+
+-- Change column data type
+ALTER TABLE products ALTER COLUMN price SET DATA TYPE DECIMAL(12, 2);
+
+-- Set column to NOT NULL
+ALTER TABLE orders ALTER COLUMN customer_id SET NOT NULL;
+
+-- Remove NOT NULL constraint
+ALTER TABLE orders ALTER COLUMN notes DROP NOT NULL;
+
+-- Set default value
+ALTER TABLE users ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+
+-- Drop default value
+ALTER TABLE users ALTER COLUMN status DROP DEFAULT;
+
+-- Rename table
+ALTER TABLE users RENAME TO customers;
+
+-- Multiple operations
+ALTER TABLE products
+    ADD COLUMN category VARCHAR(50),
+    ADD COLUMN updated_at TIMESTAMP,
+    DROP COLUMN old_field;
+```
+
 ### CREATE INDEX
 
 ```sql

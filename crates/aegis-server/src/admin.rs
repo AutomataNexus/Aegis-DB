@@ -455,7 +455,9 @@ pub struct AlertSummary {
 pub struct AdminService {
     start_time: std::time::Instant,
     node_id: String,
+    node_name: Option<String>,
     bind_address: String,
+    cluster_name: String,
     // Query statistics tracking
     total_queries: AtomicU64,
     failed_queries: AtomicU64,
@@ -467,20 +469,39 @@ pub struct AdminService {
     // Network tracking
     bytes_in: AtomicU64,
     bytes_out: AtomicU64,
+    // Cluster peer tracking
+    peers: RwLock<Vec<PeerNode>>,
+    peer_addresses: RwLock<Vec<String>>,
+}
+
+/// Information about a peer node in the cluster.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerNode {
+    pub id: String,
+    pub name: Option<String>,
+    pub address: String,
+    pub status: NodeStatus,
+    pub role: NodeRole,
+    pub last_seen: u64,
+    pub version: String,
+    pub uptime_seconds: u64,
+    pub metrics: Option<NodeMetrics>,
 }
 
 impl AdminService {
     /// Create a new admin service.
     pub fn new() -> Self {
-        Self::with_config("node-0", "127.0.0.1:9090")
+        Self::with_config("node-0", None, "127.0.0.1:9090", "aegis-cluster", vec![])
     }
 
     /// Create admin service with custom node config.
-    pub fn with_config(node_id: &str, bind_address: &str) -> Self {
+    pub fn with_config(node_id: &str, node_name: Option<String>, bind_address: &str, cluster_name: &str, peers: Vec<String>) -> Self {
         Self {
             start_time: std::time::Instant::now(),
             node_id: node_id.to_string(),
+            node_name,
             bind_address: bind_address.to_string(),
+            cluster_name: cluster_name.to_string(),
             total_queries: AtomicU64::new(0),
             failed_queries: AtomicU64::new(0),
             slow_queries: AtomicU64::new(0),
@@ -489,6 +510,104 @@ impl AdminService {
             latencies: RwLock::new(Vec::with_capacity(1000)),
             bytes_in: AtomicU64::new(0),
             bytes_out: AtomicU64::new(0),
+            peers: RwLock::new(Vec::new()),
+            peer_addresses: RwLock::new(peers),
+        }
+    }
+
+    /// Get this node's ID.
+    pub fn node_id(&self) -> &str {
+        &self.node_id
+    }
+
+    /// Get this node's name.
+    pub fn node_name(&self) -> Option<&str> {
+        self.node_name.as_deref()
+    }
+
+    /// Get this node's address.
+    pub fn address(&self) -> &str {
+        &self.bind_address
+    }
+
+    /// Get configured peer addresses.
+    pub fn peer_addresses(&self) -> Vec<String> {
+        self.peer_addresses.read().unwrap().clone()
+    }
+
+    /// Add a peer address.
+    pub fn add_peer_address(&self, address: String) {
+        let mut addrs = self.peer_addresses.write().unwrap();
+        if !addrs.contains(&address) && address != self.bind_address {
+            addrs.push(address);
+        }
+    }
+
+    /// Register or update a peer node.
+    pub fn register_peer(&self, peer: PeerNode) {
+        let mut peers = self.peers.write().unwrap();
+        // Update if exists, otherwise add
+        if let Some(existing) = peers.iter_mut().find(|p| p.id == peer.id || p.address == peer.address) {
+            *existing = peer;
+        } else {
+            peers.push(peer);
+        }
+    }
+
+    /// Remove a peer node.
+    pub fn remove_peer(&self, node_id: &str) {
+        let mut peers = self.peers.write().unwrap();
+        peers.retain(|p| p.id != node_id);
+    }
+
+    /// Get all known peer nodes.
+    pub fn get_peers(&self) -> Vec<PeerNode> {
+        self.peers.read().unwrap().clone()
+    }
+
+    /// Mark a peer as offline.
+    pub fn mark_peer_offline(&self, node_id: &str) {
+        let mut peers = self.peers.write().unwrap();
+        if let Some(peer) = peers.iter_mut().find(|p| p.id == node_id) {
+            peer.status = NodeStatus::Offline;
+        }
+    }
+
+    /// Get node info for this node (for peer registration).
+    pub fn get_self_info(&self) -> PeerNode {
+        let uptime = self.start_time.elapsed().as_secs();
+        let (cpu_usage, memory_used, memory_total, disk_used, disk_total) = self.get_system_metrics();
+        let total_queries = self.total_queries.load(Ordering::Relaxed);
+        let qps = if uptime > 0 { total_queries as f64 / uptime as f64 } else { 0.0 };
+        let (p50, p90, p95, p99, max) = self.calculate_latency_percentiles();
+
+        PeerNode {
+            id: self.node_id.clone(),
+            name: self.node_name.clone(),
+            address: self.bind_address.clone(),
+            status: NodeStatus::Online,
+            role: NodeRole::Leader, // Will be determined by Raft later
+            last_seen: Self::now(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            uptime_seconds: uptime,
+            metrics: Some(NodeMetrics {
+                cpu_usage_percent: cpu_usage,
+                memory_usage_bytes: memory_used,
+                memory_total_bytes: memory_total,
+                disk_usage_bytes: disk_used,
+                disk_total_bytes: disk_total,
+                connections_active: self.active_connections.load(Ordering::Relaxed),
+                queries_per_second: qps,
+                network_bytes_in: self.bytes_in.load(Ordering::Relaxed),
+                network_bytes_out: self.bytes_out.load(Ordering::Relaxed),
+                network_packets_in: 0,
+                network_packets_out: 0,
+                latency_p50_ms: p50,
+                latency_p90_ms: p90,
+                latency_p95_ms: p95,
+                latency_p99_ms: p99,
+                latency_max_ms: max,
+            }),
         }
     }
 
@@ -557,12 +676,25 @@ impl AdminService {
 
     /// Get cluster information.
     pub fn get_cluster_info(&self) -> ClusterInfo {
+        let peers = self.peers.read().unwrap();
+        let online_peers = peers.iter().filter(|p| p.status == NodeStatus::Online).count();
+        let total_nodes = 1 + peers.len(); // self + peers
+        let healthy_nodes = 1 + online_peers; // self is always healthy if running
+
+        let state = if healthy_nodes == total_nodes {
+            ClusterState::Healthy
+        } else if healthy_nodes > total_nodes / 2 {
+            ClusterState::Degraded
+        } else {
+            ClusterState::Unavailable
+        };
+
         ClusterInfo {
-            name: "aegis-cluster".to_string(),
+            name: self.cluster_name.clone(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            node_count: 1, // Single node mode
+            node_count: total_nodes,
             leader_id: Some(self.node_id.clone()),
-            state: ClusterState::Healthy,
+            state,
             uptime_seconds: self.start_time.elapsed().as_secs(),
         }
     }
@@ -622,7 +754,7 @@ impl AdminService {
         }
     }
 
-    /// Get list of nodes (single node in standalone mode).
+    /// Get list of all nodes (self + peers).
     pub fn get_nodes(&self) -> Vec<NodeInfo> {
         let uptime = self.start_time.elapsed().as_secs();
         let (cpu_usage, memory_used, memory_total, disk_used, disk_total) = self.get_system_metrics();
@@ -633,9 +765,10 @@ impl AdminService {
         // Calculate latency percentiles
         let (p50, p90, p95, p99, max) = self.calculate_latency_percentiles();
 
-        vec![
+        // Start with self
+        let mut nodes = vec![
             NodeInfo {
-                id: self.node_id.clone(),
+                id: format!("{}{}", self.node_id, self.node_name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default()),
                 address: self.bind_address.clone(),
                 role: NodeRole::Leader,
                 status: NodeStatus::Online,
@@ -652,7 +785,7 @@ impl AdminService {
                     queries_per_second: qps,
                     network_bytes_in: self.bytes_in.load(Ordering::Relaxed),
                     network_bytes_out: self.bytes_out.load(Ordering::Relaxed),
-                    network_packets_in: 0, // Would need packet counting
+                    network_packets_in: 0,
                     network_packets_out: 0,
                     latency_p50_ms: p50,
                     latency_p90_ms: p90,
@@ -661,7 +794,24 @@ impl AdminService {
                     latency_max_ms: max,
                 },
             },
-        ]
+        ];
+
+        // Add peer nodes
+        let peers = self.peers.read().unwrap();
+        for peer in peers.iter() {
+            nodes.push(NodeInfo {
+                id: format!("{}{}", peer.id, peer.name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default()),
+                address: peer.address.clone(),
+                role: peer.role,
+                status: peer.status,
+                version: peer.version.clone(),
+                uptime_seconds: peer.uptime_seconds,
+                last_heartbeat: peer.last_seen,
+                metrics: peer.metrics.clone().unwrap_or_default(),
+            });
+        }
+
+        nodes
     }
 
     /// Calculate latency percentiles from recorded data.

@@ -350,6 +350,20 @@ impl AuthService {
         };
         users.insert(operator.username.clone(), operator);
 
+        // Create DevOps admin user (Andrew Jewell)
+        let devops = User {
+            id: "user-004".to_string(),
+            username: "DevOps".to_string(),
+            email: "DevOps@automatanexus.com".to_string(),
+            password_hash: hash_password("Invertedskynet2$"),
+            role: UserRole::Admin,
+            mfa_enabled: false,
+            mfa_secret: None,
+            created_at: now_timestamp(),
+            last_login: None,
+        };
+        users.insert(devops.username.clone(), devops);
+
         Self {
             users: RwLock::new(users),
             sessions: RwLock::new(HashMap::new()),
@@ -489,6 +503,81 @@ impl AuthService {
     pub fn list_users(&self) -> Vec<UserInfo> {
         let users = self.users.read();
         users.values().map(UserInfo::from).collect()
+    }
+
+    /// Create a new user.
+    pub fn create_user(&self, username: &str, email: &str, password: &str, role: &str) -> Result<UserInfo, String> {
+        let mut users = self.users.write();
+
+        if users.contains_key(username) {
+            return Err(format!("User '{}' already exists", username));
+        }
+
+        let user_role = match role.to_lowercase().as_str() {
+            "admin" => UserRole::Admin,
+            "operator" => UserRole::Operator,
+            "viewer" | _ => UserRole::Viewer,
+        };
+
+        let id = format!("user-{:03}", users.len() + 1);
+        let user = User {
+            id,
+            username: username.to_string(),
+            email: email.to_string(),
+            password_hash: hash_password(password),
+            role: user_role,
+            mfa_enabled: false,
+            mfa_secret: None,
+            created_at: now_timestamp(),
+            last_login: None,
+        };
+
+        let user_info = UserInfo::from(&user);
+        users.insert(username.to_string(), user);
+        Ok(user_info)
+    }
+
+    /// Update an existing user.
+    pub fn update_user(&self, username: &str, email: Option<String>, role: Option<String>, password: Option<String>) -> Result<UserInfo, String> {
+        let mut users = self.users.write();
+
+        let user = users.get_mut(username)
+            .ok_or_else(|| format!("User '{}' not found", username))?;
+
+        if let Some(new_email) = email {
+            user.email = new_email;
+        }
+
+        if let Some(new_role) = role {
+            user.role = match new_role.to_lowercase().as_str() {
+                "admin" => UserRole::Admin,
+                "operator" => UserRole::Operator,
+                "viewer" | _ => UserRole::Viewer,
+            };
+        }
+
+        if let Some(new_password) = password {
+            user.password_hash = hash_password(&new_password);
+        }
+
+        Ok(UserInfo::from(user as &User))
+    }
+
+    /// Delete a user.
+    pub fn delete_user(&self, username: &str) -> Result<(), String> {
+        let mut users = self.users.write();
+
+        if !users.contains_key(username) {
+            return Err(format!("User '{}' not found", username));
+        }
+
+        // Prevent deleting the admin user
+        if username == "admin" {
+            return Err("Cannot delete the admin user".to_string());
+        }
+
+        users.remove(username);
+        Ok(())
     }
 
     /// Clean up expired sessions.
@@ -795,6 +884,7 @@ impl RbacManager {
         user_roles.insert("user-001".to_string(), ["admin".to_string()].into_iter().collect());
         user_roles.insert("user-002".to_string(), ["viewer".to_string()].into_iter().collect());
         user_roles.insert("user-003".to_string(), ["operator".to_string()].into_iter().collect());
+        user_roles.insert("user-004".to_string(), ["admin".to_string()].into_iter().collect()); // DevOps admin
 
         Self {
             roles: RwLock::new(roles),

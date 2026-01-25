@@ -1,0 +1,15 @@
+[Unit]
+Description=Aegis-DB Dashboard Server
+After=network.target
+
+[Service]
+Type=simple
+User=devops
+WorkingDirectory=/opt/Aegis-DB
+ExecStart=/opt/Aegis-DB/target/release/aegis-server --port 9090 --node-name Dashboard --peers 127.0.0.1:9091,127.0.0.1:7001
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

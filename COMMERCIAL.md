@@ -153,7 +153,7 @@ Contact us about Enterprise licensing or custom development. We also accept feat
 
 **Support:** support@automatanexus.com
 
-**Website:** https://aegis-db.io
+**Website:** https://automatanexus.com
 
 **GitHub:** https://github.com/AutomataNexus/Aegis-DB
 

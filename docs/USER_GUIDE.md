@@ -556,6 +556,11 @@ CREATE TABLE products (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Alter table (add, drop, rename columns)
+ALTER TABLE products ADD COLUMN category VARCHAR(50);
+ALTER TABLE products RENAME COLUMN name TO product_name;
+ALTER TABLE products DROP COLUMN category;
+
 -- Insert data
 INSERT INTO products (id, name, price) VALUES (1, 'Widget', 19.99);
 

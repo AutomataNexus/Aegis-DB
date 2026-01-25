@@ -936,3 +936,522 @@ pub async fn get_node_logs(node_id: &str, limit: Option<usize>) -> Result<NodeLo
 
     response.json().await.map_err(|e| e.to_string())
 }
+
+// =============================================================================
+// Settings API
+// =============================================================================
+
+/// Server settings structure.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ServerSettings {
+    pub replication_factor: u8,
+    pub auto_backups_enabled: bool,
+    pub backup_schedule: String,
+    pub retention_days: u32,
+    pub tls_enabled: bool,
+    pub auth_required: bool,
+    pub session_timeout_minutes: u32,
+    pub require_2fa: bool,
+    pub audit_logging_enabled: bool,
+}
+
+impl Default for ServerSettings {
+    fn default() -> Self {
+        Self {
+            replication_factor: 3,
+            auto_backups_enabled: true,
+            backup_schedule: "0 2 * * *".to_string(),
+            retention_days: 30,
+            tls_enabled: false,
+            auth_required: true,
+            session_timeout_minutes: 60,
+            require_2fa: false,
+            audit_logging_enabled: true,
+        }
+    }
+}
+
+/// Get server settings.
+pub async fn get_settings() -> Result<ServerSettings, String> {
+    let url = format!("{}/api/v1/admin/settings", API_BASE_URL);
+
+    let response = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    response.json().await.map_err(|e| e.to_string())
+}
+
+/// Update server settings.
+pub async fn update_settings(settings: &ServerSettings) -> Result<(), String> {
+    let url = format!("{}/api/v1/admin/settings", API_BASE_URL);
+
+    let response = Request::put(&url)
+        .header("Content-Type", "application/json")
+        .json(settings)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// User Management API
+// =============================================================================
+
+/// User info for API responses.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UserListItem {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub role: String,
+    pub mfa_enabled: bool,
+    pub enabled: bool,
+    pub created_at: String,
+    pub last_login: Option<String>,
+}
+
+/// List all users.
+pub async fn list_users() -> Result<Vec<UserListItem>, String> {
+    let url = format!("{}/api/v1/admin/users", API_BASE_URL);
+
+    let response = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    response.json().await.map_err(|e| e.to_string())
+}
+
+/// Create a new user.
+pub async fn create_user(username: &str, email: &str, password: &str, role: &str) -> Result<UserListItem, String> {
+    let url = format!("{}/api/v1/admin/users", API_BASE_URL);
+
+    #[derive(serde::Serialize)]
+    struct CreateUserRequest {
+        username: String,
+        email: String,
+        password: String,
+        role: String,
+    }
+
+    let response = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .json(&CreateUserRequest {
+            username: username.to_string(),
+            email: email.to_string(),
+            password: password.to_string(),
+            role: role.to_string(),
+        })
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Server returned status {}: {}", response.status(), text));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct CreateUserResponse {
+        success: bool,
+        user: Option<UserListItem>,
+        error: Option<String>,
+    }
+
+    let resp: CreateUserResponse = response.json().await.map_err(|e| e.to_string())?;
+    if resp.success {
+        resp.user.ok_or_else(|| "No user returned".to_string())
+    } else {
+        Err(resp.error.unwrap_or_else(|| "Unknown error".to_string()))
+    }
+}
+
+/// User update request.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UserUpdate {
+    pub email: Option<String>,
+    pub role: Option<String>,
+    pub enabled: Option<bool>,
+    pub password: Option<String>,
+}
+
+/// Update a user.
+pub async fn update_user(username: &str, updates: &UserUpdate) -> Result<UserListItem, String> {
+    let url = format!("{}/api/v1/admin/users/{}", API_BASE_URL, username);
+
+    let response = Request::put(&url)
+        .header("Content-Type", "application/json")
+        .json(updates)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct UpdateUserResponse {
+        success: bool,
+        user: Option<UserListItem>,
+        error: Option<String>,
+    }
+
+    let resp: UpdateUserResponse = response.json().await.map_err(|e| e.to_string())?;
+    if resp.success {
+        resp.user.ok_or_else(|| "No user returned".to_string())
+    } else {
+        Err(resp.error.unwrap_or_else(|| "Unknown error".to_string()))
+    }
+}
+
+/// Delete a user.
+pub async fn delete_user(username: &str) -> Result<(), String> {
+    let url = format!("{}/api/v1/admin/users/{}", API_BASE_URL, username);
+
+    let response = Request::delete(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct DeleteResponse {
+        success: bool,
+        error: Option<String>,
+    }
+
+    let resp: DeleteResponse = response.json().await.map_err(|e| e.to_string())?;
+    if resp.success {
+        Ok(())
+    } else {
+        Err(resp.error.unwrap_or_else(|| "Unknown error".to_string()))
+    }
+}
+
+// =============================================================================
+// Role Management API
+// =============================================================================
+
+/// Role info for API responses.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RoleInfo {
+    pub name: String,
+    pub description: String,
+    pub permissions: Vec<String>,
+    pub created_at: String,
+    pub is_builtin: bool,
+}
+
+/// List all roles.
+pub async fn list_roles() -> Result<Vec<RoleInfo>, String> {
+    let url = format!("{}/api/v1/admin/roles", API_BASE_URL);
+
+    let response = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    response.json().await.map_err(|e| e.to_string())
+}
+
+/// Create a new role.
+pub async fn create_role(name: &str, description: &str, permissions: &[String]) -> Result<RoleInfo, String> {
+    let url = format!("{}/api/v1/admin/roles", API_BASE_URL);
+
+    #[derive(serde::Serialize)]
+    struct CreateRoleRequest {
+        name: String,
+        description: String,
+        permissions: Vec<String>,
+    }
+
+    let response = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .json(&CreateRoleRequest {
+            name: name.to_string(),
+            description: description.to_string(),
+            permissions: permissions.to_vec(),
+        })
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    // The server returns a simplified response, construct RoleInfo
+    Ok(RoleInfo {
+        name: name.to_string(),
+        description: description.to_string(),
+        permissions: permissions.to_vec(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        is_builtin: false,
+    })
+}
+
+/// Delete a role.
+pub async fn delete_role(name: &str) -> Result<(), String> {
+    let url = format!("{}/api/v1/admin/roles/{}", API_BASE_URL, name);
+
+    let response = Request::delete(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct DeleteResponse {
+        success: bool,
+        error: Option<String>,
+    }
+
+    let resp: DeleteResponse = response.json().await.map_err(|e| e.to_string())?;
+    if resp.success {
+        Ok(())
+    } else {
+        Err(resp.error.unwrap_or_else(|| "Unknown error".to_string()))
+    }
+}
+
+// =============================================================================
+// Metrics Timeseries API
+// =============================================================================
+
+/// Metrics data point.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MetricsDataPoint {
+    pub timestamp: i64,
+    pub cpu_percent: f64,
+    pub memory_percent: f64,
+    pub queries_per_second: f64,
+    pub latency_ms: f64,
+    pub connections: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+}
+
+/// Metrics timeseries response.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MetricsTimeseriesResponse {
+    pub time_range: String,
+    pub data_points: Vec<MetricsDataPoint>,
+}
+
+/// Get metrics timeseries data for a given time range.
+pub async fn get_metrics_timeseries(time_range: &str) -> Result<Vec<MetricsDataPoint>, String> {
+    let url = format!("{}/api/v1/admin/metrics/timeseries", API_BASE_URL);
+
+    #[derive(serde::Serialize)]
+    struct MetricsTimeseriesRequest {
+        time_range: String,
+    }
+
+    let response = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .json(&MetricsTimeseriesRequest {
+            time_range: time_range.to_string(),
+        })
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    let resp: MetricsTimeseriesResponse = response.json().await.map_err(|e| e.to_string())?;
+    Ok(resp.data_points)
+}
+
+// =============================================================================
+// Graph Management API
+// =============================================================================
+
+/// Graph node for the API.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphNodeInfo {
+    pub id: String,
+    pub label: String,
+    pub properties: serde_json::Value,
+}
+
+/// Graph edge for the API.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphEdgeInfo {
+    pub id: String,
+    pub source: String,
+    pub target: String,
+    pub relationship: String,
+}
+
+/// Create a new graph node.
+pub async fn create_graph_node(label: &str, properties: serde_json::Value) -> Result<GraphNodeInfo, String> {
+    let url = format!("{}/api/v1/graph/nodes", API_BASE_URL);
+
+    #[derive(serde::Serialize)]
+    struct CreateNodeRequest {
+        label: String,
+        properties: serde_json::Value,
+    }
+
+    let response = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .json(&CreateNodeRequest {
+            label: label.to_string(),
+            properties,
+        })
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct CreateNodeResponse {
+        success: bool,
+        node: Option<GraphNodeInfo>,
+    }
+
+    let resp: CreateNodeResponse = response.json().await.map_err(|e| e.to_string())?;
+    resp.node.ok_or_else(|| "No node returned".to_string())
+}
+
+/// Create a new graph edge.
+pub async fn create_graph_edge(source: &str, target: &str, relationship: &str) -> Result<GraphEdgeInfo, String> {
+    let url = format!("{}/api/v1/graph/edges", API_BASE_URL);
+
+    #[derive(serde::Serialize)]
+    struct CreateEdgeRequest {
+        source: String,
+        target: String,
+        relationship: String,
+    }
+
+    let response = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .json(&CreateEdgeRequest {
+            source: source.to_string(),
+            target: target.to_string(),
+            relationship: relationship.to_string(),
+        })
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct CreateEdgeResponse {
+        success: bool,
+        edge: Option<GraphEdgeInfo>,
+    }
+
+    let resp: CreateEdgeResponse = response.json().await.map_err(|e| e.to_string())?;
+    resp.edge.ok_or_else(|| "No edge returned".to_string())
+}
+
+/// Delete a graph node.
+pub async fn delete_graph_node(node_id: &str) -> Result<(), String> {
+    let url = format!("{}/api/v1/graph/nodes/{}", API_BASE_URL, node_id);
+
+    let response = Request::delete(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// Document Collection Management API
+// =============================================================================
+
+/// Create a new collection.
+pub async fn create_collection(name: &str) -> Result<DocumentCollection, String> {
+    let url = format!("{}/api/v1/documents/collections", API_BASE_URL);
+
+    #[derive(serde::Serialize)]
+    struct CreateCollectionRequest {
+        name: String,
+    }
+
+    let response = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .json(&CreateCollectionRequest {
+            name: name.to_string(),
+        })
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    response.json().await.map_err(|e| e.to_string())
+}
+
+/// Insert a document into a collection.
+pub async fn insert_document(collection: &str, document: serde_json::Value) -> Result<DocumentEntry, String> {
+    let url = format!("{}/api/v1/documents/collections/{}/documents", API_BASE_URL, collection);
+
+    let response = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .json(&document)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    response.json().await.map_err(|e| e.to_string())
+}

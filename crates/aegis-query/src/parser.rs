@@ -84,6 +84,10 @@ impl Parser {
                 let create_stmt = self.convert_create_index(create)?;
                 Ok(Statement::CreateIndex(create_stmt))
             }
+            sp::Statement::AlterTable { name, operations, .. } => {
+                let alter_stmt = self.convert_alter_table(name, operations)?;
+                Ok(Statement::AlterTable(alter_stmt))
+            }
             sp::Statement::StartTransaction { .. } => Ok(Statement::Begin),
             sp::Statement::Commit { .. } => Ok(Statement::Commit),
             sp::Statement::Rollback { .. } => Ok(Statement::Rollback),
@@ -564,6 +568,120 @@ impl Parser {
             unique: create.unique,
             if_not_exists: create.if_not_exists,
         })
+    }
+
+    fn convert_alter_table(
+        &self,
+        name: sp::ObjectName,
+        operations: Vec<sp::AlterTableOperation>,
+    ) -> Result<AlterTableStatement> {
+        let ops = operations
+            .into_iter()
+            .map(|op| self.convert_alter_operation(op))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(AlterTableStatement {
+            name: name.to_string(),
+            operations: ops,
+        })
+    }
+
+    fn convert_alter_operation(&self, op: sp::AlterTableOperation) -> Result<AlterTableOperation> {
+        match op {
+            sp::AlterTableOperation::AddColumn { column_def, .. } => {
+                let col = ColumnDefinition {
+                    name: column_def.name.value.clone(),
+                    data_type: self.convert_data_type(&column_def.data_type)?,
+                    nullable: !column_def.options.iter().any(|o| {
+                        matches!(o.option, sp::ColumnOption::NotNull)
+                    }),
+                    default: column_def
+                        .options
+                        .iter()
+                        .find_map(|o| match &o.option {
+                            sp::ColumnOption::Default(e) => Some(self.convert_expr(e.clone())),
+                            _ => None,
+                        })
+                        .transpose()?,
+                    constraints: Vec::new(),
+                };
+                Ok(AlterTableOperation::AddColumn(col))
+            }
+            sp::AlterTableOperation::DropColumn { column_name, if_exists, .. } => {
+                Ok(AlterTableOperation::DropColumn {
+                    name: column_name.value,
+                    if_exists,
+                })
+            }
+            sp::AlterTableOperation::RenameColumn { old_column_name, new_column_name } => {
+                Ok(AlterTableOperation::RenameColumn {
+                    old_name: old_column_name.value,
+                    new_name: new_column_name.value,
+                })
+            }
+            sp::AlterTableOperation::RenameTable { table_name } => {
+                Ok(AlterTableOperation::RenameTable {
+                    new_name: table_name.to_string(),
+                })
+            }
+            sp::AlterTableOperation::AlterColumn { column_name, op } => {
+                match op {
+                    sp::AlterColumnOperation::SetDataType { data_type, .. } => {
+                        Ok(AlterTableOperation::AlterColumn {
+                            name: column_name.value,
+                            data_type: Some(self.convert_data_type(&data_type)?),
+                            set_not_null: None,
+                            set_default: None,
+                        })
+                    }
+                    sp::AlterColumnOperation::SetNotNull => {
+                        Ok(AlterTableOperation::AlterColumn {
+                            name: column_name.value,
+                            data_type: None,
+                            set_not_null: Some(true),
+                            set_default: None,
+                        })
+                    }
+                    sp::AlterColumnOperation::DropNotNull => {
+                        Ok(AlterTableOperation::AlterColumn {
+                            name: column_name.value,
+                            data_type: None,
+                            set_not_null: Some(false),
+                            set_default: None,
+                        })
+                    }
+                    sp::AlterColumnOperation::SetDefault { value } => {
+                        Ok(AlterTableOperation::AlterColumn {
+                            name: column_name.value,
+                            data_type: None,
+                            set_not_null: None,
+                            set_default: Some(Some(self.convert_expr(value)?)),
+                        })
+                    }
+                    sp::AlterColumnOperation::DropDefault => {
+                        Ok(AlterTableOperation::AlterColumn {
+                            name: column_name.value,
+                            data_type: None,
+                            set_not_null: None,
+                            set_default: Some(None),
+                        })
+                    }
+                    _ => Err(AegisError::Parse(format!(
+                        "Unsupported ALTER COLUMN operation: {:?}",
+                        op
+                    ))),
+                }
+            }
+            sp::AlterTableOperation::DropConstraint { name, .. } => {
+                Ok(AlterTableOperation::DropConstraint {
+                    name: name.value,
+                })
+            }
+            _ => Err(AegisError::Parse(format!(
+                "Unsupported ALTER TABLE operation: {:?}",
+                op
+            ))),
+        }
     }
 
     fn convert_data_type(&self, dt: &sp::DataType) -> Result<DataType> {

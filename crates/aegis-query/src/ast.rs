@@ -29,6 +29,7 @@ pub enum Statement {
     Delete(DeleteStatement),
     CreateTable(CreateTableStatement),
     DropTable(DropTableStatement),
+    AlterTable(AlterTableStatement),
     CreateIndex(CreateIndexStatement),
     DropIndex(DropIndexStatement),
     Begin,
@@ -218,6 +219,25 @@ pub enum TableConstraint {
 pub struct DropTableStatement {
     pub name: String,
     pub if_exists: bool,
+}
+
+/// ALTER TABLE statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlterTableStatement {
+    pub name: String,
+    pub operations: Vec<AlterTableOperation>,
+}
+
+/// ALTER TABLE operation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AlterTableOperation {
+    AddColumn(ColumnDefinition),
+    DropColumn { name: String, if_exists: bool },
+    RenameColumn { old_name: String, new_name: String },
+    AlterColumn { name: String, data_type: Option<DataType>, set_not_null: Option<bool>, set_default: Option<Option<Expression>> },
+    RenameTable { new_name: String },
+    AddConstraint(TableConstraint),
+    DropConstraint { name: String },
 }
 
 /// CREATE INDEX statement.

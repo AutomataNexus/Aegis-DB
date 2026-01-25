@@ -45,7 +45,28 @@ pub fn create_router(state: AppState) -> Router {
         .route("/stats", get(handlers::get_query_stats))
         .route("/database", get(handlers::get_database_stats))
         .route("/alerts", get(handlers::get_alerts))
-        .route("/activities", get(handlers::get_activities));
+        .route("/activities", get(handlers::get_activities))
+        // Settings management
+        .route("/settings", get(handlers::get_settings))
+        .route("/settings", put(handlers::update_settings))
+        // User management
+        .route("/users", get(handlers::list_users))
+        .route("/users", post(handlers::create_user))
+        .route("/users/:username", put(handlers::update_user))
+        .route("/users/:username", delete(handlers::delete_user))
+        // Role management
+        .route("/roles", get(handlers::list_roles))
+        .route("/roles", post(handlers::create_role))
+        .route("/roles/:name", delete(handlers::delete_role))
+        // Metrics timeseries
+        .route("/metrics/timeseries", post(handlers::get_metrics_timeseries));
+
+    // Cluster peer management routes
+    let cluster_routes = Router::new()
+        .route("/info", get(handlers::get_node_info))
+        .route("/join", post(handlers::cluster_join))
+        .route("/heartbeat", post(handlers::cluster_heartbeat))
+        .route("/peers", get(handlers::get_peers));
 
     let auth_routes = Router::new()
         .route("/login", post(handlers::login))
@@ -90,7 +111,10 @@ pub fn create_router(state: AppState) -> Router {
 
     // Graph database routes
     let graph_routes = Router::new()
-        .route("/data", get(handlers::get_graph_data));
+        .route("/data", get(handlers::get_graph_data))
+        .route("/nodes", post(handlers::create_graph_node))
+        .route("/nodes/:node_id", delete(handlers::delete_graph_node))
+        .route("/edges", post(handlers::create_graph_edge));
 
     // Query builder routes
     let query_routes = Router::new()
@@ -100,6 +124,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(handlers::health_check))
         .nest("/api/v1", api_routes)
         .nest("/api/v1/admin", admin_routes)
+        .nest("/api/v1/cluster", cluster_routes)
         .nest("/api/v1/auth", auth_routes)
         .nest("/api/v1/kv", kv_routes)
         .nest("/api/v1/documents", doc_routes)

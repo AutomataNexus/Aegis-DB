@@ -68,6 +68,7 @@ pub enum PlanNode {
     // DDL nodes
     CreateTable(CreateTableNode),
     DropTable(DropTableNode),
+    AlterTable(AlterTableNode),
     CreateIndex(CreateIndexNode),
     DropIndex(DropIndexNode),
     // DML nodes
@@ -246,6 +247,25 @@ pub enum CreateTableConstraint {
 pub struct DropTableNode {
     pub table_name: String,
     pub if_exists: bool,
+}
+
+/// ALTER TABLE operation.
+#[derive(Debug, Clone)]
+pub struct AlterTableNode {
+    pub table_name: String,
+    pub operations: Vec<PlanAlterOperation>,
+}
+
+/// ALTER TABLE operation type.
+#[derive(Debug, Clone)]
+pub enum PlanAlterOperation {
+    AddColumn(CreateColumnDef),
+    DropColumn { name: String, if_exists: bool },
+    RenameColumn { old_name: String, new_name: String },
+    AlterColumn { name: String, data_type: Option<DataType>, set_not_null: Option<bool>, set_default: Option<Option<PlanExpression>> },
+    RenameTable { new_name: String },
+    AddConstraint(CreateTableConstraint),
+    DropConstraint { name: String },
 }
 
 /// CREATE INDEX operation.
@@ -497,6 +517,7 @@ impl Planner {
             Statement::Delete(delete) => self.plan_delete(delete),
             Statement::CreateTable(create) => self.plan_create_table(create),
             Statement::DropTable(drop) => self.plan_drop_table(drop),
+            Statement::AlterTable(alter) => self.plan_alter_table(alter),
             Statement::CreateIndex(create) => self.plan_create_index(create),
             Statement::DropIndex(drop) => self.plan_drop_index(drop),
             Statement::Begin | Statement::Commit | Statement::Rollback => {
@@ -573,6 +594,91 @@ impl Planner {
             root: PlanNode::DropTable(DropTableNode {
                 table_name: drop.name.clone(),
                 if_exists: drop.if_exists,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        })
+    }
+
+    /// Plan an ALTER TABLE statement.
+    fn plan_alter_table(&self, alter: &crate::ast::AlterTableStatement) -> PlannerResult<QueryPlan> {
+        let operations = alter.operations.iter().map(|op| {
+            match op {
+                crate::ast::AlterTableOperation::AddColumn(col) => {
+                    Ok(PlanAlterOperation::AddColumn(CreateColumnDef {
+                        name: col.name.clone(),
+                        data_type: col.data_type.clone(),
+                        nullable: col.nullable,
+                        default: col.default.as_ref().map(|e| self.plan_expression(e)).transpose()?,
+                        primary_key: false,
+                        unique: false,
+                    }))
+                }
+                crate::ast::AlterTableOperation::DropColumn { name, if_exists } => {
+                    Ok(PlanAlterOperation::DropColumn {
+                        name: name.clone(),
+                        if_exists: *if_exists,
+                    })
+                }
+                crate::ast::AlterTableOperation::RenameColumn { old_name, new_name } => {
+                    Ok(PlanAlterOperation::RenameColumn {
+                        old_name: old_name.clone(),
+                        new_name: new_name.clone(),
+                    })
+                }
+                crate::ast::AlterTableOperation::AlterColumn { name, data_type, set_not_null, set_default } => {
+                    let default_expr = match set_default {
+                        Some(Some(expr)) => Some(Some(self.plan_expression(expr)?)),
+                        Some(None) => Some(None),
+                        None => None,
+                    };
+                    Ok(PlanAlterOperation::AlterColumn {
+                        name: name.clone(),
+                        data_type: data_type.clone(),
+                        set_not_null: *set_not_null,
+                        set_default: default_expr,
+                    })
+                }
+                crate::ast::AlterTableOperation::RenameTable { new_name } => {
+                    Ok(PlanAlterOperation::RenameTable {
+                        new_name: new_name.clone(),
+                    })
+                }
+                crate::ast::AlterTableOperation::AddConstraint(constraint) => {
+                    let plan_constraint = match constraint {
+                        crate::ast::TableConstraint::PrimaryKey { columns } => {
+                            CreateTableConstraint::PrimaryKey { columns: columns.clone() }
+                        }
+                        crate::ast::TableConstraint::Unique { columns } => {
+                            CreateTableConstraint::Unique { columns: columns.clone() }
+                        }
+                        crate::ast::TableConstraint::ForeignKey { columns, ref_table, ref_columns } => {
+                            CreateTableConstraint::ForeignKey {
+                                columns: columns.clone(),
+                                ref_table: ref_table.clone(),
+                                ref_columns: ref_columns.clone(),
+                            }
+                        }
+                        crate::ast::TableConstraint::Check { expression } => {
+                            CreateTableConstraint::Check {
+                                expression: self.plan_expression(expression)?,
+                            }
+                        }
+                    };
+                    Ok(PlanAlterOperation::AddConstraint(plan_constraint))
+                }
+                crate::ast::AlterTableOperation::DropConstraint { name } => {
+                    Ok(PlanAlterOperation::DropConstraint {
+                        name: name.clone(),
+                    })
+                }
+            }
+        }).collect::<PlannerResult<Vec<_>>>()?;
+
+        Ok(QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: alter.name.clone(),
+                operations,
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -1198,6 +1304,7 @@ impl Planner {
             // DDL operations have minimal cost
             PlanNode::CreateTable(_) => (1.0, 0),
             PlanNode::DropTable(_) => (1.0, 0),
+            PlanNode::AlterTable(_) => (1.0, 0),
             PlanNode::CreateIndex(_) => (1.0, 0),
             PlanNode::DropIndex(_) => (1.0, 0),
 

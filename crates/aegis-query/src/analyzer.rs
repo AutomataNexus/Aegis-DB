@@ -147,6 +147,9 @@ impl Analyzer {
             Statement::DropTable(drop) => {
                 Ok(AnalyzedStatement::DropTable(drop.clone()))
             }
+            Statement::AlterTable(alter) => {
+                Ok(AnalyzedStatement::AlterTable(alter.clone()))
+            }
             Statement::CreateIndex(create) => {
                 self.analyze_create_index(create)?;
                 Ok(AnalyzedStatement::CreateIndex(create.clone()))
@@ -477,6 +480,7 @@ pub enum AnalyzedStatement {
     Delete(DeleteStatement),
     CreateTable(CreateTableStatement),
     DropTable(DropTableStatement),
+    AlterTable(AlterTableStatement),
     CreateIndex(CreateIndexStatement),
     DropIndex(DropIndexStatement),
     Begin,

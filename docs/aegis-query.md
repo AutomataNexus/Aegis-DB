@@ -26,11 +26,12 @@ impl Parser {
 
 **Supported Statements:**
 - SELECT (with JOIN, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT)
-- INSERT (VALUES and SELECT)
+- INSERT (VALUES and SELECT subqueries)
 - UPDATE
 - DELETE
 - CREATE TABLE
 - DROP TABLE
+- ALTER TABLE (ADD/DROP/RENAME COLUMN, ALTER COLUMN, RENAME TABLE)
 - CREATE INDEX
 - DROP INDEX
 - BEGIN, COMMIT, ROLLBACK
@@ -40,11 +41,14 @@ Internal AST representation:
 
 **Statement Types:**
 - `SelectStatement` - SELECT queries
-- `InsertStatement` - INSERT operations
+- `InsertStatement` - INSERT operations (VALUES and SELECT subqueries)
 - `UpdateStatement` - UPDATE operations
 - `DeleteStatement` - DELETE operations
-- `CreateTableStatement` - DDL for tables
-- `CreateIndexStatement` - DDL for indexes
+- `CreateTableStatement` - DDL for creating tables
+- `DropTableStatement` - DDL for dropping tables
+- `AlterTableStatement` - DDL for modifying tables
+- `CreateIndexStatement` - DDL for creating indexes
+- `DropIndexStatement` - DDL for dropping indexes
 
 **Expression Types:**
 - Literals (Null, Boolean, Integer, Float, String)
@@ -89,6 +93,14 @@ Cost-based query planner:
 - `AggregateNode` - Aggregation
 - `SortNode` - Ordering
 - `LimitNode` - Row limiting
+- `CreateTableNode` - CREATE TABLE
+- `DropTableNode` - DROP TABLE
+- `AlterTableNode` - ALTER TABLE
+- `CreateIndexNode` - CREATE INDEX
+- `DropIndexNode` - DROP INDEX
+- `InsertNode` - INSERT (with InsertPlanSource for VALUES/SELECT)
+- `UpdateNode` - UPDATE
+- `DeleteNode` - DELETE
 
 **Join Strategies:**
 - NestedLoop
@@ -146,4 +158,4 @@ let result = executor.execute(&plan)?;
 
 ## Tests
 
-17 tests covering parsing, analysis, planning, and execution.
+27 tests covering parsing, analysis, planning, and execution.
