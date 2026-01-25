@@ -1455,3 +1455,19 @@ pub async fn insert_document(collection: &str, document: serde_json::Value) -> R
 
     response.json().await.map_err(|e| e.to_string())
 }
+
+/// Delete a document from a collection.
+pub async fn delete_document(collection: &str, doc_id: &str) -> Result<(), String> {
+    let url = format!("{}/api/v1/documents/collections/{}/documents/{}", API_BASE_URL, collection, doc_id);
+
+    let response = Request::delete(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Server returned status {}", response.status()));
+    }
+
+    Ok(())
+}
