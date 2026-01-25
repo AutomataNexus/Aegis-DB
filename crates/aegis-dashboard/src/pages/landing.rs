@@ -19,19 +19,7 @@ pub fn Landing() -> impl IntoView {
             <header class="landing-header">
                 <nav class="landing-nav">
                     <div class="logo-container">
-                        <svg class="landing-logo" viewBox="0 0 100 100" width="40" height="40">
-                            <defs>
-                                <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" style="stop-color:#14b8a6"/>
-                                    <stop offset="100%" style="stop-color:#0d9488"/>
-                                </linearGradient>
-                            </defs>
-                            <rect width="100" height="100" rx="20" fill="url(#grad)"/>
-                            <path d="M30 35 L50 25 L70 35 L70 65 L50 75 L30 65 Z" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round"/>
-                            <path d="M30 45 L50 35 L70 45" fill="none" stroke="white" stroke-width="3"/>
-                            <path d="M30 55 L50 45 L70 55" fill="none" stroke="white" stroke-width="3"/>
-                            <circle cx="50" cy="50" r="6" fill="white"/>
-                        </svg>
+                        <img src="AegisDB-logo.png" alt="Aegis DB Logo" class="landing-logo" width="72" height="72"/>
                         <span class="logo-text">"Aegis DB"</span>
                     </div>
                     <div class="nav-buttons">
@@ -153,17 +141,7 @@ pub fn Landing() -> impl IntoView {
             <footer class="landing-footer">
                 <div class="footer-content">
                     <div class="footer-brand">
-                        <svg width="28" height="28" viewBox="0 0 100 100">
-                            <defs>
-                                <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" style="stop-color:#14b8a6"/>
-                                    <stop offset="100%" style="stop-color:#0d9488"/>
-                                </linearGradient>
-                            </defs>
-                            <rect width="100" height="100" rx="20" fill="url(#grad2)"/>
-                            <path d="M30 35 L50 25 L70 35 L70 65 L50 75 L30 65 Z" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round"/>
-                            <circle cx="50" cy="50" r="6" fill="white"/>
-                        </svg>
+                        <img src="AegisDB-logo.png" alt="Aegis DB Logo" width="32" height="32"/>
                         <span>"Aegis DB"</span>
                     </div>
                     <div class="footer-links">

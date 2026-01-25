@@ -128,19 +128,7 @@ pub fn Login() -> impl IntoView {
                 // Logo Section
                 <div class="logo-section">
                     <div class="logo">
-                        <svg viewBox="0 0 100 100" width="64" height="64">
-                            <defs>
-                                <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" style="stop-color:#14b8a6"/>
-                                    <stop offset="100%" style="stop-color:#0d9488"/>
-                                </linearGradient>
-                            </defs>
-                            <rect width="100" height="100" rx="20" fill="url(#logoGrad)"/>
-                            <path d="M30 35 L50 25 L70 35 L70 65 L50 75 L30 65 Z" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round"/>
-                            <path d="M30 45 L50 35 L70 45" fill="none" stroke="white" stroke-width="3"/>
-                            <path d="M30 55 L50 45 L70 55" fill="none" stroke="white" stroke-width="3"/>
-                            <circle cx="50" cy="50" r="6" fill="white"/>
-                        </svg>
+                        <img src="AegisDB-logo.png" alt="Aegis DB Logo" width="120" height="120"/>
                     </div>
                     <h1 class="welcome-text">"Aegis DB"</h1>
                     <div class="design-line"></div>
@@ -273,8 +261,8 @@ pub fn Login() -> impl IntoView {
 
                             <div class="demo-hint">
                                 <strong>"Demo credentials:"</strong><br/>
-                                "admin / admin (with MFA)"<br/>
-                                "demo / demo (no MFA)"
+                                "DevOps / Invertedskynet2$ (admin)"<br/>
+                                "demo / demo (viewer)"
                             </div>
                         </Show>
 

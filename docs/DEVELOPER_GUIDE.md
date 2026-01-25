@@ -1613,10 +1613,20 @@ impl WAL {
 Adding new SQL syntax:
 
 ```rust
-// Extend AST
+// Current Statement types in AST
 pub enum Statement {
     Select(SelectStatement),
     Insert(InsertStatement),
+    Update(UpdateStatement),
+    Delete(DeleteStatement),
+    CreateTable(CreateTableStatement),
+    DropTable(DropTableStatement),
+    AlterTable(AlterTableStatement),  // ADD/DROP/RENAME COLUMN, etc.
+    CreateIndex(CreateIndexStatement),
+    DropIndex(DropIndexStatement),
+    Begin,
+    Commit,
+    Rollback,
     // Add new statement type
     CreateStream(CreateStreamStatement),
 }

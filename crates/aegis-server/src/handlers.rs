@@ -12,7 +12,7 @@ use crate::admin::{
     AlertInfo, AlertSeverity, ClusterInfo, DashboardSummary, NodeInfo, QueryStats, StorageInfo,
 };
 use crate::auth::{LoginRequest, MfaVerifyRequest, UserInfo};
-use crate::state::{AppState, KvEntry, QueryError, QueryResult};
+use crate::state::{AppState, KvEntry, QueryError, QueryResult, GraphNode, GraphEdge};
 use aegis_document::{Document, DocumentId, Query as DocQuery, QueryResult as DocQueryResult};
 use aegis_streaming::{ChannelId, Event, EventType as StreamEventType, event::EventData};
 use aegis_timeseries::{DataPoint, Metric, MetricType, Tags, TimeSeriesQuery};
@@ -225,6 +225,141 @@ pub async fn get_nodes(State(state): State<AppState>) -> Json<Vec<NodeInfo>> {
     Json(state.admin.get_nodes())
 }
 
+// =============================================================================
+// Cluster Peer Management
+// =============================================================================
+
+/// Request to join a cluster.
+#[derive(Debug, Deserialize)]
+pub struct JoinClusterRequest {
+    pub node_id: String,
+    pub node_name: Option<String>,
+    pub address: String,
+}
+
+/// Response from joining a cluster.
+#[derive(Debug, Serialize)]
+pub struct JoinClusterResponse {
+    pub success: bool,
+    pub message: String,
+    pub peers: Vec<PeerInfo>,
+}
+
+/// Peer info for cluster responses.
+#[derive(Debug, Serialize)]
+pub struct PeerInfo {
+    pub id: String,
+    pub name: Option<String>,
+    pub address: String,
+}
+
+/// Get this node's info for peer discovery.
+pub async fn get_node_info(State(state): State<AppState>) -> Json<crate::admin::PeerNode> {
+    Json(state.admin.get_self_info())
+}
+
+/// Join/register with this node (called by other nodes).
+pub async fn cluster_join(
+    State(state): State<AppState>,
+    Json(req): Json<JoinClusterRequest>,
+) -> Json<JoinClusterResponse> {
+    use crate::admin::{PeerNode, NodeStatus, NodeRole};
+
+    // Register the requesting node as a peer
+    let peer = PeerNode {
+        id: req.node_id.clone(),
+        name: req.node_name.clone(),
+        address: req.address.clone(),
+        status: NodeStatus::Online,
+        role: NodeRole::Follower,
+        last_seen: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        uptime_seconds: 0,
+        metrics: None,
+    };
+
+    state.admin.register_peer(peer);
+    state.admin.add_peer_address(req.address.clone());
+
+    tracing::info!("Node joined cluster: {} ({}) at {}", req.node_id, req.node_name.as_deref().unwrap_or("unnamed"), req.address);
+
+    // Return list of all known peers (including self)
+    let self_info = state.admin.get_self_info();
+    let mut peers = vec![PeerInfo {
+        id: self_info.id,
+        name: self_info.name,
+        address: self_info.address,
+    }];
+
+    for peer in state.admin.get_peers() {
+        if peer.id != req.node_id {
+            peers.push(PeerInfo {
+                id: peer.id,
+                name: peer.name,
+                address: peer.address,
+            });
+        }
+    }
+
+    Json(JoinClusterResponse {
+        success: true,
+        message: "Successfully joined cluster".to_string(),
+        peers,
+    })
+}
+
+/// Heartbeat from a peer node.
+#[derive(Debug, Deserialize)]
+pub struct HeartbeatRequest {
+    pub node_id: String,
+    pub node_name: Option<String>,
+    pub address: String,
+    pub uptime_seconds: u64,
+    pub metrics: Option<crate::admin::NodeMetrics>,
+}
+
+/// Receive heartbeat from a peer.
+pub async fn cluster_heartbeat(
+    State(state): State<AppState>,
+    Json(req): Json<HeartbeatRequest>,
+) -> Json<serde_json::Value> {
+    use crate::admin::{PeerNode, NodeStatus, NodeRole};
+
+    // Update peer info
+    let peer = PeerNode {
+        id: req.node_id.clone(),
+        name: req.node_name,
+        address: req.address,
+        status: NodeStatus::Online,
+        role: NodeRole::Follower,
+        last_seen: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        uptime_seconds: req.uptime_seconds,
+        metrics: req.metrics,
+    };
+
+    state.admin.register_peer(peer);
+
+    Json(serde_json::json!({
+        "success": true,
+        "timestamp": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    }))
+}
+
+/// Get list of known peers.
+pub async fn get_peers(State(state): State<AppState>) -> Json<Vec<crate::admin::PeerNode>> {
+    Json(state.admin.get_peers())
+}
+
 /// Get storage information.
 pub async fn get_storage_info(State(state): State<AppState>) -> Json<StorageInfo> {
     Json(state.admin.get_storage_info())
@@ -236,8 +371,43 @@ pub async fn get_query_stats(State(state): State<AppState>) -> Json<QueryStats> 
 }
 
 /// Get database statistics (key counts, document counts, etc.)
-pub async fn get_database_stats(State(state): State<AppState>) -> Json<crate::state::DatabaseStats> {
-    Json(state.get_database_stats())
+/// Use ?local=true to get only local stats (used by peer aggregation to avoid loops)
+pub async fn get_database_stats(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<crate::state::DatabaseStats> {
+    // Start with local stats
+    let mut stats = state.get_database_stats();
+
+    // If local=true, return only local stats (prevents infinite recursion when peers call each other)
+    if params.get("local").map(|v| v == "true").unwrap_or(false) {
+        return Json(stats);
+    }
+
+    // Aggregate stats from all cluster peers (call with ?local=true to prevent loops)
+    let peers = state.admin.get_peers();
+    let client = reqwest::Client::new();
+
+    for peer in peers {
+        let url = format!("http://{}/api/v1/admin/database?local=true", peer.address);
+        if let Ok(response) = client.get(&url)
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+        {
+            if let Ok(peer_stats) = response.json::<crate::state::DatabaseStats>().await {
+                stats.total_keys += peer_stats.total_keys;
+                stats.total_documents += peer_stats.total_documents;
+                stats.collection_count += peer_stats.collection_count;
+                stats.documents_inserted += peer_stats.documents_inserted;
+                stats.documents_updated += peer_stats.documents_updated;
+                stats.documents_deleted += peer_stats.documents_deleted;
+                stats.queries_executed += peer_stats.queries_executed;
+            }
+        }
+    }
+
+    Json(stats)
 }
 
 /// Alert response structure.
@@ -1520,24 +1690,7 @@ pub async fn get_channel_history(
 // Graph Database Endpoints
 // =============================================================================
 
-/// Graph node.
-#[derive(Debug, Serialize)]
-pub struct GraphNode {
-    pub id: String,
-    pub label: String,
-    pub properties: serde_json::Value,
-}
-
-/// Graph edge.
-#[derive(Debug, Serialize)]
-pub struct GraphEdge {
-    pub id: String,
-    pub source: String,
-    pub target: String,
-    pub relationship: String,
-}
-
-/// Graph data response.
+/// Graph data response (uses GraphNode and GraphEdge from state module).
 #[derive(Debug, Serialize)]
 pub struct GraphDataResponse {
     pub nodes: Vec<GraphNode>,
@@ -1548,21 +1701,9 @@ pub struct GraphDataResponse {
 pub async fn get_graph_data(State(state): State<AppState>) -> Json<GraphDataResponse> {
     state.activity.log(ActivityType::Query, "Query graph data");
 
-    Json(GraphDataResponse {
-        nodes: vec![
-            GraphNode { id: "person:1".to_string(), label: "Person".to_string(), properties: serde_json::json!({"name": "Alice"}) },
-            GraphNode { id: "person:2".to_string(), label: "Person".to_string(), properties: serde_json::json!({"name": "Bob"}) },
-            GraphNode { id: "person:3".to_string(), label: "Person".to_string(), properties: serde_json::json!({"name": "Charlie"}) },
-            GraphNode { id: "company:1".to_string(), label: "Company".to_string(), properties: serde_json::json!({"name": "TechCorp"}) },
-            GraphNode { id: "project:1".to_string(), label: "Project".to_string(), properties: serde_json::json!({"name": "Project Alpha"}) },
-        ],
-        edges: vec![
-            GraphEdge { id: "e1".to_string(), source: "person:1".to_string(), target: "company:1".to_string(), relationship: "WORKS_AT".to_string() },
-            GraphEdge { id: "e2".to_string(), source: "person:2".to_string(), target: "company:1".to_string(), relationship: "WORKS_AT".to_string() },
-            GraphEdge { id: "e3".to_string(), source: "person:1".to_string(), target: "person:2".to_string(), relationship: "KNOWS".to_string() },
-            GraphEdge { id: "e4".to_string(), source: "person:1".to_string(), target: "project:1".to_string(), relationship: "WORKS_ON".to_string() },
-        ],
-    })
+    let (nodes, edges) = state.graph_store.get_all();
+
+    Json(GraphDataResponse { nodes, edges })
 }
 
 // =============================================================================
@@ -1691,29 +1832,25 @@ pub struct NodeLogsResponse {
 
 /// Get logs for a specific node.
 pub async fn get_node_logs(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(node_id): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<NodeLogsResponse> {
     let limit: usize = params.get("limit").and_then(|l| l.parse().ok()).unwrap_or(100);
 
-    let logs = vec![
+    // Get real activity logs from the server
+    let activities = state.activity.get_recent(limit);
+    let logs: Vec<NodeLogEntry> = activities.iter().map(|a| {
         NodeLogEntry {
-            timestamp: "2024-01-15T12:00:00Z".to_string(),
-            level: "INFO".to_string(),
-            message: format!("Node {} started successfully", node_id),
-        },
-        NodeLogEntry {
-            timestamp: "2024-01-15T12:00:05Z".to_string(),
-            level: "INFO".to_string(),
-            message: "Connected to cluster coordinator".to_string(),
-        },
-        NodeLogEntry {
-            timestamp: "2024-01-15T12:00:10Z".to_string(),
-            level: "INFO".to_string(),
-            message: "Replica synchronization complete".to_string(),
-        },
-    ];
+            timestamp: a.timestamp.clone(),
+            level: match a.activity_type {
+                ActivityType::Auth | ActivityType::System => "INFO".to_string(),
+                ActivityType::Write | ActivityType::Delete => "WARN".to_string(),
+                ActivityType::Query | ActivityType::Config | ActivityType::Node => "INFO".to_string(),
+            },
+            message: a.description.clone(),
+        }
+    }).collect();
 
     let total = logs.len();
     Json(NodeLogsResponse {
@@ -1721,4 +1858,415 @@ pub async fn get_node_logs(
         logs: logs.into_iter().take(limit).collect(),
         total,
     })
+}
+
+// =============================================================================
+// Settings Endpoints
+// =============================================================================
+
+/// Server settings structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerSettings {
+    pub replication_factor: u8,
+    pub auto_backups_enabled: bool,
+    pub backup_schedule: String,
+    pub retention_days: u32,
+    pub tls_enabled: bool,
+    pub auth_required: bool,
+    pub session_timeout_minutes: u32,
+    pub require_2fa: bool,
+    pub audit_logging_enabled: bool,
+}
+
+impl Default for ServerSettings {
+    fn default() -> Self {
+        Self {
+            replication_factor: 3,
+            auto_backups_enabled: true,
+            backup_schedule: "0 2 * * *".to_string(),
+            retention_days: 30,
+            tls_enabled: false,
+            auth_required: true,
+            session_timeout_minutes: 60,
+            require_2fa: false,
+            audit_logging_enabled: true,
+        }
+    }
+}
+
+/// Get server settings.
+pub async fn get_settings(State(state): State<AppState>) -> Json<ServerSettings> {
+    state.activity.log(ActivityType::Config, "Retrieved server settings");
+    let settings = state.settings.read().await;
+    Json(settings.clone())
+}
+
+/// Update server settings.
+pub async fn update_settings(
+    State(state): State<AppState>,
+    Json(new_settings): Json<ServerSettings>,
+) -> impl IntoResponse {
+    state.activity.log_config("Updated server settings", None);
+    let mut settings = state.settings.write().await;
+    *settings = new_settings.clone();
+    (StatusCode::OK, Json(serde_json::json!({"success": true, "settings": new_settings})))
+}
+
+// =============================================================================
+// User Management Endpoints
+// =============================================================================
+
+/// User info response for list users.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserListItem {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub role: String,
+    pub mfa_enabled: bool,
+    pub enabled: bool,
+    pub created_at: String,
+    pub last_login: Option<String>,
+}
+
+/// List all users.
+pub async fn list_users(State(state): State<AppState>) -> Json<Vec<UserListItem>> {
+    state.activity.log(ActivityType::Query, "Listed users");
+    let users = state.auth.list_users();
+    let user_list: Vec<UserListItem> = users.iter().map(|u| {
+        UserListItem {
+            id: u.id.clone(),
+            username: u.username.clone(),
+            email: u.email.clone(),
+            role: format!("{:?}", u.role).to_lowercase(),
+            mfa_enabled: u.mfa_enabled,
+            enabled: true,
+            created_at: u.created_at.clone(),
+            last_login: None,
+        }
+    }).collect();
+    Json(user_list)
+}
+
+/// Create user request.
+#[derive(Debug, Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub email: String,
+    pub password: String,
+    pub role: String,
+}
+
+/// Create a new user.
+pub async fn create_user(
+    State(state): State<AppState>,
+    Json(request): Json<CreateUserRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Create user: {}", request.username), None);
+
+    match state.auth.create_user(&request.username, &request.email, &request.password, &request.role) {
+        Ok(user) => (StatusCode::CREATED, Json(serde_json::json!({"success": true, "user": user}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e}))),
+    }
+}
+
+/// Update user request.
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserRequest {
+    pub email: Option<String>,
+    pub role: Option<String>,
+    pub enabled: Option<bool>,
+    pub password: Option<String>,
+}
+
+/// Update a user.
+pub async fn update_user(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+    Json(request): Json<UpdateUserRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Update user: {}", username), None);
+
+    match state.auth.update_user(&username, request.email, request.role, request.password) {
+        Ok(user) => (StatusCode::OK, Json(serde_json::json!({"success": true, "user": user}))),
+        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": e}))),
+    }
+}
+
+/// Delete a user.
+pub async fn delete_user(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    state.activity.log(ActivityType::Delete, &format!("Delete user: {}", username));
+
+    match state.auth.delete_user(&username) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": e}))),
+    }
+}
+
+// =============================================================================
+// Role Management Endpoints
+// =============================================================================
+
+/// Role info for API responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleInfo {
+    pub name: String,
+    pub description: String,
+    pub permissions: Vec<String>,
+    pub created_at: String,
+    pub is_builtin: bool,
+}
+
+/// List all roles.
+pub async fn list_roles(State(state): State<AppState>) -> Json<Vec<RoleInfo>> {
+    state.activity.log(ActivityType::Query, "Listed roles");
+    let roles = state.rbac.list_roles();
+    let role_list: Vec<RoleInfo> = roles.iter().map(|r| {
+        RoleInfo {
+            name: r.name.clone(),
+            description: r.description.clone(),
+            permissions: r.permissions.iter().map(|p| format!("{:?}", p).to_lowercase()).collect(),
+            created_at: format_timestamp_ms(r.created_at),
+            is_builtin: r.name == "admin" || r.name == "operator" || r.name == "viewer" || r.name == "analyst",
+        }
+    }).collect();
+    Json(role_list)
+}
+
+/// Create role request.
+#[derive(Debug, Deserialize)]
+pub struct CreateRoleRequest {
+    pub name: String,
+    pub description: String,
+    pub permissions: Vec<String>,
+}
+
+/// Create a new role.
+pub async fn create_role(
+    State(state): State<AppState>,
+    Json(request): Json<CreateRoleRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Create role: {}", request.name), None);
+
+    // Parse permission strings into Permission enum
+    let permissions = parse_permissions(&request.permissions);
+
+    match state.rbac.create_role(&request.name, &request.description, permissions, "admin") {
+        Ok(()) => {
+            let role = state.rbac.get_role(&request.name);
+            (StatusCode::CREATED, Json(serde_json::json!({"success": true, "role": request.name, "permissions": role.map(|r| r.permissions.len()).unwrap_or(0)})))
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e}))),
+    }
+}
+
+/// Delete a role.
+pub async fn delete_role(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    state.activity.log(ActivityType::Delete, &format!("Delete role: {}", name));
+
+    match state.rbac.delete_role(&name) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e}))),
+    }
+}
+
+/// Parse permission strings to Permission enums.
+fn parse_permissions(perms: &[String]) -> Vec<crate::auth::Permission> {
+    use crate::auth::Permission;
+    perms.iter().filter_map(|p| {
+        match p.to_lowercase().as_str() {
+            "database_create" | "databasecreate" => Some(Permission::DatabaseCreate),
+            "database_drop" | "databasedrop" => Some(Permission::DatabaseDrop),
+            "database_list" | "databaselist" => Some(Permission::DatabaseList),
+            "table_create" | "tablecreate" => Some(Permission::TableCreate),
+            "table_drop" | "tabledrop" => Some(Permission::TableDrop),
+            "table_alter" | "tablealter" => Some(Permission::TableAlter),
+            "table_list" | "tablelist" => Some(Permission::TableList),
+            "data_select" | "dataselect" | "data:read" => Some(Permission::DataSelect),
+            "data_insert" | "datainsert" | "data:write" => Some(Permission::DataInsert),
+            "data_update" | "dataupdate" => Some(Permission::DataUpdate),
+            "data_delete" | "datadelete" => Some(Permission::DataDelete),
+            "user_create" | "usercreate" => Some(Permission::UserCreate),
+            "user_delete" | "userdelete" => Some(Permission::UserDelete),
+            "user_modify" | "usermodify" => Some(Permission::UserModify),
+            "role_create" | "rolecreate" => Some(Permission::RoleCreate),
+            "role_delete" | "roledelete" => Some(Permission::RoleDelete),
+            "role_assign" | "roleassign" => Some(Permission::RoleAssign),
+            "config_view" | "configview" => Some(Permission::ConfigView),
+            "config_modify" | "configmodify" => Some(Permission::ConfigModify),
+            "metrics_view" | "metricsview" => Some(Permission::MetricsView),
+            "logs_view" | "logsview" => Some(Permission::LogsView),
+            "backup_create" | "backupcreate" => Some(Permission::BackupCreate),
+            "backup_restore" | "backuprestore" => Some(Permission::BackupRestore),
+            "node_add" | "nodeadd" => Some(Permission::NodeAdd),
+            "node_remove" | "noderemove" => Some(Permission::NodeRemove),
+            "cluster_manage" | "clustermanage" => Some(Permission::ClusterManage),
+            _ => None,
+        }
+    }).collect()
+}
+
+/// Format timestamp from milliseconds to ISO string.
+fn format_timestamp_ms(timestamp_ms: u64) -> String {
+    let secs = timestamp_ms / 1000;
+    let datetime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+    let duration = datetime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let total_secs = duration.as_secs();
+
+    let days_since_epoch = total_secs / 86400;
+    let secs_today = total_secs % 86400;
+    let hours = secs_today / 3600;
+    let minutes = (secs_today % 3600) / 60;
+    let seconds = secs_today % 60;
+
+    let mut year = 1970u64;
+    let mut remaining_days = days_since_epoch;
+    loop {
+        let days_in_year = if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) { 366 } else { 365 };
+        if remaining_days < days_in_year { break; }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    let days_in_months: [u64; 12] = if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1u64;
+    for &days in &days_in_months {
+        if remaining_days < days { break; }
+        remaining_days -= days;
+        month += 1;
+    }
+    let day = remaining_days + 1;
+
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hours, minutes, seconds)
+}
+
+// =============================================================================
+// Metrics Timeseries Endpoint
+// =============================================================================
+
+/// Metrics timeseries request.
+#[derive(Debug, Deserialize)]
+pub struct MetricsTimeseriesRequest {
+    pub time_range: String,
+}
+
+/// Metrics data point.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsDataPoint {
+    pub timestamp: i64,
+    pub cpu_percent: f64,
+    pub memory_percent: f64,
+    pub queries_per_second: f64,
+    pub latency_ms: f64,
+    pub connections: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+}
+
+/// Metrics timeseries response.
+#[derive(Debug, Serialize)]
+pub struct MetricsTimeseriesResponse {
+    pub time_range: String,
+    pub data_points: Vec<MetricsDataPoint>,
+}
+
+/// Get metrics timeseries data.
+pub async fn get_metrics_timeseries(
+    State(state): State<AppState>,
+    Json(request): Json<MetricsTimeseriesRequest>,
+) -> Json<MetricsTimeseriesResponse> {
+    state.activity.log(ActivityType::Query, &format!("Query metrics timeseries: {}", request.time_range));
+
+    // Get time range in seconds
+    let range_secs: i64 = match request.time_range.as_str() {
+        "1h" => 3600,
+        "6h" => 6 * 3600,
+        "24h" => 24 * 3600,
+        "7d" => 7 * 24 * 3600,
+        "30d" => 30 * 24 * 3600,
+        _ => 3600,
+    };
+
+    // Get metrics history from state
+    let history = state.metrics_history.read().await;
+    let now = Utc::now().timestamp();
+    let start_time = now - range_secs;
+
+    // Filter to requested time range
+    let data_points: Vec<MetricsDataPoint> = history.iter()
+        .filter(|p| p.timestamp >= start_time)
+        .cloned()
+        .collect();
+
+    Json(MetricsTimeseriesResponse {
+        time_range: request.time_range,
+        data_points,
+    })
+}
+
+// =============================================================================
+// Graph Database Endpoints (Real Implementation)
+// =============================================================================
+
+/// Create a graph node.
+#[derive(Debug, Deserialize)]
+pub struct CreateNodeRequest {
+    pub label: String,
+    pub properties: serde_json::Value,
+}
+
+/// Create a graph edge.
+#[derive(Debug, Deserialize)]
+pub struct CreateEdgeRequest {
+    pub source: String,
+    pub target: String,
+    pub relationship: String,
+}
+
+/// Create a new graph node.
+pub async fn create_graph_node(
+    State(state): State<AppState>,
+    Json(request): Json<CreateNodeRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Create graph node: {}", request.label), None);
+
+    let node = state.graph_store.create_node(&request.label, request.properties);
+    (StatusCode::CREATED, Json(serde_json::json!({"success": true, "node": node})))
+}
+
+/// Create a new graph edge.
+pub async fn create_graph_edge(
+    State(state): State<AppState>,
+    Json(request): Json<CreateEdgeRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(&format!("Create graph edge: {} -> {}", request.source, request.target), None);
+
+    match state.graph_store.create_edge(&request.source, &request.target, &request.relationship) {
+        Ok(edge) => (StatusCode::CREATED, Json(serde_json::json!({"success": true, "edge": edge}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e}))),
+    }
+}
+
+/// Delete a graph node.
+pub async fn delete_graph_node(
+    State(state): State<AppState>,
+    Path(node_id): Path<String>,
+) -> impl IntoResponse {
+    state.activity.log(ActivityType::Delete, &format!("Delete graph node: {}", node_id));
+
+    match state.graph_store.delete_node(&node_id) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": e}))),
+    }
 }

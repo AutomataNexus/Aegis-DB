@@ -8,8 +8,9 @@
 
 use crate::activity::ActivityLogger;
 use crate::admin::AdminService;
-use crate::auth::AuthService;
+use crate::auth::{AuthService, RbacManager};
 use crate::config::ServerConfig;
+use crate::handlers::{MetricsDataPoint, ServerSettings};
 use aegis_document::{Document, DocumentEngine};
 use aegis_query::{Executor, Parser, Planner};
 use aegis_query::planner::PlannerSchema;
@@ -19,8 +20,10 @@ use aegis_timeseries::TimeSeriesEngine;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use parking_lot::RwLock as SyncRwLock;
+use chrono::Utc;
 
 // =============================================================================
 // Application State
@@ -39,6 +42,10 @@ pub struct AppState {
     pub admin: Arc<AdminService>,
     pub auth: Arc<AuthService>,
     pub activity: Arc<ActivityLogger>,
+    pub settings: Arc<RwLock<ServerSettings>>,
+    pub metrics_history: Arc<RwLock<Vec<MetricsDataPoint>>>,
+    pub graph_store: Arc<GraphStore>,
+    pub rbac: Arc<RbacManager>,
     data_dir: Option<PathBuf>,
 }
 
@@ -103,7 +110,44 @@ impl AppState {
         }
 
         // Log server startup
-        activity.log_system("Aegis DB server started");
+        let node_name_display = config.node_name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default();
+        activity.log_system(&format!("Aegis DB server started - Node: {}{}", config.node_id, node_name_display));
+
+        // Create graph store with initial data
+        let graph_store = Arc::new(GraphStore::new());
+        graph_store.create_node("Person", serde_json::json!({"name": "Alice", "age": 30}));
+        graph_store.create_node("Person", serde_json::json!({"name": "Bob", "age": 25}));
+        graph_store.create_node("Person", serde_json::json!({"name": "Charlie", "age": 35}));
+        graph_store.create_node("Company", serde_json::json!({"name": "TechCorp", "industry": "Technology"}));
+        graph_store.create_node("Project", serde_json::json!({"name": "Project Alpha", "status": "active"}));
+
+        // Create initial edges
+        let nodes = graph_store.list_nodes();
+        if nodes.len() >= 5 {
+            let _ = graph_store.create_edge(&nodes[0].id, &nodes[3].id, "WORKS_AT");
+            let _ = graph_store.create_edge(&nodes[1].id, &nodes[3].id, "WORKS_AT");
+            let _ = graph_store.create_edge(&nodes[0].id, &nodes[1].id, "KNOWS");
+            let _ = graph_store.create_edge(&nodes[0].id, &nodes[4].id, "WORKS_ON");
+            let _ = graph_store.create_edge(&nodes[2].id, &nodes[4].id, "WORKS_ON");
+        }
+
+        // Initialize metrics history with some data points
+        let metrics_history = Arc::new(RwLock::new(Vec::new()));
+
+        // Start metrics collection background task
+        let metrics_history_clone = metrics_history.clone();
+        tokio::spawn(async move {
+            Self::collect_metrics_loop(metrics_history_clone).await;
+        });
+
+        // Create admin service with cluster config
+        let admin = Arc::new(AdminService::with_config(
+            &config.node_id,
+            config.node_name.clone(),
+            &config.address(),
+            &config.cluster_name,
+            config.peers.clone(),
+        ));
 
         Self {
             config: Arc::new(config),
@@ -113,9 +157,13 @@ impl AppState {
             streaming_engine: Arc::new(StreamingEngine::new()),
             kv_store,
             metrics: Arc::new(RwLock::new(Metrics::default())),
-            admin: Arc::new(AdminService::new()),
+            admin,
             auth: Arc::new(AuthService::new()),
             activity,
+            settings: Arc::new(RwLock::new(ServerSettings::default())),
+            metrics_history,
+            graph_store,
+            rbac: Arc::new(RbacManager::new()),
             data_dir,
         }
     }
@@ -166,6 +214,61 @@ impl AppState {
         metrics.total_duration_ms += duration_ms;
         if !success {
             metrics.failed_requests += 1;
+        }
+    }
+
+    /// Background task to collect metrics periodically.
+    async fn collect_metrics_loop(metrics_history: Arc<RwLock<Vec<MetricsDataPoint>>>) {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+
+        loop {
+            interval.tick().await;
+
+            let now = Utc::now().timestamp();
+
+            // Collect system metrics (simulated for now, but uses real time)
+            let point = MetricsDataPoint {
+                timestamp: now,
+                cpu_percent: 15.0 + (now % 30) as f64 + ((now % 7) as f64 * 2.0),
+                memory_percent: 45.0 + ((now / 60) % 20) as f64,
+                queries_per_second: 100.0 + ((now % 50) as f64 * 3.0),
+                latency_ms: 2.5 + ((now % 10) as f64 * 0.3),
+                connections: 25 + ((now / 120) as u64 % 50),
+                bytes_in: 1_000_000 + ((now as u64 % 500_000)),
+                bytes_out: 2_000_000 + ((now as u64 % 1_000_000)),
+            };
+
+            let mut history = metrics_history.write().await;
+
+            // Keep last 30 days of minute-resolution data (43200 points)
+            if history.len() >= 43200 {
+                history.remove(0);
+            }
+            history.push(point);
+        }
+    }
+
+    /// Initialize metrics history with historical data.
+    pub async fn init_metrics_history(&self) {
+        let now = Utc::now().timestamp();
+        let mut history = self.metrics_history.write().await;
+
+        // Generate 24 hours of historical data at 1-minute intervals
+        for i in (0..1440).rev() {
+            let timestamp = now - (i * 60);
+            let hour_factor = ((timestamp / 3600) % 24) as f64;
+
+            let point = MetricsDataPoint {
+                timestamp,
+                cpu_percent: 15.0 + hour_factor * 1.5 + ((timestamp % 30) as f64),
+                memory_percent: 45.0 + ((timestamp / 60) % 20) as f64,
+                queries_per_second: 80.0 + hour_factor * 8.0 + ((timestamp % 50) as f64 * 2.0),
+                latency_ms: 2.0 + ((timestamp % 10) as f64 * 0.2),
+                connections: 20 + (hour_factor as u64 * 3) + ((timestamp / 120) as u64 % 30),
+                bytes_in: 800_000 + (hour_factor as u64 * 50_000) + (timestamp as u64 % 300_000),
+                bytes_out: 1_500_000 + (hour_factor as u64 * 100_000) + (timestamp as u64 % 600_000),
+            };
+            history.push(point);
         }
     }
 
@@ -295,6 +398,146 @@ impl KvStore {
 }
 
 impl Default for KvStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// =============================================================================
+// Graph Store
+// =============================================================================
+
+/// Graph node for visualization.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub label: String,
+    pub properties: serde_json::Value,
+}
+
+/// Graph edge for visualization.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphEdge {
+    pub id: String,
+    pub source: String,
+    pub target: String,
+    pub relationship: String,
+}
+
+/// In-memory graph store.
+pub struct GraphStore {
+    nodes: SyncRwLock<HashMap<String, GraphNode>>,
+    edges: SyncRwLock<HashMap<String, GraphEdge>>,
+    node_counter: AtomicU64,
+    edge_counter: AtomicU64,
+}
+
+impl GraphStore {
+    pub fn new() -> Self {
+        Self {
+            nodes: SyncRwLock::new(HashMap::new()),
+            edges: SyncRwLock::new(HashMap::new()),
+            node_counter: AtomicU64::new(1),
+            edge_counter: AtomicU64::new(1),
+        }
+    }
+
+    /// Create a new node.
+    pub fn create_node(&self, label: &str, properties: serde_json::Value) -> GraphNode {
+        let id = format!("{}:{}", label.to_lowercase(), self.node_counter.fetch_add(1, Ordering::SeqCst));
+        let node = GraphNode {
+            id: id.clone(),
+            label: label.to_string(),
+            properties,
+        };
+        self.nodes.write().insert(id, node.clone());
+        node
+    }
+
+    /// Create a new edge between nodes.
+    pub fn create_edge(&self, source: &str, target: &str, relationship: &str) -> Result<GraphEdge, String> {
+        let nodes = self.nodes.read();
+        if !nodes.contains_key(source) {
+            return Err(format!("Source node '{}' not found", source));
+        }
+        if !nodes.contains_key(target) {
+            return Err(format!("Target node '{}' not found", target));
+        }
+        drop(nodes);
+
+        let id = format!("e{}", self.edge_counter.fetch_add(1, Ordering::SeqCst));
+        let edge = GraphEdge {
+            id: id.clone(),
+            source: source.to_string(),
+            target: target.to_string(),
+            relationship: relationship.to_string(),
+        };
+        self.edges.write().insert(id, edge.clone());
+        Ok(edge)
+    }
+
+    /// Get a node by ID.
+    pub fn get_node(&self, id: &str) -> Option<GraphNode> {
+        self.nodes.read().get(id).cloned()
+    }
+
+    /// Delete a node and its edges.
+    pub fn delete_node(&self, id: &str) -> Result<(), String> {
+        let mut nodes = self.nodes.write();
+        if nodes.remove(id).is_none() {
+            return Err(format!("Node '{}' not found", id));
+        }
+        drop(nodes);
+
+        // Remove edges connected to this node
+        let mut edges = self.edges.write();
+        edges.retain(|_, e| e.source != id && e.target != id);
+        Ok(())
+    }
+
+    /// Delete an edge.
+    pub fn delete_edge(&self, id: &str) -> Result<(), String> {
+        if self.edges.write().remove(id).is_none() {
+            return Err(format!("Edge '{}' not found", id));
+        }
+        Ok(())
+    }
+
+    /// List all nodes.
+    pub fn list_nodes(&self) -> Vec<GraphNode> {
+        self.nodes.read().values().cloned().collect()
+    }
+
+    /// List all edges.
+    pub fn list_edges(&self) -> Vec<GraphEdge> {
+        self.edges.read().values().cloned().collect()
+    }
+
+    /// Get all nodes and edges.
+    pub fn get_all(&self) -> (Vec<GraphNode>, Vec<GraphEdge>) {
+        (self.list_nodes(), self.list_edges())
+    }
+
+    /// Search nodes by label.
+    pub fn find_by_label(&self, label: &str) -> Vec<GraphNode> {
+        self.nodes.read()
+            .values()
+            .filter(|n| n.label.to_lowercase() == label.to_lowercase())
+            .cloned()
+            .collect()
+    }
+
+    /// Get edges for a node.
+    pub fn get_edges_for_node(&self, node_id: &str) -> Vec<GraphEdge> {
+        self.edges.read()
+            .values()
+            .filter(|e| e.source == node_id || e.target == node_id)
+            .cloned()
+            .collect()
+    }
+}
+
+impl Default for GraphStore {
     fn default() -> Self {
         Self::new()
     }

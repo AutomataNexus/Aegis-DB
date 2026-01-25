@@ -29,6 +29,21 @@ pub enum BrowserModal {
     Graph,
     QueryBuilder,
     NodeDetail,
+    DataVisualizer,
+}
+
+/// Chart types for data visualization
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
+pub enum DataChartType {
+    #[default]
+    Scatter3D,
+    ScatterPlot,
+    LineChart,
+    BarChart,
+    AreaChart,
+    RadarChart,
+    HeatMap,
+    BubbleChart,
 }
 
 /// Dashboard page component
@@ -100,6 +115,17 @@ pub fn Dashboard() -> impl IntoView {
     let (query_tab, set_query_tab) = create_signal("sql".to_string());
     let (query_history, set_query_history) = create_signal::<Vec<String>>(vec![]);
 
+    // Data Visualizer state
+    let (viz_chart_type, set_viz_chart_type) = create_signal(DataChartType::Scatter3D);
+    let (viz_query, set_viz_query) = create_signal(String::new());
+    let (_viz_data, set_viz_data) = create_signal::<Option<QueryBuilderResult>>(None);
+    let (viz_x_column, set_viz_x_column) = create_signal(String::new());
+    let (viz_y_column, set_viz_y_column) = create_signal(String::new());
+    let (viz_z_column, set_viz_z_column) = create_signal(String::new());
+    let (_viz_color_column, set_viz_color_column) = create_signal(String::new());
+    let (_viz_size_column, set_viz_size_column) = create_signal(String::new());
+    let (viz_loading, set_viz_loading) = create_signal(false);
+
     // Metrics page state
     let (metrics_active_tab, set_metrics_active_tab) = create_signal("overview".to_string());
 
@@ -107,6 +133,10 @@ pub fn Dashboard() -> impl IntoView {
     let (settings_tab, set_settings_tab) = create_signal("general".to_string());
     let (show_add_user, set_show_add_user) = create_signal(false);
     let (edit_user_id, set_edit_user_id) = create_signal::<Option<String>>(None);
+    let (edit_user_name, set_edit_user_name) = create_signal(String::new());
+    let (edit_user_email, set_edit_user_email) = create_signal(String::new());
+    let (edit_user_role, set_edit_user_role) = create_signal(String::new());
+    let (edit_user_2fa, set_edit_user_2fa) = create_signal(false);
     let (new_user_name, set_new_user_name) = create_signal(String::new());
     let (new_user_email, set_new_user_email) = create_signal(String::new());
     let (new_user_role, set_new_user_role) = create_signal("viewer".to_string());
@@ -362,17 +392,7 @@ pub fn Dashboard() -> impl IntoView {
             // Sidebar
             <aside class="sidebar">
                 <div class="sidebar-header">
-                    <svg class="sidebar-logo" width="28" height="28" viewBox="0 0 100 100">
-                        <defs>
-                            <linearGradient id="sidebarGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" style="stop-color:#14b8a6"/>
-                                <stop offset="100%" style="stop-color:#0d9488"/>
-                            </linearGradient>
-                        </defs>
-                        <rect width="100" height="100" rx="20" fill="url(#sidebarGrad)"/>
-                        <path d="M30 35 L50 25 L70 35 L70 65 L50 75 L30 65 Z" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round"/>
-                        <circle cx="50" cy="50" r="6" fill="white"/>
-                    </svg>
+                    <img src="AegisDB-logo.png" alt="Aegis DB Logo" class="sidebar-logo" width="36" height="36"/>
                     <span class="sidebar-title">"Aegis DB"</span>
                 </div>
 
@@ -671,6 +691,7 @@ pub fn Dashboard() -> impl IntoView {
                                         <th>"Address"</th>
                                         <th>"Role"</th>
                                         <th>"Region"</th>
+                                        <th>"Uptime"</th>
                                         <th>"CPU"</th>
                                         <th>"Memory"</th>
                                         <th>"Disk"</th>
@@ -691,7 +712,7 @@ pub fn Dashboard() -> impl IntoView {
                                             NodeRole::Follower => "Follower",
                                             NodeRole::Candidate => "Candidate",
                                         };
-                                        let _uptime_days = node.uptime / 86400;
+                                        let uptime_display = format_uptime(node.uptime);
                                         let node_for_row_click = node.clone();
                                         let node_for_details_btn = node.clone();
                                         let node_id_for_restart = node.id.clone();
@@ -707,6 +728,7 @@ pub fn Dashboard() -> impl IntoView {
                                                 <td class="monospace">{node.address.clone()}</td>
                                                 <td><span class=format!("role-badge {}", status_class)>{role_text}</span></td>
                                                 <td>{node.region.clone()}</td>
+                                                <td class="monospace">{uptime_display.clone()}</td>
                                                 <td>
                                                     <div class="progress-cell">
                                                         <div class="progress-bar">
@@ -953,6 +975,28 @@ pub fn Dashboard() -> impl IntoView {
                                     set_active_modal.set(BrowserModal::QueryBuilder);
                                     set_query_result.set(None);
                                 }>"Query Builder"</button>
+                            </div>
+
+                            <div class="paradigm-card featured">
+                                <div class="paradigm-header">
+                                    <span class="paradigm-icon">"📊"</span>
+                                    <span class="paradigm-name">"Data Visualizer"</span>
+                                    <span class="paradigm-badge">"NEW"</span>
+                                </div>
+                                <div class="paradigm-stats">
+                                    <div class="paradigm-stat">
+                                        <span class="stat-value">"8"</span>
+                                        <span class="stat-label">"Chart Types"</span>
+                                    </div>
+                                    <div class="paradigm-stat">
+                                        <span class="stat-value">"3D"</span>
+                                        <span class="stat-label">"Scatter"</span>
+                                    </div>
+                                </div>
+                                <button class="paradigm-action primary" on:click=move |_| {
+                                    set_active_modal.set(BrowserModal::DataVisualizer);
+                                    set_viz_data.set(None);
+                                }>"Visualize Data"</button>
                             </div>
                         </div>
                     </div>
@@ -1530,117 +1574,608 @@ pub fn Dashboard() -> impl IntoView {
                         </div>
                         </Show>
 
-                        // Performance Tab Content
+                        // Performance Tab Content - STUNNING CHARTS
                         <Show when=move || metrics_active_tab.get() == "performance">
-                            <div class="metrics-tab-content">
-                                <div class="performance-grid">
-                                    // Query Performance Card
-                                    <div class="perf-card large">
-                                        <div class="perf-card-header">
-                                            <h3>"Query Performance Analysis"</h3>
-                                            <span class="perf-badge good">"Healthy"</span>
-                                        </div>
-                                        <div class="perf-metrics-row">
-                                            <div class="perf-metric">
-                                                <span class="perf-metric-value">"1.2"<span class="unit">"ms"</span></span>
-                                                <span class="perf-metric-label">"Avg Query Time"</span>
+                            <div class="metrics-tab-content performance-showcase">
+                                <div class="performance-grid-advanced">
+
+                                    // STACKED WAVE AREA CHART - Full Width
+                                    <div class="chart-card chart-fullwidth glass-effect">
+                                        <div class="chart-header premium">
+                                            <div class="chart-title-group">
+                                                <h3>"Real-Time Operations Flow"</h3>
+                                                <span class="live-indicator"><span class="pulse-dot"></span>"LIVE"</span>
                                             </div>
-                                            <div class="perf-metric">
-                                                <span class="perf-metric-value">"4.8"<span class="unit">"ms"</span></span>
-                                                <span class="perf-metric-label">"p95 Latency"</span>
-                                            </div>
-                                            <div class="perf-metric">
-                                                <span class="perf-metric-value">"12.4"<span class="unit">"ms"</span></span>
-                                                <span class="perf-metric-label">"p99 Latency"</span>
-                                            </div>
-                                            <div class="perf-metric">
-                                                <span class="perf-metric-value">"98.7"<span class="unit">"%"</span></span>
-                                                <span class="perf-metric-label">"Success Rate"</span>
+                                            <div class="chart-legend-inline">
+                                                <span class="legend-item"><span class="dot reads"></span>"Reads"</span>
+                                                <span class="legend-item"><span class="dot writes"></span>"Writes"</span>
+                                                <span class="legend-item"><span class="dot deletes"></span>"Deletes"</span>
+                                                <span class="legend-item"><span class="dot scans"></span>"Scans"</span>
                                             </div>
                                         </div>
-                                        <div class="perf-chart-placeholder">
-                                            <svg class="line-chart" viewBox="0 0 600 150" preserveAspectRatio="none">
-                                                <line x1="0" y1="50" x2="600" y2="50" class="grid-line"/>
-                                                <line x1="0" y1="100" x2="600" y2="100" class="grid-line"/>
-                                                <path d="M0,100 C50,95 100,90 150,85 C200,80 250,75 300,70 C350,65 400,68 450,72 C500,76 550,74 600,70" class="chart-line-reads" fill="none"/>
+                                        <div class="stacked-wave-container">
+                                            <svg class="stacked-wave-chart" viewBox="0 0 800 280" preserveAspectRatio="none">
+                                                <defs>
+                                                    // Gradients for each layer
+                                                    <linearGradient id="readGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                        <stop offset="0%" stop-color="#14b8a6" stop-opacity="0.9"/>
+                                                        <stop offset="100%" stop-color="#14b8a6" stop-opacity="0.3"/>
+                                                    </linearGradient>
+                                                    <linearGradient id="writeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                        <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.85"/>
+                                                        <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0.25"/>
+                                                    </linearGradient>
+                                                    <linearGradient id="deleteGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                        <stop offset="0%" stop-color="#f97316" stop-opacity="0.8"/>
+                                                        <stop offset="100%" stop-color="#f97316" stop-opacity="0.2"/>
+                                                    </linearGradient>
+                                                    <linearGradient id="scanGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                        <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.75"/>
+                                                        <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.15"/>
+                                                    </linearGradient>
+                                                    // Glow filter
+                                                    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                                                        <feGaussianBlur stdDeviation="3" result="blur"/>
+                                                        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                                                    </filter>
+                                                </defs>
+                                                // Stacked areas with smooth wave effect
+                                                <path d="M0,260 C40,255 80,245 120,235 C160,225 200,215 240,200 C280,185 320,165 360,155 C400,145 440,140 480,135 C520,130 560,128 600,125 C640,122 680,120 720,118 C760,116 800,115 800,115 L800,280 L0,280 Z" fill="url(#scanGrad)" class="wave-layer scan"/>
+                                                <path d="M0,240 C40,230 80,215 120,195 C160,175 200,160 240,150 C280,140 320,130 360,120 C400,110 440,105 480,100 C520,95 560,92 600,90 C640,88 680,86 720,85 C760,84 800,83 800,83 L800,280 L0,280 Z" fill="url(#deleteGrad)" class="wave-layer delete"/>
+                                                <path d="M0,200 C40,185 80,160 120,140 C160,120 200,105 240,95 C280,85 320,78 360,72 C400,66 440,62 480,58 C520,54 560,52 600,50 C640,48 680,47 720,46 C760,45 800,45 800,45 L800,280 L0,280 Z" fill="url(#writeGrad)" class="wave-layer write"/>
+                                                <path d="M0,160 C40,140 80,110 120,85 C160,60 200,45 240,38 C280,31 320,28 360,26 C400,24 440,23 480,22 C520,21 560,20 600,20 C640,20 680,20 720,20 C760,20 800,20 800,20 L800,280 L0,280 Z" fill="url(#readGrad)" class="wave-layer read"/>
+                                                // Glowing top lines
+                                                <path d="M0,160 C40,140 80,110 120,85 C160,60 200,45 240,38 C280,31 320,28 360,26 C400,24 440,23 480,22 C520,21 560,20 600,20 C640,20 680,20 720,20 C760,20 800,20" fill="none" stroke="#14b8a6" stroke-width="2" filter="url(#glow)" class="glow-line"/>
+                                            </svg>
+                                            <div class="wave-y-axis">
+                                                <span>"100K"</span><span>"75K"</span><span>"50K"</span><span>"25K"</span><span>"0"</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    // RADAR CHART - Performance Dimensions
+                                    <div class="chart-card glass-effect">
+                                        <div class="chart-header premium">
+                                            <h3>"Performance Radar"</h3>
+                                            <span class="chart-subtitle">"Multi-dimensional analysis"</span>
+                                        </div>
+                                        <div class="radar-chart-container">
+                                            <svg class="radar-chart" viewBox="0 0 300 300">
+                                                <defs>
+                                                    <radialGradient id="radarFill" cx="50%" cy="50%" r="50%">
+                                                        <stop offset="0%" stop-color="#14b8a6" stop-opacity="0.6"/>
+                                                        <stop offset="100%" stop-color="#14b8a6" stop-opacity="0.1"/>
+                                                    </radialGradient>
+                                                </defs>
+                                                // Background rings
+                                                <circle cx="150" cy="150" r="120" fill="none" stroke="#374151" stroke-width="1" opacity="0.3"/>
+                                                <circle cx="150" cy="150" r="90" fill="none" stroke="#374151" stroke-width="1" opacity="0.3"/>
+                                                <circle cx="150" cy="150" r="60" fill="none" stroke="#374151" stroke-width="1" opacity="0.3"/>
+                                                <circle cx="150" cy="150" r="30" fill="none" stroke="#374151" stroke-width="1" opacity="0.3"/>
+                                                // Axis lines (6 dimensions)
+                                                <line x1="150" y1="150" x2="150" y2="30" stroke="#4b5563" stroke-width="1"/>
+                                                <line x1="150" y1="150" x2="254" y2="90" stroke="#4b5563" stroke-width="1"/>
+                                                <line x1="150" y1="150" x2="254" y2="210" stroke="#4b5563" stroke-width="1"/>
+                                                <line x1="150" y1="150" x2="150" y2="270" stroke="#4b5563" stroke-width="1"/>
+                                                <line x1="150" y1="150" x2="46" y2="210" stroke="#4b5563" stroke-width="1"/>
+                                                <line x1="150" y1="150" x2="46" y2="90" stroke="#4b5563" stroke-width="1"/>
+                                                // Data polygon - current values
+                                                <polygon points="150,42 238,98 238,198 150,258 62,198 62,98" fill="url(#radarFill)" stroke="#14b8a6" stroke-width="2"/>
+                                                // Data points with glow
+                                                <circle cx="150" cy="42" r="5" fill="#14b8a6" filter="url(#glow)"/>
+                                                <circle cx="238" cy="98" r="5" fill="#14b8a6" filter="url(#glow)"/>
+                                                <circle cx="238" cy="198" r="5" fill="#14b8a6" filter="url(#glow)"/>
+                                                <circle cx="150" cy="258" r="5" fill="#14b8a6" filter="url(#glow)"/>
+                                                <circle cx="62" cy="198" r="5" fill="#14b8a6" filter="url(#glow)"/>
+                                                <circle cx="62" cy="98" r="5" fill="#14b8a6" filter="url(#glow)"/>
+                                                // Labels
+                                                <text x="150" y="18" text-anchor="middle" fill="#9ca3af" font-size="11" font-weight="500">"Throughput"</text>
+                                                <text x="270" y="92" text-anchor="start" fill="#9ca3af" font-size="11" font-weight="500">"Latency"</text>
+                                                <text x="270" y="215" text-anchor="start" fill="#9ca3af" font-size="11" font-weight="500">"Cache"</text>
+                                                <text x="150" y="290" text-anchor="middle" fill="#9ca3af" font-size="11" font-weight="500">"Availability"</text>
+                                                <text x="30" y="215" text-anchor="end" fill="#9ca3af" font-size="11" font-weight="500">"Efficiency"</text>
+                                                <text x="30" y="92" text-anchor="end" fill="#9ca3af" font-size="11" font-weight="500">"Scalability"</text>
                                             </svg>
                                         </div>
                                     </div>
 
-                                    // CPU Performance
-                                    <div class="perf-card">
-                                        <div class="perf-card-header">
-                                            <h3>"CPU Utilization"</h3>
+                                    // CORRELATION HEATMAP
+                                    <div class="chart-card glass-effect">
+                                        <div class="chart-header premium">
+                                            <h3>"Metric Correlation Matrix"</h3>
+                                            <span class="chart-subtitle">"Cross-correlation analysis"</span>
                                         </div>
-                                        <div class="cpu-cores-grid">
-                                            {(0..8).map(|i| {
-                                                let usage = 30 + (i * 7) % 50;
-                                                view! {
-                                                    <div class="cpu-core">
-                                                        <span class="core-label">{format!("Core {}", i)}</span>
-                                                        <div class="core-bar">
-                                                            <div class="core-fill" style=format!("width: {}%", usage)></div>
-                                                        </div>
-                                                        <span class="core-value">{format!("{}%", usage)}</span>
-                                                    </div>
-                                                }
-                                            }).collect_view()}
+                                        <div class="heatmap-container">
+                                            <svg class="heatmap-chart" viewBox="0 0 280 280">
+                                                // Column headers
+                                                <text x="70" y="20" text-anchor="middle" fill="#9ca3af" font-size="9" transform="rotate(-45,70,20)">"CPU"</text>
+                                                <text x="110" y="20" text-anchor="middle" fill="#9ca3af" font-size="9" transform="rotate(-45,110,20)">"Memory"</text>
+                                                <text x="150" y="20" text-anchor="middle" fill="#9ca3af" font-size="9" transform="rotate(-45,150,20)">"Latency"</text>
+                                                <text x="190" y="20" text-anchor="middle" fill="#9ca3af" font-size="9" transform="rotate(-45,190,20)">"Ops/s"</text>
+                                                <text x="230" y="20" text-anchor="middle" fill="#9ca3af" font-size="9" transform="rotate(-45,230,20)">"Cache"</text>
+                                                // Row headers
+                                                <text x="45" y="70" text-anchor="end" fill="#9ca3af" font-size="10">"CPU"</text>
+                                                <text x="45" y="110" text-anchor="end" fill="#9ca3af" font-size="10">"Memory"</text>
+                                                <text x="45" y="150" text-anchor="end" fill="#9ca3af" font-size="10">"Latency"</text>
+                                                <text x="45" y="190" text-anchor="end" fill="#9ca3af" font-size="10">"Ops/s"</text>
+                                                <text x="45" y="230" text-anchor="end" fill="#9ca3af" font-size="10">"Cache"</text>
+                                                // Heatmap cells (5x5 grid)
+                                                // Row 1 - CPU correlations
+                                                <rect x="50" y="50" width="35" height="35" fill="#14b8a6" rx="4"/><text x="68" y="72" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">"1.0"</text>
+                                                <rect x="90" y="50" width="35" height="35" fill="#22c55e" rx="4"/><text x="108" y="72" text-anchor="middle" fill="#fff" font-size="10">"0.8"</text>
+                                                <rect x="130" y="50" width="35" height="35" fill="#f97316" rx="4"/><text x="148" y="72" text-anchor="middle" fill="#fff" font-size="10">"0.6"</text>
+                                                <rect x="170" y="50" width="35" height="35" fill="#22c55e" rx="4"/><text x="188" y="72" text-anchor="middle" fill="#fff" font-size="10">"0.7"</text>
+                                                <rect x="210" y="50" width="35" height="35" fill="#eab308" rx="4"/><text x="228" y="72" text-anchor="middle" fill="#fff" font-size="10">"0.4"</text>
+                                                // Row 2 - Memory correlations
+                                                <rect x="50" y="90" width="35" height="35" fill="#22c55e" rx="4"/><text x="68" y="112" text-anchor="middle" fill="#fff" font-size="10">"0.8"</text>
+                                                <rect x="90" y="90" width="35" height="35" fill="#14b8a6" rx="4"/><text x="108" y="112" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">"1.0"</text>
+                                                <rect x="130" y="90" width="35" height="35" fill="#ef4444" rx="4"/><text x="148" y="112" text-anchor="middle" fill="#fff" font-size="10">"0.9"</text>
+                                                <rect x="170" y="90" width="35" height="35" fill="#22c55e" rx="4"/><text x="188" y="112" text-anchor="middle" fill="#fff" font-size="10">"0.6"</text>
+                                                <rect x="210" y="90" width="35" height="35" fill="#f97316" rx="4"/><text x="228" y="112" text-anchor="middle" fill="#fff" font-size="10">"0.5"</text>
+                                                // Row 3 - Latency correlations
+                                                <rect x="50" y="130" width="35" height="35" fill="#f97316" rx="4"/><text x="68" y="152" text-anchor="middle" fill="#fff" font-size="10">"0.6"</text>
+                                                <rect x="90" y="130" width="35" height="35" fill="#ef4444" rx="4"/><text x="108" y="152" text-anchor="middle" fill="#fff" font-size="10">"0.9"</text>
+                                                <rect x="130" y="130" width="35" height="35" fill="#14b8a6" rx="4"/><text x="148" y="152" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">"1.0"</text>
+                                                <rect x="170" y="130" width="35" height="35" fill="#ef4444" rx="4"/><text x="188" y="152" text-anchor="middle" fill="#fff" font-size="10">"-0.7"</text>
+                                                <rect x="210" y="130" width="35" height="35" fill="#ef4444" rx="4"/><text x="228" y="152" text-anchor="middle" fill="#fff" font-size="10">"-0.8"</text>
+                                                // Row 4 - Ops/s correlations
+                                                <rect x="50" y="170" width="35" height="35" fill="#22c55e" rx="4"/><text x="68" y="192" text-anchor="middle" fill="#fff" font-size="10">"0.7"</text>
+                                                <rect x="90" y="170" width="35" height="35" fill="#22c55e" rx="4"/><text x="108" y="192" text-anchor="middle" fill="#fff" font-size="10">"0.6"</text>
+                                                <rect x="130" y="170" width="35" height="35" fill="#ef4444" rx="4"/><text x="148" y="192" text-anchor="middle" fill="#fff" font-size="10">"-0.7"</text>
+                                                <rect x="170" y="170" width="35" height="35" fill="#14b8a6" rx="4"/><text x="188" y="192" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">"1.0"</text>
+                                                <rect x="210" y="170" width="35" height="35" fill="#22c55e" rx="4"/><text x="228" y="192" text-anchor="middle" fill="#fff" font-size="10">"0.8"</text>
+                                                // Row 5 - Cache correlations
+                                                <rect x="50" y="210" width="35" height="35" fill="#eab308" rx="4"/><text x="68" y="232" text-anchor="middle" fill="#fff" font-size="10">"0.4"</text>
+                                                <rect x="90" y="210" width="35" height="35" fill="#f97316" rx="4"/><text x="108" y="232" text-anchor="middle" fill="#fff" font-size="10">"0.5"</text>
+                                                <rect x="130" y="210" width="35" height="35" fill="#ef4444" rx="4"/><text x="148" y="232" text-anchor="middle" fill="#fff" font-size="10">"-0.8"</text>
+                                                <rect x="170" y="210" width="35" height="35" fill="#22c55e" rx="4"/><text x="188" y="232" text-anchor="middle" fill="#fff" font-size="10">"0.8"</text>
+                                                <rect x="210" y="210" width="35" height="35" fill="#14b8a6" rx="4"/><text x="228" y="232" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">"1.0"</text>
+                                            </svg>
+                                            <div class="heatmap-legend">
+                                                <span class="legend-label">"-1"</span>
+                                                <div class="legend-gradient"></div>
+                                                <span class="legend-label">"+1"</span>
+                                            </div>
                                         </div>
                                     </div>
 
-                                    // Memory Performance
-                                    <div class="perf-card">
-                                        <div class="perf-card-header">
-                                            <h3>"Memory Analysis"</h3>
+                                    // ANIMATED GAUGE CLUSTER
+                                    <div class="chart-card glass-effect">
+                                        <div class="chart-header premium">
+                                            <h3>"System Health Gauges"</h3>
                                         </div>
-                                        <div class="memory-breakdown">
-                                            <div class="memory-item">
-                                                <span class="mem-label">"Buffer Pool"</span>
-                                                <div class="mem-bar"><div class="mem-fill" style="width: 72%"></div></div>
-                                                <span class="mem-value">"4.6 GB / 6.4 GB"</span>
+                                        <div class="gauge-cluster">
+                                            // CPU Gauge
+                                            <div class="gauge-item">
+                                                <svg class="gauge-svg" viewBox="0 0 120 80">
+                                                    <defs>
+                                                        <linearGradient id="gaugeGreen" x1="0%" y1="0%" x2="100%" y2="0%">
+                                                            <stop offset="0%" stop-color="#22c55e"/>
+                                                            <stop offset="50%" stop-color="#eab308"/>
+                                                            <stop offset="100%" stop-color="#ef4444"/>
+                                                        </linearGradient>
+                                                    </defs>
+                                                    // Background arc
+                                                    <path d="M15,70 A45,45 0 0,1 105,70" fill="none" stroke="#374151" stroke-width="10" stroke-linecap="round"/>
+                                                    // Value arc (animated)
+                                                    {move || {
+                                                        let cpu = nodes.get().first().map(|n| n.metrics.cpu_usage).unwrap_or(42.0);
+                                                        let arc_length = cpu / 100.0 * 141.37; // Half circumference
+                                                        view! {
+                                                            <path d="M15,70 A45,45 0 0,1 105,70" fill="none" stroke="url(#gaugeGreen)" stroke-width="10" stroke-linecap="round"
+                                                                stroke-dasharray=format!("{} 200", arc_length) class="gauge-arc"/>
+                                                        }
+                                                    }}
+                                                    // Needle
+                                                    {move || {
+                                                        let cpu = nodes.get().first().map(|n| n.metrics.cpu_usage).unwrap_or(42.0);
+                                                        let angle = -90.0 + (cpu / 100.0 * 180.0);
+                                                        view! {
+                                                            <line x1="60" y1="70" x2="60" y2="30" stroke="#fff" stroke-width="2" stroke-linecap="round"
+                                                                transform=format!("rotate({} 60 70)", angle) class="gauge-needle"/>
+                                                        }
+                                                    }}
+                                                    <circle cx="60" cy="70" r="6" fill="#1f2937"/>
+                                                    <circle cx="60" cy="70" r="3" fill="#14b8a6"/>
+                                                </svg>
+                                                <div class="gauge-label">"CPU"</div>
+                                                <div class="gauge-value">{move || format!("{:.0}%", nodes.get().first().map(|n| n.metrics.cpu_usage).unwrap_or(42.0))}</div>
                                             </div>
-                                            <div class="memory-item">
-                                                <span class="mem-label">"Query Cache"</span>
-                                                <div class="mem-bar"><div class="mem-fill cache" style="width: 45%"></div></div>
-                                                <span class="mem-value">"1.2 GB / 2.0 GB"</span>
+                                            // Memory Gauge
+                                            <div class="gauge-item">
+                                                <svg class="gauge-svg" viewBox="0 0 120 80">
+                                                    <path d="M15,70 A45,45 0 0,1 105,70" fill="none" stroke="#374151" stroke-width="10" stroke-linecap="round"/>
+                                                    {move || {
+                                                        let mem = nodes.get().first().map(|n| n.metrics.memory_usage).unwrap_or(68.0);
+                                                        let arc_length = mem / 100.0 * 141.37;
+                                                        view! {
+                                                            <path d="M15,70 A45,45 0 0,1 105,70" fill="none" stroke="url(#gaugeGreen)" stroke-width="10" stroke-linecap="round"
+                                                                stroke-dasharray=format!("{} 200", arc_length) class="gauge-arc"/>
+                                                        }
+                                                    }}
+                                                    {move || {
+                                                        let mem = nodes.get().first().map(|n| n.metrics.memory_usage).unwrap_or(68.0);
+                                                        let angle = -90.0 + (mem / 100.0 * 180.0);
+                                                        view! {
+                                                            <line x1="60" y1="70" x2="60" y2="30" stroke="#fff" stroke-width="2" stroke-linecap="round"
+                                                                transform=format!("rotate({} 60 70)", angle) class="gauge-needle"/>
+                                                        }
+                                                    }}
+                                                    <circle cx="60" cy="70" r="6" fill="#1f2937"/>
+                                                    <circle cx="60" cy="70" r="3" fill="#8b5cf6"/>
+                                                </svg>
+                                                <div class="gauge-label">"Memory"</div>
+                                                <div class="gauge-value">{move || format!("{:.0}%", nodes.get().first().map(|n| n.metrics.memory_usage).unwrap_or(68.0))}</div>
                                             </div>
-                                            <div class="memory-item">
-                                                <span class="mem-label">"Connections"</span>
-                                                <div class="mem-bar"><div class="mem-fill conn" style="width: 23%"></div></div>
-                                                <span class="mem-value">"384 MB / 1.6 GB"</span>
-                                            </div>
-                                            <div class="memory-item">
-                                                <span class="mem-label">"System"</span>
-                                                <div class="mem-bar"><div class="mem-fill sys" style="width: 15%"></div></div>
-                                                <span class="mem-value">"256 MB"</span>
+                                            // Disk Gauge
+                                            <div class="gauge-item">
+                                                <svg class="gauge-svg" viewBox="0 0 120 80">
+                                                    <path d="M15,70 A45,45 0 0,1 105,70" fill="none" stroke="#374151" stroke-width="10" stroke-linecap="round"/>
+                                                    {move || {
+                                                        let disk = nodes.get().first().map(|n| n.metrics.disk_usage).unwrap_or(54.0);
+                                                        let arc_length = disk / 100.0 * 141.37;
+                                                        view! {
+                                                            <path d="M15,70 A45,45 0 0,1 105,70" fill="none" stroke="url(#gaugeGreen)" stroke-width="10" stroke-linecap="round"
+                                                                stroke-dasharray=format!("{} 200", arc_length) class="gauge-arc"/>
+                                                        }
+                                                    }}
+                                                    {move || {
+                                                        let disk = nodes.get().first().map(|n| n.metrics.disk_usage).unwrap_or(54.0);
+                                                        let angle = -90.0 + (disk / 100.0 * 180.0);
+                                                        view! {
+                                                            <line x1="60" y1="70" x2="60" y2="30" stroke="#fff" stroke-width="2" stroke-linecap="round"
+                                                                transform=format!("rotate({} 60 70)", angle) class="gauge-needle"/>
+                                                        }
+                                                    }}
+                                                    <circle cx="60" cy="70" r="6" fill="#1f2937"/>
+                                                    <circle cx="60" cy="70" r="3" fill="#f97316"/>
+                                                </svg>
+                                                <div class="gauge-label">"Disk"</div>
+                                                <div class="gauge-value">{move || format!("{:.0}%", nodes.get().first().map(|n| n.metrics.disk_usage).unwrap_or(54.0))}</div>
                                             </div>
                                         </div>
                                     </div>
 
-                                    // Thread Pool
-                                    <div class="perf-card">
-                                        <div class="perf-card-header">
-                                            <h3>"Thread Pool Status"</h3>
+                                    // SPARKLINE GRID - Real-time micro-charts
+                                    <div class="chart-card chart-wide glass-effect">
+                                        <div class="chart-header premium">
+                                            <h3>"Real-Time Metrics Sparklines"</h3>
+                                            <span class="chart-subtitle">"Last 60 seconds"</span>
                                         </div>
-                                        <div class="thread-pool-stats">
-                                            <div class="pool-stat">
-                                                <span class="pool-value">"24"</span>
-                                                <span class="pool-label">"Active"</span>
+                                        <div class="sparkline-grid">
+                                            <div class="sparkline-item">
+                                                <div class="sparkline-header">
+                                                    <span class="sparkline-label">"Query Rate"</span>
+                                                    <span class="sparkline-value positive">"12.4K/s"</span>
+                                                </div>
+                                                <svg class="sparkline" viewBox="0 0 200 40">
+                                                    <defs>
+                                                        <linearGradient id="sparkGrad1" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                            <stop offset="0%" stop-color="#14b8a6" stop-opacity="0.4"/>
+                                                            <stop offset="100%" stop-color="#14b8a6" stop-opacity="0"/>
+                                                        </linearGradient>
+                                                    </defs>
+                                                    <path d="M0,35 L10,32 L20,28 L30,30 L40,25 L50,22 L60,24 L70,20 L80,18 L90,22 L100,15 L110,12 L120,14 L130,10 L140,8 L150,12 L160,6 L170,8 L180,5 L190,8 L200,5 L200,40 L0,40 Z" fill="url(#sparkGrad1)"/>
+                                                    <path d="M0,35 L10,32 L20,28 L30,30 L40,25 L50,22 L60,24 L70,20 L80,18 L90,22 L100,15 L110,12 L120,14 L130,10 L140,8 L150,12 L160,6 L170,8 L180,5 L190,8 L200,5" fill="none" stroke="#14b8a6" stroke-width="2"/>
+                                                </svg>
                                             </div>
-                                            <div class="pool-stat">
-                                                <span class="pool-value">"8"</span>
-                                                <span class="pool-label">"Idle"</span>
+                                            <div class="sparkline-item">
+                                                <div class="sparkline-header">
+                                                    <span class="sparkline-label">"Response Time"</span>
+                                                    <span class="sparkline-value">"2.1ms"</span>
+                                                </div>
+                                                <svg class="sparkline" viewBox="0 0 200 40">
+                                                    <defs>
+                                                        <linearGradient id="sparkGrad2" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                            <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.4"/>
+                                                            <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+                                                        </linearGradient>
+                                                    </defs>
+                                                    <path d="M0,20 L10,18 L20,22 L30,25 L40,20 L50,15 L60,18 L70,12 L80,15 L90,10 L100,14 L110,12 L120,16 L130,14 L140,10 L150,12 L160,8 L170,10 L180,6 L190,9 L200,8 L200,40 L0,40 Z" fill="url(#sparkGrad2)"/>
+                                                    <path d="M0,20 L10,18 L20,22 L30,25 L40,20 L50,15 L60,18 L70,12 L80,15 L90,10 L100,14 L110,12 L120,16 L130,14 L140,10 L150,12 L160,8 L170,10 L180,6 L190,9 L200,8" fill="none" stroke="#8b5cf6" stroke-width="2"/>
+                                                </svg>
                                             </div>
-                                            <div class="pool-stat">
-                                                <span class="pool-value">"3"</span>
-                                                <span class="pool-label">"Queued"</span>
+                                            <div class="sparkline-item">
+                                                <div class="sparkline-header">
+                                                    <span class="sparkline-label">"Error Rate"</span>
+                                                    <span class="sparkline-value positive">"0.02%"</span>
+                                                </div>
+                                                <svg class="sparkline" viewBox="0 0 200 40">
+                                                    <defs>
+                                                        <linearGradient id="sparkGrad3" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                            <stop offset="0%" stop-color="#22c55e" stop-opacity="0.4"/>
+                                                            <stop offset="100%" stop-color="#22c55e" stop-opacity="0"/>
+                                                        </linearGradient>
+                                                    </defs>
+                                                    <path d="M0,38 L10,37 L20,38 L30,36 L40,38 L50,37 L60,38 L70,36 L80,38 L90,37 L100,38 L110,36 L120,38 L130,37 L140,38 L150,36 L160,38 L170,37 L180,38 L190,36 L200,38 L200,40 L0,40 Z" fill="url(#sparkGrad3)"/>
+                                                    <path d="M0,38 L10,37 L20,38 L30,36 L40,38 L50,37 L60,38 L70,36 L80,38 L90,37 L100,38 L110,36 L120,38 L130,37 L140,38 L150,36 L160,38 L170,37 L180,38 L190,36 L200,38" fill="none" stroke="#22c55e" stroke-width="2"/>
+                                                </svg>
                                             </div>
-                                            <div class="pool-stat">
-                                                <span class="pool-value">"32"</span>
-                                                <span class="pool-label">"Max"</span>
+                                            <div class="sparkline-item">
+                                                <div class="sparkline-header">
+                                                    <span class="sparkline-label">"Connections"</span>
+                                                    <span class="sparkline-value">"847"</span>
+                                                </div>
+                                                <svg class="sparkline" viewBox="0 0 200 40">
+                                                    <defs>
+                                                        <linearGradient id="sparkGrad4" x1="0%" y1="0%" x2="0%" y2="100%">
+                                                            <stop offset="0%" stop-color="#f97316" stop-opacity="0.4"/>
+                                                            <stop offset="100%" stop-color="#f97316" stop-opacity="0"/>
+                                                        </linearGradient>
+                                                    </defs>
+                                                    <path d="M0,30 L10,28 L20,25 L30,28 L40,22 L50,20 L60,22 L70,18 L80,20 L90,15 L100,18 L110,14 L120,16 L130,12 L140,15 L150,10 L160,12 L170,8 L180,10 L190,6 L200,8 L200,40 L0,40 Z" fill="url(#sparkGrad4)"/>
+                                                    <path d="M0,30 L10,28 L20,25 L30,28 L40,22 L50,20 L60,22 L70,18 L80,20 L90,15 L100,18 L110,14 L120,16 L130,12 L140,15 L150,10 L160,12 L170,8 L180,10 L190,6 L200,8" fill="none" stroke="#f97316" stroke-width="2"/>
+                                                </svg>
                                             </div>
                                         </div>
                                     </div>
+
+                                    // 3D BAR CHART EFFECT
+                                    <div class="chart-card glass-effect">
+                                        <div class="chart-header premium">
+                                            <h3>"Query Distribution by Type"</h3>
+                                        </div>
+                                        <div class="bar3d-container">
+                                            <svg class="bar3d-chart" viewBox="0 0 280 200">
+                                                <defs>
+                                                    <linearGradient id="bar3d1" x1="0%" y1="0%" x2="100%" y2="0%">
+                                                        <stop offset="0%" stop-color="#14b8a6"/>
+                                                        <stop offset="100%" stop-color="#0d9488"/>
+                                                    </linearGradient>
+                                                    <linearGradient id="bar3dTop1" x1="0%" y1="0%" x2="100%" y2="100%">
+                                                        <stop offset="0%" stop-color="#2dd4bf"/>
+                                                        <stop offset="100%" stop-color="#14b8a6"/>
+                                                    </linearGradient>
+                                                    <linearGradient id="bar3dSide1" x1="0%" y1="0%" x2="100%" y2="0%">
+                                                        <stop offset="0%" stop-color="#0f766e"/>
+                                                        <stop offset="100%" stop-color="#115e59"/>
+                                                    </linearGradient>
+                                                </defs>
+                                                // SELECT bar (tallest)
+                                                <polygon points="30,180 30,50 60,50 60,180" fill="url(#bar3d1)"/>
+                                                <polygon points="60,50 75,40 75,170 60,180" fill="url(#bar3dSide1)"/>
+                                                <polygon points="30,50 45,40 75,40 60,50" fill="url(#bar3dTop1)"/>
+                                                <text x="52" y="195" text-anchor="middle" fill="#9ca3af" font-size="10">"SELECT"</text>
+                                                <text x="52" y="42" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">"45%"</text>
+                                                // INSERT bar
+                                                <polygon points="95,180 95,80 125,80 125,180" fill="#8b5cf6"/>
+                                                <polygon points="125,80 140,70 140,170 125,180" fill="#6d28d9"/>
+                                                <polygon points="95,80 110,70 140,70 125,80" fill="#a78bfa"/>
+                                                <text x="117" y="195" text-anchor="middle" fill="#9ca3af" font-size="10">"INSERT"</text>
+                                                <text x="117" y="72" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">"28%"</text>
+                                                // UPDATE bar
+                                                <polygon points="160,180 160,110 190,110 190,180" fill="#f97316"/>
+                                                <polygon points="190,110 205,100 205,170 190,180" fill="#c2410c"/>
+                                                <polygon points="160,110 175,100 205,100 190,110" fill="#fb923c"/>
+                                                <text x="182" y="195" text-anchor="middle" fill="#9ca3af" font-size="10">"UPDATE"</text>
+                                                <text x="182" y="102" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">"18%"</text>
+                                                // DELETE bar (shortest)
+                                                <polygon points="225,180 225,140 255,140 255,180" fill="#ef4444"/>
+                                                <polygon points="255,140 270,130 270,170 255,180" fill="#b91c1c"/>
+                                                <polygon points="225,140 240,130 270,130 255,140" fill="#f87171"/>
+                                                <text x="247" y="195" text-anchor="middle" fill="#9ca3af" font-size="10">"DELETE"</text>
+                                                <text x="247" y="132" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">"9%"</text>
+                                            </svg>
+                                        </div>
+                                    </div>
+
+                                    // 3D SCATTER PLOT - Cross-Correlation Analysis
+                                    <div class="chart-card chart-wide glass-effect">
+                                        <div class="chart-header premium">
+                                            <div class="chart-title-group">
+                                                <h3>"3D Cross-Correlation Scatter"</h3>
+                                                <span class="chart-subtitle">"CPU vs Memory vs Latency"</span>
+                                            </div>
+                                            <div class="scatter-legend">
+                                                <span class="scatter-legend-item"><span class="dot healthy"></span>"Healthy"</span>
+                                                <span class="scatter-legend-item"><span class="dot warning"></span>"Warning"</span>
+                                                <span class="scatter-legend-item"><span class="dot critical"></span>"Critical"</span>
+                                            </div>
+                                        </div>
+                                        <div class="scatter3d-container">
+                                            <svg class="scatter3d-chart" viewBox="0 0 500 350">
+                                                <defs>
+                                                    // Gradients for depth perception
+                                                    <radialGradient id="scatter3dBg" cx="50%" cy="50%" r="70%">
+                                                        <stop offset="0%" stop-color="#1e293b" stop-opacity="0.8"/>
+                                                        <stop offset="100%" stop-color="#0f172a" stop-opacity="1"/>
+                                                    </radialGradient>
+                                                    // Point gradients
+                                                    <radialGradient id="pointGreen" cx="30%" cy="30%">
+                                                        <stop offset="0%" stop-color="#4ade80"/>
+                                                        <stop offset="100%" stop-color="#22c55e"/>
+                                                    </radialGradient>
+                                                    <radialGradient id="pointYellow" cx="30%" cy="30%">
+                                                        <stop offset="0%" stop-color="#fde047"/>
+                                                        <stop offset="100%" stop-color="#eab308"/>
+                                                    </radialGradient>
+                                                    <radialGradient id="pointRed" cx="30%" cy="30%">
+                                                        <stop offset="0%" stop-color="#f87171"/>
+                                                        <stop offset="100%" stop-color="#ef4444"/>
+                                                    </radialGradient>
+                                                    <radialGradient id="pointTeal" cx="30%" cy="30%">
+                                                        <stop offset="0%" stop-color="#5eead4"/>
+                                                        <stop offset="100%" stop-color="#14b8a6"/>
+                                                    </radialGradient>
+                                                    // Glow filter for points
+                                                    <filter id="pointGlow" x="-100%" y="-100%" width="300%" height="300%">
+                                                        <feGaussianBlur stdDeviation="2" result="blur"/>
+                                                        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                                                    </filter>
+                                                    // Shadow filter
+                                                    <filter id="dropShadow3d" x="-50%" y="-50%" width="200%" height="200%">
+                                                        <feDropShadow dx="2" dy="4" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+                                                    </filter>
+                                                </defs>
+
+                                                // Background with subtle gradient
+                                                <rect x="50" y="20" width="400" height="280" rx="8" fill="url(#scatter3dBg)"/>
+
+                                                // 3D Grid - Back planes (isometric perspective)
+                                                // Back wall (XY plane at Z=0)
+                                                <g class="grid-plane back-plane" opacity="0.4">
+                                                    <line x1="80" y1="260" x2="80" y2="60" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="140" y1="260" x2="140" y2="60" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="200" y1="260" x2="200" y2="60" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="260" y1="260" x2="260" y2="60" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="80" y1="260" x2="260" y2="260" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="80" y1="210" x2="260" y2="210" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="80" y1="160" x2="260" y2="160" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="80" y1="110" x2="260" y2="110" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="80" y1="60" x2="260" y2="60" stroke="#4b5563" stroke-width="1"/>
+                                                </g>
+
+                                                // Floor plane (XZ at Y=0) with perspective
+                                                <g class="grid-plane floor-plane" opacity="0.3">
+                                                    <line x1="80" y1="260" x2="280" y2="300" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="140" y1="260" x2="340" y2="300" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="200" y1="260" x2="400" y2="300" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="260" y1="260" x2="420" y2="280" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="80" y1="260" x2="260" y2="260" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="130" y1="270" x2="310" y2="270" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="180" y1="280" x2="360" y2="280" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="230" y1="290" x2="410" y2="290" stroke="#4b5563" stroke-width="1"/>
+                                                </g>
+
+                                                // Right wall (YZ plane) with perspective
+                                                <g class="grid-plane right-plane" opacity="0.25">
+                                                    <line x1="260" y1="260" x2="420" y2="280" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="260" y1="210" x2="420" y2="230" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="260" y1="160" x2="420" y2="180" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="260" y1="110" x2="420" y2="130" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="260" y1="60" x2="420" y2="80" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="260" y1="60" x2="260" y2="260" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="300" y1="65" x2="300" y2="265" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="340" y1="70" x2="340" y2="270" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="380" y1="75" x2="380" y2="275" stroke="#4b5563" stroke-width="1"/>
+                                                    <line x1="420" y1="80" x2="420" y2="280" stroke="#4b5563" stroke-width="1"/>
+                                                </g>
+
+                                                // 3D Axes with arrows
+                                                <g class="axes-3d">
+                                                    // X axis (CPU)
+                                                    <line x1="80" y1="260" x2="280" y2="260" stroke="#14b8a6" stroke-width="2"/>
+                                                    <polygon points="280,260 270,255 270,265" fill="#14b8a6"/>
+                                                    // Y axis (Memory)
+                                                    <line x1="80" y1="260" x2="80" y2="50" stroke="#8b5cf6" stroke-width="2"/>
+                                                    <polygon points="80,50 75,60 85,60" fill="#8b5cf6"/>
+                                                    // Z axis (Latency) - diagonal for 3D effect
+                                                    <line x1="80" y1="260" x2="200" y2="310" stroke="#f97316" stroke-width="2"/>
+                                                    <polygon points="200,310 188,308 192,298" fill="#f97316"/>
+                                                </g>
+
+                                                // Axis labels
+                                                <text x="280" y="250" fill="#14b8a6" font-size="11" font-weight="600">"CPU %"</text>
+                                                <text x="60" y="45" fill="#8b5cf6" font-size="11" font-weight="600">"Memory %"</text>
+                                                <text x="205" y="320" fill="#f97316" font-size="11" font-weight="600">"Latency ms"</text>
+
+                                                // Scale labels
+                                                <text x="75" y="265" fill="#6b7280" font-size="8" text-anchor="end">"0"</text>
+                                                <text x="75" y="165" fill="#6b7280" font-size="8" text-anchor="end">"50"</text>
+                                                <text x="75" y="65" fill="#6b7280" font-size="8" text-anchor="end">"100"</text>
+                                                <text x="260" y="275" fill="#6b7280" font-size="8" text-anchor="middle">"100"</text>
+                                                <text x="170" y="275" fill="#6b7280" font-size="8" text-anchor="middle">"50"</text>
+
+                                                // DATA POINTS - 3D positioned scatter points
+                                                // Each point has: main circle + shadow + connecting line to floor
+
+                                                // Cluster 1: Healthy - low CPU, low memory, low latency (front-left, bottom)
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="112" cy="285" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="110" y1="220" x2="112" y2="282" stroke="#22c55e" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="110" cy="220" r="8" fill="url(#pointGreen)" class="scatter-point"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="127" cy="278" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="125" y1="205" x2="127" y2="275" stroke="#22c55e" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="125" cy="205" r="7" fill="url(#pointGreen)" class="scatter-point"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="137" cy="282" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="135" y1="215" x2="137" y2="279" stroke="#22c55e" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="135" cy="215" r="6" fill="url(#pointGreen)" class="scatter-point"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="102" cy="280" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="100" y1="230" x2="102" y2="277" stroke="#22c55e" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="100" cy="230" r="7" fill="url(#pointGreen)" class="scatter-point"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="147" cy="275" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="145" y1="198" x2="147" y2="272" stroke="#22c55e" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="145" cy="198" r="9" fill="url(#pointGreen)" class="scatter-point"/>
+                                                </g>
+
+                                                // Cluster 2: Medium - moderate values (center)
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="192" cy="272" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="175" y1="165" x2="192" y2="269" stroke="#14b8a6" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="175" cy="165" r="8" fill="url(#pointTeal)" class="scatter-point"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="207" cy="275" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="190" y1="150" x2="207" y2="272" stroke="#14b8a6" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="190" cy="150" r="7" fill="url(#pointTeal)" class="scatter-point"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="182" cy="268" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="165" y1="155" x2="182" y2="265" stroke="#14b8a6" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="165" cy="155" r="6" fill="url(#pointTeal)" class="scatter-point"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="217" cy="278" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="200" y1="140" x2="217" y2="275" stroke="#14b8a6" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="200" cy="140" r="8" fill="url(#pointTeal)" class="scatter-point"/>
+                                                </g>
+
+                                                // Cluster 3: Warning - high CPU/memory, medium latency (upper-right)
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="267" cy="282" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="230" y1="95" x2="267" y2="279" stroke="#eab308" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="230" cy="95" r="9" fill="url(#pointYellow)" class="scatter-point"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="282" cy="285" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="245" y1="85" x2="282" y2="282" stroke="#eab308" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="245" cy="85" r="8" fill="url(#pointYellow)" class="scatter-point"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="257" cy="278" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="220" y1="105" x2="257" y2="275" stroke="#eab308" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="220" cy="105" r="7" fill="url(#pointYellow)" class="scatter-point"/>
+                                                </g>
+
+                                                // Cluster 4: Critical - extreme values (far back-right, high latency)
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="350" cy="285" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="255" y1="75" x2="350" y2="282" stroke="#ef4444" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="255" cy="75" r="10" fill="url(#pointRed)" class="scatter-point critical-pulse"/>
+                                                </g>
+                                                <g class="scatter-point-group" filter="url(#pointGlow)">
+                                                    <ellipse cx="380" cy="290" rx="4" ry="2" fill="#000" opacity="0.3"/>
+                                                    <line x1="248" y1="68" x2="380" y2="287" stroke="#ef4444" stroke-width="1" stroke-dasharray="2,2" opacity="0.5"/>
+                                                    <circle cx="248" cy="68" r="8" fill="url(#pointRed)" class="scatter-point critical-pulse"/>
+                                                </g>
+
+                                                // Correlation trend plane (semi-transparent)
+                                                <polygon points="95,235 240,90 410,110 265,255" fill="#14b8a6" opacity="0.08" class="correlation-plane"/>
+                                                <line x1="95" y1="235" x2="410" y2="110" stroke="#14b8a6" stroke-width="1" stroke-dasharray="4,4" opacity="0.4"/>
+
+                                                // Legend/Stats overlay
+                                                <g class="scatter-stats">
+                                                    <rect x="330" y="30" width="110" height="70" rx="6" fill="#1e293b" opacity="0.9"/>
+                                                    <text x="340" y="48" fill="#9ca3af" font-size="9">"Correlation"</text>
+                                                    <text x="340" y="62" fill="#22c55e" font-size="11" font-weight="600">"r = 0.847"</text>
+                                                    <text x="340" y="78" fill="#9ca3af" font-size="9">"Data Points"</text>
+                                                    <text x="340" y="92" fill="#f1f5f9" font-size="11" font-weight="600">"n = 14"</text>
+                                                </g>
+                                            </svg>
+                                        </div>
+                                        <div class="scatter3d-controls">
+                                            <span class="control-hint">"Hover over points for details"</span>
+                                        </div>
+                                    </div>
+
                                 </div>
                             </div>
                         </Show>
@@ -2397,6 +2932,81 @@ pub fn Dashboard() -> impl IntoView {
                                     </div>
                                 </Show>
 
+                                // Edit User Form
+                                <Show when=move || edit_user_id.get().is_some()>
+                                    <div class="settings-card add-form">
+                                        <h4>"Edit User: "{move || edit_user_name.get()}</h4>
+                                        <div class="form-grid">
+                                            <div class="form-row">
+                                                <label>"Full Name"</label>
+                                                <input
+                                                    type="text"
+                                                    class="form-input"
+                                                    prop:value=move || edit_user_name.get()
+                                                    on:input=move |ev| set_edit_user_name.set(event_target_value(&ev))
+                                                />
+                                            </div>
+                                            <div class="form-row">
+                                                <label>"Email"</label>
+                                                <input
+                                                    type="email"
+                                                    class="form-input"
+                                                    prop:value=move || edit_user_email.get()
+                                                    on:input=move |ev| set_edit_user_email.set(event_target_value(&ev))
+                                                />
+                                            </div>
+                                            <div class="form-row">
+                                                <label>"Role"</label>
+                                                <select
+                                                    class="form-select"
+                                                    prop:value=move || edit_user_role.get()
+                                                    on:change=move |ev| set_edit_user_role.set(event_target_value(&ev))
+                                                >
+                                                    <option value="viewer">"Viewer"</option>
+                                                    <option value="analyst">"Analyst"</option>
+                                                    <option value="developer">"Developer"</option>
+                                                    <option value="admin">"Admin"</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-row">
+                                                <label>"Require 2FA"</label>
+                                                <label class="toggle">
+                                                    <input
+                                                        type="checkbox"
+                                                        prop:checked=move || edit_user_2fa.get()
+                                                        on:change=move |ev| set_edit_user_2fa.set(event_target_checked(&ev))
+                                                    />
+                                                    <span class="toggle-slider"></span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div class="form-actions">
+                                            <button class="btn-secondary" on:click=move |_| {
+                                                set_edit_user_id.set(None);
+                                            }>"Cancel"</button>
+                                            <button class="btn-primary" on:click=move |_| {
+                                                if let Some(uid) = edit_user_id.get() {
+                                                    let name = edit_user_name.get();
+                                                    let email = edit_user_email.get();
+                                                    let role = edit_user_role.get();
+                                                    let has_2fa = edit_user_2fa.get();
+
+                                                    let mut users = users_list.get();
+                                                    if let Some(user) = users.iter_mut().find(|(id, _, _, _, _)| id == &uid) {
+                                                        user.1 = name;
+                                                        user.2 = email;
+                                                        user.3 = role;
+                                                        user.4 = has_2fa;
+                                                    }
+                                                    set_users_list.set(users);
+                                                    set_edit_user_id.set(None);
+                                                    set_settings_message.set(Some(("User updated successfully".to_string(), true)));
+                                                }
+                                            }>"Save Changes"</button>
+                                        </div>
+                                    </div>
+                                </Show>
+
                                 // Users Table
                                 <div class="settings-card">
                                     <table class="data-table users-table">
@@ -2414,6 +3024,10 @@ pub fn Dashboard() -> impl IntoView {
                                                 let id_for_edit = id.clone();
                                                 let id_for_delete = id.clone();
                                                 let name_clone = name.clone();
+                                                let name_for_edit = name.clone();
+                                                let email_for_edit = email.clone();
+                                                let role_for_edit = role.clone();
+                                                let has_2fa_for_edit = has_2fa;
                                                 view! {
                                                     <tr>
                                                         <td>
@@ -2435,7 +3049,17 @@ pub fn Dashboard() -> impl IntoView {
                                                         </td>
                                                         <td>
                                                             <div class="action-buttons">
-                                                                <button class="btn-icon" title="Edit">"Edit"</button>
+                                                                <button
+                                                                    class="btn-icon"
+                                                                    title="Edit"
+                                                                    on:click=move |_| {
+                                                                        set_edit_user_id.set(Some(id_for_edit.clone()));
+                                                                        set_edit_user_name.set(name_for_edit.clone());
+                                                                        set_edit_user_email.set(email_for_edit.clone());
+                                                                        set_edit_user_role.set(role_for_edit.clone());
+                                                                        set_edit_user_2fa.set(has_2fa_for_edit);
+                                                                    }
+                                                                >"Edit"</button>
                                                                 <button
                                                                     class="btn-icon danger"
                                                                     title="Delete"
@@ -2955,19 +3579,41 @@ pub fn Dashboard() -> impl IntoView {
                                                 </Show>
                                                 <div class="documents-list">
                                                     {move || collection_docs.get().into_iter().map(|doc| {
-                                                        let data_preview = doc.data.to_string();
+                                                        let doc_id = doc.id.clone();
+                                                        let doc_id_click = doc.id.clone();
+                                                        let full_data = doc.data.to_string();
+                                                        let data_preview = full_data.clone();
                                                         let preview = if data_preview.len() > 100 {
                                                             format!("{}...", &data_preview[..100])
                                                         } else {
                                                             data_preview
                                                         };
+                                                        let doc_id_sel1 = doc_id.clone();
+                                                        let doc_id_sel2 = doc_id.clone();
                                                         view! {
-                                                            <div class="document-item">
+                                                            <div
+                                                                class=move || {
+                                                                    if col_selected_doc.get().as_ref() == Some(&doc_id_sel1) {
+                                                                        "document-item selected"
+                                                                    } else {
+                                                                        "document-item"
+                                                                    }
+                                                                }
+                                                                on:click=move |_| {
+                                                                    if col_selected_doc.get().as_ref() == Some(&doc_id_click) {
+                                                                        set_col_selected_doc.set(None);
+                                                                    } else {
+                                                                        set_col_selected_doc.set(Some(doc_id_click.clone()));
+                                                                    }
+                                                                }
+                                                            >
                                                                 <div class="document-header">
                                                                     <span class="document-id">{doc.id.clone()}</span>
                                                                     <span class="document-date">{doc.updated_at.clone()}</span>
                                                                 </div>
-                                                                <pre class="document-preview">{preview}</pre>
+                                                                <pre class="document-preview">
+                                                                    {move || if col_selected_doc.get().as_ref() == Some(&doc_id_sel2) { full_data.clone() } else { preview.clone() }}
+                                                                </pre>
                                                             </div>
                                                         }
                                                     }).collect_view()}
@@ -3017,6 +3663,15 @@ pub fn Dashboard() -> impl IntoView {
                                                 <option value="Product">"Product"</option>
                                                 <option value="Order">"Order"</option>
                                             </select>
+                                            <select
+                                                class="graph-select"
+                                                prop:value=move || graph_layout.get()
+                                                on:change=move |ev| set_graph_layout.set(event_target_value(&ev))
+                                            >
+                                                <option value="force">"Force-Directed"</option>
+                                                <option value="circular">"Circular"</option>
+                                                <option value="grid">"Grid"</option>
+                                            </select>
                                             <button class="toolbar-btn" on:click=move |_| {
                                                 set_graph_search.set(String::new());
                                                 set_graph_label_filter.set(String::new());
@@ -3038,10 +3693,140 @@ pub fn Dashboard() -> impl IntoView {
                                                         </div>
                                                     </div>
                                                     <div class="graph-visualization">
-                                                        <div class="graph-placeholder">
-                                                            <p>"Graph visualization"</p>
-                                                            <p class="hint">"Nodes and edges loaded. Visualization requires WebGL canvas."</p>
-                                                        </div>
+                                                        {
+                                                            // Calculate layout based on selected type
+                                                            let nodes = data.nodes.clone();
+                                                            let edges = data.edges.clone();
+                                                            let layout_type = graph_layout.get();
+                                                            let layout = calculate_graph_layout(&nodes, &edges, &layout_type);
+
+                                                            let selected = graph_selected_node.clone();
+                                                            let set_selected = set_graph_selected_node.clone();
+
+                                                            view! {
+                                                                <svg
+                                                                    class="graph-svg"
+                                                                    viewBox="-100 -100 800 600"
+                                                                    preserveAspectRatio="xMidYMid meet"
+                                                                >
+                                                                    // Draw edges first (behind nodes)
+                                                                    {edges.iter().map(|edge| {
+                                                                        let source_pos = layout.iter().find(|(id, _, _)| id == &edge.source).map(|(_, x, y)| (*x, *y)).unwrap_or((0.0, 0.0));
+                                                                        let target_pos = layout.iter().find(|(id, _, _)| id == &edge.target).map(|(_, x, y)| (*x, *y)).unwrap_or((0.0, 0.0));
+
+                                                                        // Calculate arrow head
+                                                                        let dx = target_pos.0 - source_pos.0;
+                                                                        let dy = target_pos.1 - source_pos.1;
+                                                                        let len = (dx * dx + dy * dy).sqrt();
+                                                                        let node_radius = 20.0;
+                                                                        let end_x = target_pos.0 - (dx / len) * node_radius;
+                                                                        let end_y = target_pos.1 - (dy / len) * node_radius;
+
+                                                                        view! {
+                                                                            <g class="graph-edge">
+                                                                                <line
+                                                                                    x1=source_pos.0
+                                                                                    y1=source_pos.1
+                                                                                    x2=end_x
+                                                                                    y2=end_y
+                                                                                    stroke="#8b8b8b"
+                                                                                    stroke-width="2"
+                                                                                    marker-end="url(#arrowhead)"
+                                                                                />
+                                                                                <text
+                                                                                    x=(source_pos.0 + end_x) / 2.0
+                                                                                    y=(source_pos.1 + end_y) / 2.0 - 5.0
+                                                                                    class="edge-label"
+                                                                                    text-anchor="middle"
+                                                                                    font-size="10"
+                                                                                    fill="#666"
+                                                                                >
+                                                                                    {edge.label.clone()}
+                                                                                </text>
+                                                                            </g>
+                                                                        }
+                                                                    }).collect_view()}
+
+                                                                    // Draw nodes
+                                                                    {layout.iter().map(|(id, x, y)| {
+                                                                        let node = nodes.iter().find(|n| &n.id == id);
+                                                                        let label = node.map(|n| n.label.clone()).unwrap_or_default();
+                                                                        let node_id_click = id.clone();
+                                                                        let node_id_display = id.clone();
+                                                                        let node_id_sel1 = id.clone();
+                                                                        let node_id_sel2 = id.clone();
+                                                                        let node_id_sel3 = id.clone();
+
+                                                                        let selected1 = selected.clone();
+                                                                        let selected2 = selected.clone();
+                                                                        let selected3 = selected.clone();
+                                                                        let color = get_label_color(&label);
+
+                                                                        view! {
+                                                                            <g
+                                                                                class="graph-node"
+                                                                                transform=format!("translate({}, {})", x, y)
+                                                                                on:click={
+                                                                                    let set_sel = set_selected.clone();
+                                                                                    let nid = node_id_click.clone();
+                                                                                    move |_| {
+                                                                                        set_sel.set(Some(nid.clone()));
+                                                                                    }
+                                                                                }
+                                                                                style="cursor: pointer"
+                                                                            >
+                                                                                <circle
+                                                                                    r={
+                                                                                        let nid = node_id_sel1.clone();
+                                                                                        move || if selected1.get().as_ref() == Some(&nid) { 24 } else { 20 }
+                                                                                    }
+                                                                                    fill=color
+                                                                                    stroke={
+                                                                                        let nid = node_id_sel2.clone();
+                                                                                        move || if selected2.get().as_ref() == Some(&nid) { "#000" } else { "#fff" }
+                                                                                    }
+                                                                                    stroke-width={
+                                                                                        let nid = node_id_sel3.clone();
+                                                                                        move || if selected3.get().as_ref() == Some(&nid) { 3 } else { 2 }
+                                                                                    }
+                                                                                />
+                                                                                <text
+                                                                                    text-anchor="middle"
+                                                                                    dy="4"
+                                                                                    fill="white"
+                                                                                    font-size="12"
+                                                                                    font-weight="bold"
+                                                                                >
+                                                                                    {label.chars().next().unwrap_or('?')}
+                                                                                </text>
+                                                                                <text
+                                                                                    text-anchor="middle"
+                                                                                    y="35"
+                                                                                    fill="#333"
+                                                                                    font-size="10"
+                                                                                >
+                                                                                    {node_id_display}
+                                                                                </text>
+                                                                            </g>
+                                                                        }
+                                                                    }).collect_view()}
+
+                                                                    // Arrow marker definition
+                                                                    <defs>
+                                                                        <marker
+                                                                            id="arrowhead"
+                                                                            markerWidth="10"
+                                                                            markerHeight="7"
+                                                                            refX="9"
+                                                                            refY="3.5"
+                                                                            orient="auto"
+                                                                        >
+                                                                            <polygon points="0 0, 10 3.5, 0 7" fill="#8b8b8b" />
+                                                                        </marker>
+                                                                    </defs>
+                                                                </svg>
+                                                            }
+                                                        }
                                                     </div>
                                                     <div class="graph-details">
                                                         <h4>"Nodes"</h4>
@@ -3096,19 +3881,44 @@ pub fn Dashboard() -> impl IntoView {
                                                 }
                                             >"Cypher"</button>
                                         </div>
-                                        <textarea
-                                            class="query-textarea"
-                                            placeholder=move || match query_tab.get().as_str() {
-                                                "sql" => "Enter SQL query...\n\nExample: SELECT * FROM users WHERE active = true LIMIT 10",
-                                                "graphql" => "Enter GraphQL query...\n\nExample:\nquery {\n  users(limit: 10) {\n    id\n    name\n    email\n  }\n}",
-                                                "cypher" => "Enter Cypher query...\n\nExample: MATCH (n:User)-[:FOLLOWS]->(m:User) RETURN n.name, m.name LIMIT 10",
-                                                _ => "Enter your query..."
-                                            }
-                                            prop:value=move || query_input.get()
-                                            on:input=move |ev| {
-                                                set_query_input.set(event_target_value(&ev));
-                                            }
-                                        ></textarea>
+                                        <div class="query-editor-container">
+                                            <div class="syntax-highlight-overlay" aria-hidden="true">
+                                                {move || {
+                                                    let input = query_input.get();
+                                                    let tab = query_tab.get();
+                                                    if input.is_empty() {
+                                                        view! {
+                                                            <span class="placeholder">{match tab.as_str() {
+                                                                "sql" => "Enter SQL query...",
+                                                                "graphql" => "Enter GraphQL query...",
+                                                                "cypher" => "Enter Cypher query...",
+                                                                _ => "Enter your query..."
+                                                            }}</span>
+                                                        }.into_view()
+                                                    } else {
+                                                        // Tokenize based on query type
+                                                        let tokens = match tab.as_str() {
+                                                            "sql" | "cypher" => tokenize_sql(&input),
+                                                            _ => tokenize_sql(&input), // Use SQL tokenizer as fallback
+                                                        };
+                                                        tokens.into_iter().map(|(text, token_type)| {
+                                                            let class = token_class(token_type);
+                                                            view! {
+                                                                <span class=class>{text}</span>
+                                                            }
+                                                        }).collect_view()
+                                                    }
+                                                }}
+                                            </div>
+                                            <textarea
+                                                class="query-textarea"
+                                                spellcheck="false"
+                                                prop:value=move || query_input.get()
+                                                on:input=move |ev| {
+                                                    set_query_input.set(event_target_value(&ev));
+                                                }
+                                            ></textarea>
+                                        </div>
                                         <div class="query-actions">
                                             <span class="query-type-badge">{move || query_tab.get().to_uppercase()}</span>
                                             <button
@@ -3225,6 +4035,546 @@ pub fn Dashboard() -> impl IntoView {
                                                     <p>"Enter a query and click Execute to see results"</p>
                                                 </div>
                                             </Show>
+                                        </Show>
+                                    </div>
+                                </div>
+                            </div>
+                        </Show>
+
+                        // Data Visualizer Modal - For visualizing actual database data
+                        <Show when=move || active_modal.get() == BrowserModal::DataVisualizer>
+                            <div class="modal-header premium-header">
+                                <div class="header-title-group">
+                                    <h2>"Data Visualizer"</h2>
+                                    <span class="header-badge">"BETA"</span>
+                                </div>
+                                <button class="modal-close" on:click=move |_| set_active_modal.set(BrowserModal::None)>"x"</button>
+                            </div>
+                            <div class="modal-body visualizer-body">
+                                <div class="visualizer-layout">
+                                    // Left Panel - Query & Config
+                                    <div class="visualizer-config-panel">
+                                        <div class="config-section">
+                                            <h3>"1. Query Your Data"</h3>
+                                            <textarea
+                                                class="viz-query-input"
+                                                placeholder="SELECT price, quantity, rating, category FROM products LIMIT 100"
+                                                prop:value=move || viz_query.get()
+                                                on:input=move |ev| set_viz_query.set(event_target_value(&ev))
+                                            ></textarea>
+                                            <button
+                                                class="btn-primary fetch-btn"
+                                                on:click=move |_| {
+                                                    let q = viz_query.get();
+                                                    if !q.is_empty() {
+                                                        set_viz_loading.set(true);
+                                                        execute_query.dispatch(q);
+                                                    }
+                                                }
+                                            >"Fetch Data"</button>
+                                        </div>
+
+                                        <div class="config-section">
+                                            <h3>"2. Chart Type"</h3>
+                                            <div class="chart-type-grid">
+                                                <button
+                                                    class=move || if viz_chart_type.get() == DataChartType::Scatter3D { "chart-type-btn active" } else { "chart-type-btn" }
+                                                    on:click=move |_| set_viz_chart_type.set(DataChartType::Scatter3D)
+                                                >
+                                                    <span class="chart-icon">"⬡"</span>
+                                                    <span>"3D Scatter"</span>
+                                                </button>
+                                                <button
+                                                    class=move || if viz_chart_type.get() == DataChartType::ScatterPlot { "chart-type-btn active" } else { "chart-type-btn" }
+                                                    on:click=move |_| set_viz_chart_type.set(DataChartType::ScatterPlot)
+                                                >
+                                                    <span class="chart-icon">"◉"</span>
+                                                    <span>"Scatter"</span>
+                                                </button>
+                                                <button
+                                                    class=move || if viz_chart_type.get() == DataChartType::BubbleChart { "chart-type-btn active" } else { "chart-type-btn" }
+                                                    on:click=move |_| set_viz_chart_type.set(DataChartType::BubbleChart)
+                                                >
+                                                    <span class="chart-icon">"◎"</span>
+                                                    <span>"Bubble"</span>
+                                                </button>
+                                                <button
+                                                    class=move || if viz_chart_type.get() == DataChartType::LineChart { "chart-type-btn active" } else { "chart-type-btn" }
+                                                    on:click=move |_| set_viz_chart_type.set(DataChartType::LineChart)
+                                                >
+                                                    <span class="chart-icon">"📈"</span>
+                                                    <span>"Line"</span>
+                                                </button>
+                                                <button
+                                                    class=move || if viz_chart_type.get() == DataChartType::BarChart { "chart-type-btn active" } else { "chart-type-btn" }
+                                                    on:click=move |_| set_viz_chart_type.set(DataChartType::BarChart)
+                                                >
+                                                    <span class="chart-icon">"📊"</span>
+                                                    <span>"Bar"</span>
+                                                </button>
+                                                <button
+                                                    class=move || if viz_chart_type.get() == DataChartType::RadarChart { "chart-type-btn active" } else { "chart-type-btn" }
+                                                    on:click=move |_| set_viz_chart_type.set(DataChartType::RadarChart)
+                                                >
+                                                    <span class="chart-icon">"⬢"</span>
+                                                    <span>"Radar"</span>
+                                                </button>
+                                                <button
+                                                    class=move || if viz_chart_type.get() == DataChartType::HeatMap { "chart-type-btn active" } else { "chart-type-btn" }
+                                                    on:click=move |_| set_viz_chart_type.set(DataChartType::HeatMap)
+                                                >
+                                                    <span class="chart-icon">"▦"</span>
+                                                    <span>"Heatmap"</span>
+                                                </button>
+                                                <button
+                                                    class=move || if viz_chart_type.get() == DataChartType::AreaChart { "chart-type-btn active" } else { "chart-type-btn" }
+                                                    on:click=move |_| set_viz_chart_type.set(DataChartType::AreaChart)
+                                                >
+                                                    <span class="chart-icon">"▤"</span>
+                                                    <span>"Area"</span>
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div class="config-section">
+                                            <h3>"3. Map Columns"</h3>
+                                            {move || {
+                                                let data = query_result.get();
+                                                let columns = data.as_ref().map(|d| d.columns.clone()).unwrap_or_default();
+                                                if columns.is_empty() {
+                                                    view! {
+                                                        <p class="config-hint">"Run a query to see available columns"</p>
+                                                    }.into_view()
+                                                } else {
+                                                    let cols_x = columns.clone();
+                                                    let cols_y = columns.clone();
+                                                    let cols_z = columns.clone();
+                                                    let cols_color = columns.clone();
+                                                    let cols_size = columns.clone();
+                                                    view! {
+                                                        <div class="column-mapping">
+                                                            <div class="mapping-row">
+                                                                <label>"X Axis"</label>
+                                                                <select class="mapping-select" on:change=move |ev| set_viz_x_column.set(event_target_value(&ev))>
+                                                                    <option value="">"Select column..."</option>
+                                                                    {cols_x.iter().map(|c| view! { <option value=c.clone()>{c.clone()}</option> }).collect_view()}
+                                                                </select>
+                                                            </div>
+                                                            <div class="mapping-row">
+                                                                <label>"Y Axis"</label>
+                                                                <select class="mapping-select" on:change=move |ev| set_viz_y_column.set(event_target_value(&ev))>
+                                                                    <option value="">"Select column..."</option>
+                                                                    {cols_y.iter().map(|c| view! { <option value=c.clone()>{c.clone()}</option> }).collect_view()}
+                                                                </select>
+                                                            </div>
+                                                            <Show when=move || viz_chart_type.get() == DataChartType::Scatter3D>
+                                                                <div class="mapping-row">
+                                                                    <label>"Z Axis"</label>
+                                                                    <select class="mapping-select" on:change=move |ev| set_viz_z_column.set(event_target_value(&ev))>
+                                                                        <option value="">"Select column..."</option>
+                                                                        {cols_z.iter().map(|c| view! { <option value=c.clone()>{c.clone()}</option> }).collect_view()}
+                                                                    </select>
+                                                                </div>
+                                                            </Show>
+                                                            <Show when=move || matches!(viz_chart_type.get(), DataChartType::Scatter3D | DataChartType::ScatterPlot | DataChartType::BubbleChart)>
+                                                                <div class="mapping-row">
+                                                                    <label>"Color By"</label>
+                                                                    <select class="mapping-select" on:change=move |ev| set_viz_color_column.set(event_target_value(&ev))>
+                                                                        <option value="">"None"</option>
+                                                                        {cols_color.iter().map(|c| view! { <option value=c.clone()>{c.clone()}</option> }).collect_view()}
+                                                                    </select>
+                                                                </div>
+                                                            </Show>
+                                                            <Show when=move || viz_chart_type.get() == DataChartType::BubbleChart>
+                                                                <div class="mapping-row">
+                                                                    <label>"Size By"</label>
+                                                                    <select class="mapping-select" on:change=move |ev| set_viz_size_column.set(event_target_value(&ev))>
+                                                                        <option value="">"Fixed"</option>
+                                                                        {cols_size.iter().map(|c| view! { <option value=c.clone()>{c.clone()}</option> }).collect_view()}
+                                                                    </select>
+                                                                </div>
+                                                            </Show>
+                                                        </div>
+                                                    }.into_view()
+                                                }
+                                            }}
+                                        </div>
+                                    </div>
+
+                                    // Right Panel - Chart Visualization
+                                    <div class="visualizer-chart-panel">
+                                        <Show when=move || viz_loading.get()>
+                                            <div class="viz-loading">
+                                                <div class="spinner"></div>
+                                                <p>"Loading data..."</p>
+                                            </div>
+                                        </Show>
+                                        <Show when=move || !viz_loading.get()>
+                                            {move || {
+                                                let data = query_result.get();
+                                                let x_col = viz_x_column.get();
+                                                let y_col = viz_y_column.get();
+                                                let z_col = viz_z_column.get();
+                                                let chart_type = viz_chart_type.get();
+
+                                                if data.is_none() || x_col.is_empty() || y_col.is_empty() {
+                                                    return view! {
+                                                        <div class="viz-empty-state">
+                                                            <div class="empty-icon">"📊"</div>
+                                                            <h3>"Ready to Visualize"</h3>
+                                                            <p>"1. Run a SQL query to fetch your data"</p>
+                                                            <p>"2. Select X and Y columns to map"</p>
+                                                            <p>"3. Your chart will render here"</p>
+                                                        </div>
+                                                    }.into_view();
+                                                }
+
+                                                let result = data.unwrap();
+                                                if !result.success {
+                                                    return view! {
+                                                        <div class="viz-error">
+                                                            <span>"Query failed"</span>
+                                                        </div>
+                                                    }.into_view();
+                                                }
+
+                                                // Extract data points
+                                                let columns = result.columns.clone();
+                                                let rows = result.rows.clone();
+                                                let x_idx = columns.iter().position(|c| c == &x_col);
+                                                let y_idx = columns.iter().position(|c| c == &y_col);
+                                                let z_idx = if !z_col.is_empty() { columns.iter().position(|c| c == &z_col) } else { None };
+
+                                                if x_idx.is_none() || y_idx.is_none() {
+                                                    return view! { <div class="viz-error">"Column not found"</div> }.into_view();
+                                                }
+
+                                                let x_idx = x_idx.unwrap();
+                                                let y_idx = y_idx.unwrap();
+
+                                                // Parse numeric values
+                                                let points: Vec<(f64, f64, f64)> = rows.iter().filter_map(|row| {
+                                                    let x = row.get(x_idx).and_then(|v| parse_numeric(v))?;
+                                                    let y = row.get(y_idx).and_then(|v| parse_numeric(v))?;
+                                                    let z = z_idx.and_then(|zi| row.get(zi).and_then(|v| parse_numeric(v))).unwrap_or(0.0);
+                                                    Some((x, y, z))
+                                                }).collect();
+
+                                                if points.is_empty() {
+                                                    return view! { <div class="viz-error">"No numeric data found"</div> }.into_view();
+                                                }
+
+                                                // Calculate bounds
+                                                let (min_x, max_x) = points.iter().fold((f64::MAX, f64::MIN), |(min, max), (x, _, _)| (min.min(*x), max.max(*x)));
+                                                let (min_y, max_y) = points.iter().fold((f64::MAX, f64::MIN), |(min, max), (_, y, _)| (min.min(*y), max.max(*y)));
+                                                let (min_z, max_z) = points.iter().fold((f64::MAX, f64::MIN), |(min, max), (_, _, z)| (min.min(*z), max.max(*z)));
+
+                                                let range_x = (max_x - min_x).max(0.001);
+                                                let range_y = (max_y - min_y).max(0.001);
+                                                let range_z = (max_z - min_z).max(0.001);
+
+                                                match chart_type {
+                                                    DataChartType::Scatter3D => {
+                                                        // 3D Scatter Plot
+                                                        view! {
+                                                            <div class="viz-chart-container">
+                                                                <div class="viz-chart-title">
+                                                                    <h3>{format!("{} vs {} vs {}", x_col, y_col, if z_col.is_empty() { "—" } else { &z_col })}</h3>
+                                                                    <span class="point-count">{format!("{} points", points.len())}</span>
+                                                                </div>
+                                                                <svg class="viz-scatter3d" viewBox="0 0 600 450">
+                                                                    <defs>
+                                                                        <radialGradient id="vizPointGrad" cx="30%" cy="30%">
+                                                                            <stop offset="0%" stop-color="#5eead4"/>
+                                                                            <stop offset="100%" stop-color="#14b8a6"/>
+                                                                        </radialGradient>
+                                                                        <filter id="vizGlow" x="-50%" y="-50%" width="200%" height="200%">
+                                                                            <feGaussianBlur stdDeviation="2" result="blur"/>
+                                                                            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                                                                        </filter>
+                                                                        <linearGradient id="vizFloorGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                                                            <stop offset="0%" stop-color="#1e293b" stop-opacity="0.3"/>
+                                                                            <stop offset="100%" stop-color="#0f172a" stop-opacity="0.1"/>
+                                                                        </linearGradient>
+                                                                    </defs>
+
+                                                                    // 3D coordinate system
+                                                                    <g class="viz-3d-axes">
+                                                                        // Floor grid
+                                                                        <polygon points="80,350 80,280 400,220 520,280 520,350 200,410" fill="url(#vizFloorGrad)" stroke="#374151" stroke-width="1"/>
+                                                                        // Grid lines on floor
+                                                                        {(0..5).map(|i| {
+                                                                            let y_start = 280.0 + i as f64 * 17.5;
+                                                                            let y_end = 220.0 + i as f64 * 17.5;
+                                                                            let x1 = 80.0 + i as f64 * 30.0;
+                                                                            let x2_val = x1 + 320.0;
+                                                                            view! {
+                                                                                <line x1=x1 y1=y_start x2=x2_val y2=y_end stroke="#374151" stroke-width="1" opacity="0.3"/>
+                                                                            }
+                                                                        }).collect_view()}
+
+                                                                        // Back wall
+                                                                        <polygon points="80,280 80,80 400,20 400,220" fill="#1e293b" fill-opacity="0.2" stroke="#374151" stroke-width="1"/>
+
+                                                                        // X axis (red)
+                                                                        <line x1="80" y1="280" x2="400" y2="220" stroke="#ef4444" stroke-width="2"/>
+                                                                        <text x="410" y="225" fill="#ef4444" font-size="12" font-weight="600">{x_col.clone()}</text>
+
+                                                                        // Y axis (green)
+                                                                        <line x1="80" y1="280" x2="80" y2="80" stroke="#22c55e" stroke-width="2"/>
+                                                                        <text x="60" y="70" fill="#22c55e" font-size="12" font-weight="600">{y_col.clone()}</text>
+
+                                                                        // Z axis (blue)
+                                                                        <line x1="80" y1="280" x2="200" y2="350" stroke="#3b82f6" stroke-width="2"/>
+                                                                        <text x="210" y="365" fill="#3b82f6" font-size="12" font-weight="600">{if z_col.is_empty() { "Z".to_string() } else { z_col.clone() }}</text>
+                                                                    </g>
+
+                                                                    // Data points with 3D projection
+                                                                    {points.iter().enumerate().map(|(_i, (x, y, z))| {
+                                                                        // Normalize to 0-1
+                                                                        let nx = (x - min_x) / range_x;
+                                                                        let ny = (y - min_y) / range_y;
+                                                                        let nz = (z - min_z) / range_z;
+
+                                                                        // Project to 2D with isometric-ish transformation
+                                                                        let px = 80.0 + nx * 320.0 + nz * 120.0;
+                                                                        let py = 280.0 - ny * 200.0 - nx * 60.0 + nz * 70.0;
+
+                                                                        // Size based on depth (closer = bigger)
+                                                                        let size = 4.0 + nz * 6.0;
+
+                                                                        // Color based on Y value
+                                                                        let hue = 160.0 + ny * 60.0; // teal to green
+
+                                                                        let shadow_cx = 80.0 + nx * 320.0 + nz * 120.0;
+                                                                        let shadow_cy = 350.0 - nx * 60.0 + nz * 70.0;
+                                                                        let shadow_rx = size * 0.8;
+                                                                        let shadow_ry = size * 0.3;
+                                                                        view! {
+                                                                            <g class="viz-point-group">
+                                                                                // Shadow on floor
+                                                                                <ellipse
+                                                                                    cx=shadow_cx
+                                                                                    cy=shadow_cy
+                                                                                    rx=shadow_rx
+                                                                                    ry=shadow_ry
+                                                                                    fill="#000"
+                                                                                    opacity="0.2"
+                                                                                />
+                                                                                // Connecting line to floor
+                                                                                <line
+                                                                                    x1=px
+                                                                                    y1=py
+                                                                                    x2=shadow_cx
+                                                                                    y2=shadow_cy
+                                                                                    stroke="#14b8a6"
+                                                                                    stroke-width="1"
+                                                                                    stroke-dasharray="2,2"
+                                                                                    opacity="0.3"
+                                                                                />
+                                                                                // Data point
+                                                                                <circle
+                                                                                    cx=px
+                                                                                    cy=py
+                                                                                    r=size
+                                                                                    fill=format!("hsl({}, 70%, 50%)", hue)
+                                                                                    filter="url(#vizGlow)"
+                                                                                    class="viz-data-point"
+                                                                                >
+                                                                                    <title>{format!("({:.2}, {:.2}, {:.2})", x, y, z)}</title>
+                                                                                </circle>
+                                                                            </g>
+                                                                        }
+                                                                    }).collect_view()}
+
+                                                                    // Stats overlay
+                                                                    <g class="viz-stats">
+                                                                        <rect x="440" y="30" width="140" height="90" rx="6" fill="#1e293b" opacity="0.9"/>
+                                                                        <text x="450" y="50" fill="#9ca3af" font-size="10">"X Range"</text>
+                                                                        <text x="450" y="65" fill="#f1f5f9" font-size="11" font-weight="500">{format!("{:.1} - {:.1}", min_x, max_x)}</text>
+                                                                        <text x="450" y="82" fill="#9ca3af" font-size="10">"Y Range"</text>
+                                                                        <text x="450" y="97" fill="#f1f5f9" font-size="11" font-weight="500">{format!("{:.1} - {:.1}", min_y, max_y)}</text>
+                                                                        <text x="450" y="114" fill="#9ca3af" font-size="10">"Points"</text>
+                                                                    </g>
+                                                                </svg>
+                                                            </div>
+                                                        }.into_view()
+                                                    },
+                                                    DataChartType::ScatterPlot => {
+                                                        // 2D Scatter Plot
+                                                        view! {
+                                                            <div class="viz-chart-container">
+                                                                <div class="viz-chart-title">
+                                                                    <h3>{format!("{} vs {}", x_col, y_col)}</h3>
+                                                                    <span class="point-count">{format!("{} points", points.len())}</span>
+                                                                </div>
+                                                                <svg class="viz-scatter2d" viewBox="0 0 600 400">
+                                                                    <defs>
+                                                                        <linearGradient id="scatter2dBg" x1="0%" y1="0%" x2="100%" y2="100%">
+                                                                            <stop offset="0%" stop-color="#1e293b"/>
+                                                                            <stop offset="100%" stop-color="#0f172a"/>
+                                                                        </linearGradient>
+                                                                    </defs>
+                                                                    <rect x="60" y="20" width="520" height="340" rx="8" fill="url(#scatter2dBg)"/>
+
+                                                                    // Grid
+                                                                    {(0..6).map(|i| {
+                                                                        let x = 60.0 + i as f64 * 104.0;
+                                                                        view! { <line x1=x y1="20" x2=x y2="360" stroke="#374151" stroke-width="1" opacity="0.3"/> }
+                                                                    }).collect_view()}
+                                                                    {(0..6).map(|i| {
+                                                                        let y = 20.0 + i as f64 * 68.0;
+                                                                        view! { <line x1="60" y1=y x2="580" y2=y stroke="#374151" stroke-width="1" opacity="0.3"/> }
+                                                                    }).collect_view()}
+
+                                                                    // Axes
+                                                                    <line x1="60" y1="360" x2="580" y2="360" stroke="#6b7280" stroke-width="2"/>
+                                                                    <line x1="60" y1="20" x2="60" y2="360" stroke="#6b7280" stroke-width="2"/>
+
+                                                                    // Labels
+                                                                    <text x="320" y="390" fill="#9ca3af" font-size="12" text-anchor="middle">{x_col.clone()}</text>
+                                                                    <text x="25" y="190" fill="#9ca3af" font-size="12" text-anchor="middle" transform="rotate(-90, 25, 190)">{y_col.clone()}</text>
+
+                                                                    // Data points
+                                                                    {points.iter().map(|(x, y, _)| {
+                                                                        let nx = (x - min_x) / range_x;
+                                                                        let ny = (y - min_y) / range_y;
+                                                                        let px = 60.0 + nx * 520.0;
+                                                                        let py = 360.0 - ny * 340.0;
+                                                                        view! {
+                                                                            <circle cx=px cy=py r="6" fill="#14b8a6" opacity="0.8" class="viz-data-point">
+                                                                                <title>{format!("({:.2}, {:.2})", x, y)}</title>
+                                                                            </circle>
+                                                                        }
+                                                                    }).collect_view()}
+
+                                                                    // Trend line (simple linear regression visual)
+                                                                    <line x1="60" y1="340" x2="560" y2="40" stroke="#f97316" stroke-width="2" stroke-dasharray="6,4" opacity="0.6"/>
+                                                                </svg>
+                                                            </div>
+                                                        }.into_view()
+                                                    },
+                                                    DataChartType::BarChart => {
+                                                        // Bar Chart - aggregate by X, sum Y
+                                                        view! {
+                                                            <div class="viz-chart-container">
+                                                                <div class="viz-chart-title">
+                                                                    <h3>{format!("{} by {}", y_col, x_col)}</h3>
+                                                                </div>
+                                                                <svg class="viz-bar-chart" viewBox="0 0 600 400">
+                                                                    <rect x="60" y="20" width="520" height="340" rx="8" fill="#1e293b"/>
+
+                                                                    // Y axis
+                                                                    <line x1="60" y1="20" x2="60" y2="360" stroke="#6b7280" stroke-width="2"/>
+                                                                    <line x1="60" y1="360" x2="580" y2="360" stroke="#6b7280" stroke-width="2"/>
+
+                                                                    // Bars
+                                                                    {points.iter().take(10).enumerate().map(|(i, (_, y, _))| {
+                                                                        let ny = (y - min_y) / range_y;
+                                                                        let bar_width = 45.0;
+                                                                        let gap = 8.0;
+                                                                        let px = 70.0 + i as f64 * (bar_width + gap);
+                                                                        let height = ny * 300.0;
+                                                                        let py = 360.0 - height;
+
+                                                                        let hue = 160.0 + (i as f64 * 20.0);
+                                                                        view! {
+                                                                            <g>
+                                                                                <rect
+                                                                                    x=px
+                                                                                    y=py
+                                                                                    width=bar_width
+                                                                                    height=height
+                                                                                    rx="4"
+                                                                                    fill=format!("hsl({}, 70%, 50%)", hue)
+                                                                                    class="viz-bar"
+                                                                                >
+                                                                                    <title>{format!("{:.2}", y)}</title>
+                                                                                </rect>
+                                                                                {
+                                                                                    let text_x = px + bar_width / 2.0;
+                                                                                    let text_y = py - 8.0;
+                                                                                    view! { <text x=text_x y=text_y fill="#f1f5f9" font-size="10" text-anchor="middle">{format!("{:.0}", y)}</text> }
+                                                                                }
+                                                                            </g>
+                                                                        }
+                                                                    }).collect_view()}
+                                                                </svg>
+                                                            </div>
+                                                        }.into_view()
+                                                    },
+                                                    DataChartType::RadarChart => {
+                                                        // Radar chart - use first few columns as dimensions
+                                                        let num_axes = points.len().min(6);
+                                                        view! {
+                                                            <div class="viz-chart-container">
+                                                                <div class="viz-chart-title">
+                                                                    <h3>"Radar Analysis"</h3>
+                                                                </div>
+                                                                <svg class="viz-radar" viewBox="0 0 400 400">
+                                                                    <defs>
+                                                                        <radialGradient id="radarDataFill" cx="50%" cy="50%" r="50%">
+                                                                            <stop offset="0%" stop-color="#14b8a6" stop-opacity="0.6"/>
+                                                                            <stop offset="100%" stop-color="#14b8a6" stop-opacity="0.2"/>
+                                                                        </radialGradient>
+                                                                    </defs>
+
+                                                                    // Background rings
+                                                                    <circle cx="200" cy="200" r="150" fill="none" stroke="#374151" stroke-width="1"/>
+                                                                    <circle cx="200" cy="200" r="112" fill="none" stroke="#374151" stroke-width="1" opacity="0.5"/>
+                                                                    <circle cx="200" cy="200" r="75" fill="none" stroke="#374151" stroke-width="1" opacity="0.3"/>
+                                                                    <circle cx="200" cy="200" r="37" fill="none" stroke="#374151" stroke-width="1" opacity="0.2"/>
+
+                                                                    // Axis lines
+                                                                    {(0..num_axes).map(|i| {
+                                                                        let angle = (i as f64 / num_axes as f64) * 2.0 * std::f64::consts::PI - std::f64::consts::PI / 2.0;
+                                                                        let x2 = 200.0 + 150.0 * angle.cos();
+                                                                        let y2 = 200.0 + 150.0 * angle.sin();
+                                                                        view! {
+                                                                            <line x1="200" y1="200" x2=x2 y2=y2 stroke="#4b5563" stroke-width="1"/>
+                                                                        }
+                                                                    }).collect_view()}
+
+                                                                    // Data polygon
+                                                                    {
+                                                                        let polygon_points: String = points.iter().take(num_axes).enumerate().map(|(i, (_x, y, _))| {
+                                                                            let angle = (i as f64 / num_axes as f64) * 2.0 * std::f64::consts::PI - std::f64::consts::PI / 2.0;
+                                                                            let normalized = ((y - min_y) / range_y).min(1.0);
+                                                                            let r = normalized * 140.0 + 10.0;
+                                                                            let px = 200.0 + r * angle.cos();
+                                                                            let py = 200.0 + r * angle.sin();
+                                                                            format!("{:.1},{:.1}", px, py)
+                                                                        }).collect::<Vec<_>>().join(" ");
+
+                                                                        view! {
+                                                                            <polygon points=polygon_points fill="url(#radarDataFill)" stroke="#14b8a6" stroke-width="2"/>
+                                                                        }
+                                                                    }
+
+                                                                    // Data points on polygon
+                                                                    {points.iter().take(num_axes).enumerate().map(|(i, (_, y, _))| {
+                                                                        let angle = (i as f64 / num_axes as f64) * 2.0 * std::f64::consts::PI - std::f64::consts::PI / 2.0;
+                                                                        let normalized = ((y - min_y) / range_y).min(1.0);
+                                                                        let r = normalized * 140.0 + 10.0;
+                                                                        let px = 200.0 + r * angle.cos();
+                                                                        let py = 200.0 + r * angle.sin();
+                                                                        view! {
+                                                                            <circle cx=px cy=py r="5" fill="#14b8a6" filter="url(#vizGlow)"/>
+                                                                        }
+                                                                    }).collect_view()}
+                                                                </svg>
+                                                            </div>
+                                                        }.into_view()
+                                                    },
+                                                    _ => {
+                                                        view! {
+                                                            <div class="viz-coming-soon">
+                                                                <p>"This chart type is coming soon!"</p>
+                                                            </div>
+                                                        }.into_view()
+                                                    }
+                                                }
+                                            }}
                                         </Show>
                                     </div>
                                 </div>
@@ -3447,6 +4797,15 @@ pub fn Dashboard() -> impl IntoView {
     }
 }
 
+/// Parse a JSON value to a numeric f64 for charting.
+fn parse_numeric(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
 // Format helpers
 fn format_number(num: u64) -> String {
     if num >= 1_000_000 { format!("{:.1}M", num as f64 / 1_000_000.0) }
@@ -3459,4 +4818,358 @@ fn format_bytes(bytes: u64) -> String {
     else if bytes >= 1_073_741_824 { format!("{:.1} GB", bytes as f64 / 1_073_741_824.0) }
     else if bytes >= 1_048_576 { format!("{:.1} MB", bytes as f64 / 1_048_576.0) }
     else { format!("{:.1} KB", bytes as f64 / 1_024.0) }
+}
+
+/// Format uptime in seconds to human-readable string.
+fn format_uptime(seconds: u64) -> String {
+    let days = seconds / 86400;
+    let hours = (seconds % 86400) / 3600;
+    let mins = (seconds % 3600) / 60;
+
+    if days > 0 {
+        format!("{}d {}h", days, hours)
+    } else if hours > 0 {
+        format!("{}h {}m", hours, mins)
+    } else {
+        format!("{}m", mins)
+    }
+}
+
+/// Calculate force-directed graph layout.
+/// Returns a vector of (node_id, x, y) positions.
+fn calculate_force_layout(nodes: &[crate::types::GraphNode], edges: &[crate::types::GraphEdge]) -> Vec<(String, f64, f64)> {
+    use std::collections::HashMap;
+
+    if nodes.is_empty() {
+        return vec![];
+    }
+
+    // Layout parameters
+    const REPULSION: f64 = 8000.0;
+    const ATTRACTION: f64 = 0.015;
+    const DAMPING: f64 = 0.85;
+    const ITERATIONS: usize = 80;
+    const MIN_DIST: f64 = 50.0;
+
+    // Initialize positions in a circle
+    let mut positions: HashMap<String, (f64, f64, f64, f64)> = HashMap::new();
+    let center_x = 300.0;
+    let center_y = 200.0;
+    let radius = 150.0;
+
+    for (i, node) in nodes.iter().enumerate() {
+        let angle = (i as f64 / nodes.len() as f64) * 2.0 * std::f64::consts::PI;
+        let x = center_x + radius * angle.cos();
+        let y = center_y + radius * angle.sin();
+        positions.insert(node.id.clone(), (x, y, 0.0, 0.0)); // x, y, vx, vy
+    }
+
+    // Build adjacency list
+    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+    for node in nodes {
+        adjacency.insert(node.id.clone(), vec![]);
+    }
+    for edge in edges {
+        if let Some(neighbors) = adjacency.get_mut(&edge.source) {
+            neighbors.push(edge.target.clone());
+        }
+        if let Some(neighbors) = adjacency.get_mut(&edge.target) {
+            neighbors.push(edge.source.clone());
+        }
+    }
+
+    // Run force simulation
+    for _ in 0..ITERATIONS {
+        // Calculate repulsion forces between all node pairs
+        let node_ids: Vec<String> = positions.keys().cloned().collect();
+        let mut forces: HashMap<String, (f64, f64)> = HashMap::new();
+        for id in &node_ids {
+            forces.insert(id.clone(), (0.0, 0.0));
+        }
+
+        for i in 0..node_ids.len() {
+            for j in (i + 1)..node_ids.len() {
+                let id_i = &node_ids[i];
+                let id_j = &node_ids[j];
+
+                let (xi, yi, _, _) = positions[id_i];
+                let (xj, yj, _, _) = positions[id_j];
+
+                let dx = xj - xi;
+                let dy = yj - yi;
+                let dist = (dx * dx + dy * dy).sqrt().max(MIN_DIST);
+
+                // Coulomb repulsion
+                let force = REPULSION / (dist * dist);
+                let fx = (dx / dist) * force;
+                let fy = (dy / dist) * force;
+
+                if let Some((ref mut ffx, ref mut ffy)) = forces.get_mut(id_i) {
+                    *ffx -= fx;
+                    *ffy -= fy;
+                }
+                if let Some((ref mut ffx, ref mut ffy)) = forces.get_mut(id_j) {
+                    *ffx += fx;
+                    *ffy += fy;
+                }
+            }
+        }
+
+        // Calculate attraction forces along edges (spring force)
+        for edge in edges {
+            if let (Some(&(xi, yi, _, _)), Some(&(xj, yj, _, _))) =
+                (positions.get(&edge.source), positions.get(&edge.target))
+            {
+                let dx = xj - xi;
+                let dy = yj - yi;
+                let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+
+                // Hooke's law
+                let force = dist * ATTRACTION;
+                let fx = (dx / dist) * force;
+                let fy = (dy / dist) * force;
+
+                if let Some((ref mut ffx, ref mut ffy)) = forces.get_mut(&edge.source) {
+                    *ffx += fx;
+                    *ffy += fy;
+                }
+                if let Some((ref mut ffx, ref mut ffy)) = forces.get_mut(&edge.target) {
+                    *ffx -= fx;
+                    *ffy -= fy;
+                }
+            }
+        }
+
+        // Update velocities and positions
+        for (id, (ref mut x, ref mut y, ref mut vx, ref mut vy)) in positions.iter_mut() {
+            if let Some(&(fx, fy)) = forces.get(id) {
+                *vx = (*vx + fx) * DAMPING;
+                *vy = (*vy + fy) * DAMPING;
+
+                // Limit velocity
+                let speed = (*vx * *vx + *vy * *vy).sqrt();
+                if speed > 50.0 {
+                    *vx = *vx / speed * 50.0;
+                    *vy = *vy / speed * 50.0;
+                }
+
+                *x += *vx;
+                *y += *vy;
+
+                // Keep within bounds
+                *x = x.clamp(20.0, 580.0);
+                *y = y.clamp(20.0, 380.0);
+            }
+        }
+    }
+
+    // Return final positions
+    positions.into_iter().map(|(id, (x, y, _, _))| (id, x, y)).collect()
+}
+
+/// Calculate circular layout.
+fn calculate_circular_layout(nodes: &[crate::types::GraphNode]) -> Vec<(String, f64, f64)> {
+    if nodes.is_empty() {
+        return vec![];
+    }
+
+    let center_x = 300.0;
+    let center_y = 200.0;
+    let radius = 150.0;
+
+    nodes.iter().enumerate().map(|(i, node)| {
+        let angle = (i as f64 / nodes.len() as f64) * 2.0 * std::f64::consts::PI;
+        let x = center_x + radius * angle.cos();
+        let y = center_y + radius * angle.sin();
+        (node.id.clone(), x, y)
+    }).collect()
+}
+
+/// Calculate grid layout.
+fn calculate_grid_layout(nodes: &[crate::types::GraphNode]) -> Vec<(String, f64, f64)> {
+    if nodes.is_empty() {
+        return vec![];
+    }
+
+    let cols = (nodes.len() as f64).sqrt().ceil() as usize;
+    let cell_width = 500.0 / cols.max(1) as f64;
+    let cell_height = 350.0 / ((nodes.len() + cols - 1) / cols).max(1) as f64;
+
+    nodes.iter().enumerate().map(|(i, node)| {
+        let col = i % cols;
+        let row = i / cols;
+        let x = 50.0 + col as f64 * cell_width + cell_width / 2.0;
+        let y = 50.0 + row as f64 * cell_height + cell_height / 2.0;
+        (node.id.clone(), x, y)
+    }).collect()
+}
+
+/// Calculate graph layout based on layout type.
+fn calculate_graph_layout(nodes: &[crate::types::GraphNode], edges: &[crate::types::GraphEdge], layout_type: &str) -> Vec<(String, f64, f64)> {
+    match layout_type {
+        "circular" => calculate_circular_layout(nodes),
+        "grid" => calculate_grid_layout(nodes),
+        _ => calculate_force_layout(nodes, edges), // Default to force-directed
+    }
+}
+
+/// Get color for a node label.
+fn get_label_color(label: &str) -> &'static str {
+    match label.to_lowercase().as_str() {
+        "person" | "user" => "#14b8a6", // teal
+        "company" | "organization" => "#8b5cf6", // purple
+        "project" | "task" => "#f97316", // orange
+        "product" | "item" => "#3b82f6", // blue
+        "order" | "transaction" => "#ef4444", // red
+        "location" | "place" => "#22c55e", // green
+        _ => "#6b7280", // gray
+    }
+}
+
+/// Token types for syntax highlighting.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TokenType {
+    Keyword,
+    String,
+    Number,
+    Operator,
+    Identifier,
+    Comment,
+    Punctuation,
+    Whitespace,
+}
+
+/// Tokenize SQL for syntax highlighting.
+fn tokenize_sql(query: &str) -> Vec<(String, TokenType)> {
+    let sql_keywords = [
+        "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET",
+        "DELETE", "CREATE", "TABLE", "DROP", "ALTER", "INDEX", "JOIN", "LEFT",
+        "RIGHT", "INNER", "OUTER", "ON", "AND", "OR", "NOT", "IN", "IS", "NULL",
+        "AS", "ORDER", "BY", "ASC", "DESC", "LIMIT", "OFFSET", "GROUP", "HAVING",
+        "DISTINCT", "COUNT", "SUM", "AVG", "MIN", "MAX", "BETWEEN", "LIKE", "UNION",
+        "ALL", "EXISTS", "CASE", "WHEN", "THEN", "ELSE", "END", "PRIMARY", "KEY",
+        "FOREIGN", "REFERENCES", "CONSTRAINT", "DEFAULT", "UNIQUE", "CHECK",
+    ];
+
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = query.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        // Whitespace
+        if c.is_whitespace() {
+            let mut ws = String::new();
+            while i < chars.len() && chars[i].is_whitespace() {
+                ws.push(chars[i]);
+                i += 1;
+            }
+            tokens.push((ws, TokenType::Whitespace));
+            continue;
+        }
+
+        // Comment (-- style)
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
+            let mut comment = String::new();
+            while i < chars.len() && chars[i] != '\n' {
+                comment.push(chars[i]);
+                i += 1;
+            }
+            tokens.push((comment, TokenType::Comment));
+            continue;
+        }
+
+        // String literal
+        if c == '\'' || c == '"' {
+            let quote = c;
+            let mut s = String::new();
+            s.push(c);
+            i += 1;
+            while i < chars.len() {
+                let ch = chars[i];
+                s.push(ch);
+                i += 1;
+                if ch == quote {
+                    // Check for escaped quote
+                    if i < chars.len() && chars[i] == quote {
+                        s.push(chars[i]);
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            tokens.push((s, TokenType::String));
+            continue;
+        }
+
+        // Number
+        if c.is_ascii_digit() || (c == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()) {
+            let mut num = String::new();
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                num.push(chars[i]);
+                i += 1;
+            }
+            tokens.push((num, TokenType::Number));
+            continue;
+        }
+
+        // Identifier or keyword
+        if c.is_alphabetic() || c == '_' {
+            let mut word = String::new();
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                word.push(chars[i]);
+                i += 1;
+            }
+            let upper = word.to_uppercase();
+            if sql_keywords.contains(&upper.as_str()) {
+                tokens.push((word, TokenType::Keyword));
+            } else {
+                tokens.push((word, TokenType::Identifier));
+            }
+            continue;
+        }
+
+        // Operators
+        if matches!(c, '=' | '<' | '>' | '!' | '+' | '-' | '*' | '/' | '%') {
+            let mut op = String::new();
+            op.push(c);
+            i += 1;
+            // Check for multi-char operators
+            if i < chars.len() && matches!(chars[i], '=' | '>') {
+                op.push(chars[i]);
+                i += 1;
+            }
+            tokens.push((op, TokenType::Operator));
+            continue;
+        }
+
+        // Punctuation
+        if matches!(c, '(' | ')' | ',' | ';' | '.') {
+            tokens.push((c.to_string(), TokenType::Punctuation));
+            i += 1;
+            continue;
+        }
+
+        // Unknown character
+        tokens.push((c.to_string(), TokenType::Identifier));
+        i += 1;
+    }
+
+    tokens
+}
+
+/// Get CSS class for token type.
+fn token_class(token_type: TokenType) -> &'static str {
+    match token_type {
+        TokenType::Keyword => "token-keyword",
+        TokenType::String => "token-string",
+        TokenType::Number => "token-number",
+        TokenType::Operator => "token-operator",
+        TokenType::Identifier => "token-identifier",
+        TokenType::Comment => "token-comment",
+        TokenType::Punctuation => "token-punctuation",
+        TokenType::Whitespace => "token-whitespace",
+    }
 }

@@ -13,10 +13,10 @@
 //! @author AutomataNexus Development Team
 
 use crate::planner::{
-    AggregateFunction, CreateIndexNode, CreateTableConstraint, CreateTableNode,
+    AggregateFunction, AlterTableNode, CreateIndexNode, CreateTableConstraint, CreateTableNode,
     DeleteNode, DropIndexNode, DropTableNode, InsertNode, InsertPlanSource, JoinStrategy,
-    PlanBinaryOp, PlanExpression, PlanJoinType, PlanLiteral, PlanNode, PlanUnaryOp,
-    QueryPlan, ScanNode, UpdateNode,
+    PlanAlterOperation, PlanBinaryOp, PlanExpression, PlanJoinType, PlanLiteral, PlanNode,
+    PlanUnaryOp, QueryPlan, ScanNode, UpdateNode,
 };
 use aegis_common::{DataType, Row, Value};
 use std::collections::HashMap;
@@ -178,6 +178,98 @@ impl ExecutionContext {
         self.tables.remove(name);
         self.table_schemas.remove(name);
         self.indexes.remove(name);
+
+        Ok(())
+    }
+
+    /// Alter a table.
+    pub fn alter_table(&mut self, name: &str, op: &PlanAlterOperation) -> ExecutorResult<()> {
+        let schema = self.table_schemas.get_mut(name)
+            .ok_or_else(|| ExecutorError::TableNotFound(name.to_string()))?;
+
+        match op {
+            PlanAlterOperation::AddColumn(col) => {
+                // Check if column already exists
+                if schema.columns.iter().any(|c| c.name == col.name) {
+                    return Err(ExecutorError::InvalidOperation(format!(
+                        "Column '{}' already exists in table '{}'",
+                        col.name, name
+                    )));
+                }
+                schema.columns.push(ColumnSchema {
+                    name: col.name.clone(),
+                    data_type: col.data_type.clone(),
+                    nullable: col.nullable,
+                    default: None, // TODO: evaluate default expression
+                });
+
+                // Add null values to existing rows
+                if let Some(table_data) = self.tables.get(name) {
+                    let mut table = table_data.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+                    for row in table.rows.iter_mut() {
+                        row.values.push(Value::Null);
+                    }
+                }
+            }
+            PlanAlterOperation::DropColumn { name: col_name, if_exists } => {
+                let col_idx = schema.columns.iter().position(|c| c.name == *col_name);
+                match col_idx {
+                    Some(idx) => {
+                        schema.columns.remove(idx);
+                        // Remove values from existing rows
+                        if let Some(table_data) = self.tables.get(name) {
+                            let mut table = table_data.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+                            for row in table.rows.iter_mut() {
+                                if idx < row.values.len() {
+                                    row.values.remove(idx);
+                                }
+                            }
+                        }
+                    }
+                    None if *if_exists => {}
+                    None => {
+                        return Err(ExecutorError::ColumnNotFound(col_name.clone()));
+                    }
+                }
+            }
+            PlanAlterOperation::RenameColumn { old_name, new_name } => {
+                let col = schema.columns.iter_mut().find(|c| c.name == *old_name)
+                    .ok_or_else(|| ExecutorError::ColumnNotFound(old_name.clone()))?;
+                col.name = new_name.clone();
+            }
+            PlanAlterOperation::AlterColumn { name: col_name, data_type, set_not_null, set_default: _ } => {
+                let col = schema.columns.iter_mut().find(|c| c.name == *col_name)
+                    .ok_or_else(|| ExecutorError::ColumnNotFound(col_name.clone()))?;
+
+                if let Some(dt) = data_type {
+                    col.data_type = dt.clone();
+                }
+                if let Some(not_null) = set_not_null {
+                    col.nullable = !not_null;
+                }
+                // TODO: handle set_default
+            }
+            PlanAlterOperation::RenameTable { new_name } => {
+                // Move data to new table name
+                if let Some(rows) = self.tables.remove(name) {
+                    self.tables.insert(new_name.clone(), rows);
+                }
+                if let Some(schema) = self.table_schemas.remove(name) {
+                    self.table_schemas.insert(new_name.clone(), schema);
+                }
+                if let Some(indexes) = self.indexes.remove(name) {
+                    self.indexes.insert(new_name.clone(), indexes);
+                }
+                // Return early since name is now invalid
+                return Ok(());
+            }
+            PlanAlterOperation::AddConstraint(_constraint) => {
+                // TODO: implement constraint handling
+            }
+            PlanAlterOperation::DropConstraint { name: _ } => {
+                // TODO: implement constraint handling
+            }
+        }
 
         Ok(())
     }
@@ -458,6 +550,7 @@ impl Executor {
             // DDL operations
             PlanNode::CreateTable(node) => self.execute_create_table(node),
             PlanNode::DropTable(node) => self.execute_drop_table(node),
+            PlanNode::AlterTable(node) => self.execute_alter_table(node),
             PlanNode::CreateIndex(node) => self.execute_create_index(node),
             PlanNode::DropIndex(node) => self.execute_drop_index(node),
 
@@ -538,6 +631,28 @@ impl Executor {
         Ok(QueryResult {
             columns: vec!["result".to_string()],
             rows: vec![Row { values: vec![Value::String(format!("Table '{}' dropped", node.table_name))] }],
+            rows_affected: 0,
+        })
+    }
+
+    /// Execute ALTER TABLE.
+    fn execute_alter_table(&self, node: &AlterTableNode) -> ExecutorResult<QueryResult> {
+        let mut ctx = self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        for op in &node.operations {
+            ctx.alter_table(&node.table_name, op)?;
+        }
+
+        let op_count = node.operations.len();
+        let msg = if op_count == 1 {
+            format!("Table '{}' altered", node.table_name)
+        } else {
+            format!("Table '{}' altered ({} operations)", node.table_name, op_count)
+        };
+
+        Ok(QueryResult {
+            columns: vec!["result".to_string()],
+            rows: vec![Row { values: vec![Value::String(msg)] }],
             rows_affected: 0,
         })
     }
@@ -739,7 +854,7 @@ impl Executor {
             PlanNode::Empty => Ok(Box::new(EmptyOperator::new())),
 
             // DDL and DML nodes are handled in execute(), not here
-            PlanNode::CreateTable(_) | PlanNode::DropTable(_) |
+            PlanNode::CreateTable(_) | PlanNode::DropTable(_) | PlanNode::AlterTable(_) |
             PlanNode::CreateIndex(_) | PlanNode::DropIndex(_) |
             PlanNode::Insert(_) | PlanNode::Update(_) | PlanNode::Delete(_) => {
                 Err(ExecutorError::Internal("DDL/DML nodes should not be in operator tree".to_string()))
@@ -2562,5 +2677,103 @@ mod tests {
 
         let result = evaluate_expression(&not_like_expr, &row, &columns).unwrap();
         assert_eq!(result, Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_alter_table() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, AlterTableNode, PlanAlterOperation};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // Create a table
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "alter_test".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Add a column
+        let add_column_plan = QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: "alter_test".to_string(),
+                operations: vec![
+                    PlanAlterOperation::AddColumn(CreateColumnDef {
+                        name: "name".to_string(),
+                        data_type: DataType::Text,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    }),
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        let result = executor.execute(&add_column_plan).unwrap();
+        match &result.rows[0].values[0] {
+            Value::String(s) => assert!(s.contains("altered")),
+            _ => panic!("Expected string result"),
+        }
+
+        // Verify the column was added
+        let schema = executor.context.read().unwrap().get_table_schema("alter_test").unwrap().clone();
+        assert_eq!(schema.columns.len(), 2);
+        assert_eq!(schema.columns[1].name, "name");
+
+        // Rename the column
+        let rename_column_plan = QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: "alter_test".to_string(),
+                operations: vec![
+                    PlanAlterOperation::RenameColumn {
+                        old_name: "name".to_string(),
+                        new_name: "full_name".to_string(),
+                    },
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&rename_column_plan).unwrap();
+
+        // Verify the column was renamed
+        let schema = executor.context.read().unwrap().get_table_schema("alter_test").unwrap().clone();
+        assert_eq!(schema.columns[1].name, "full_name");
+
+        // Drop the column
+        let drop_column_plan = QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: "alter_test".to_string(),
+                operations: vec![
+                    PlanAlterOperation::DropColumn {
+                        name: "full_name".to_string(),
+                        if_exists: false,
+                    },
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&drop_column_plan).unwrap();
+
+        // Verify the column was dropped
+        let schema = executor.context.read().unwrap().get_table_schema("alter_test").unwrap().clone();
+        assert_eq!(schema.columns.len(), 1);
     }
 }

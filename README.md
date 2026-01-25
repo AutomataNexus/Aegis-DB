@@ -8,7 +8,7 @@
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status">
-  <img src="https://img.shields.io/badge/tests-462%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-463%20passing-brightgreen.svg" alt="Tests">
   <img src="https://img.shields.io/badge/version-0.1.7-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg" alt="Platform">
 </p>

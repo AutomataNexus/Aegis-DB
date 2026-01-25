@@ -1,0 +1,15 @@
+[Unit]
+Description=Aegis-DB AxonML Node
+After=network.target
+
+[Service]
+Type=simple
+User=devops
+WorkingDirectory=/opt/AxonML
+ExecStart=/opt/Aegis-DB/target/release/aegis-server --port 7001 --node-name AxonML --peers 127.0.0.1:9090,127.0.0.1:9091 --data-dir /opt/AxonML/data/aegis-db
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

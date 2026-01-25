@@ -40,7 +40,7 @@ Key Components:
 | SQL Parser | aegis-query | ✅ Complete | 8 |
 | Semantic Analyzer | aegis-query | ✅ Complete | 3 |
 | Query Planner | aegis-query | ✅ Complete | 3 |
-| Query Executor | aegis-query | ✅ Complete | 3 |
+| Query Executor | aegis-query | ✅ Complete | 13 |
 | REST API | aegis-server | ✅ Complete | 7 |
 | Common Types | aegis-common | ✅ Complete | 4 |
 
@@ -65,7 +65,7 @@ Key Components:
 | Web Dashboard | aegis-dashboard | ✅ Complete | - |
 | E2E Integration Tests | aegis-server | ✅ Complete | 23 |
 
-**Total: 410 tests passing**
+**Total: 463 tests passing**
 
 ### Phase 4-5: Enterprise Features - COMPLETE
 - Enterprise Authentication (LDAP, OAuth2, OIDC)
@@ -411,11 +411,19 @@ pub struct QueryAnalyzer {
 }
 
 pub enum QueryPlan {
+    // DML Operations
     Select(SelectPlan),
-    Insert(InsertPlan),
+    Insert(InsertPlan),    // Supports VALUES and SELECT subqueries
     Update(UpdatePlan),
     Delete(DeletePlan),
-    DDL(DDLPlan),
+    // DDL Operations
+    CreateTable(CreateTablePlan),
+    DropTable(DropTablePlan),
+    AlterTable(AlterTablePlan),  // ADD/DROP/RENAME COLUMN, etc.
+    CreateIndex(CreateIndexPlan),
+    DropIndex(DropIndexPlan),
+    // Transaction Control
+    Begin, Commit, Rollback,
 }
 ```
 
