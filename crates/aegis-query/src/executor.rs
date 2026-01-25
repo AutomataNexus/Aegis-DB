@@ -1010,21 +1010,49 @@ impl<'a> ProjectOperator<'a> {
     fn new(input: Box<dyn Operator + 'a>, expressions: Vec<crate::planner::ProjectionExpr>) -> Self {
         let input_columns = input.columns().to_vec();
 
-        let columns: Vec<String> = expressions
-            .iter()
-            .enumerate()
-            .map(|(i, proj_expr)| {
-                // Use alias if provided, otherwise try to extract name from expression
-                proj_expr.alias.clone().unwrap_or_else(|| {
-                    extract_column_name(&proj_expr.expr)
-                        .unwrap_or_else(|| format!("column_{}", i))
-                })
-            })
-            .collect();
+        // Expand wildcards in expressions and build column names
+        let mut expanded_expressions = Vec::new();
+        let mut columns = Vec::new();
+
+        for (i, proj_expr) in expressions.iter().enumerate() {
+            // Check if this is a wildcard expression (SELECT *)
+            if let PlanExpression::Column { name, table, .. } = &proj_expr.expr {
+                if name == "*" {
+                    // Expand to all input columns (optionally filtered by table)
+                    for input_col in &input_columns {
+                        // For table-qualified wildcards (table.*), filter by table prefix
+                        if let Some(tbl) = table {
+                            // Only include columns that match the table (simplified: check prefix)
+                            if !input_col.starts_with(&format!("{}.", tbl)) && input_col != input_col {
+                                // For now, include all since we don't have table prefixes in column names
+                            }
+                        }
+                        expanded_expressions.push(crate::planner::ProjectionExpr {
+                            expr: PlanExpression::Column {
+                                table: None,
+                                name: input_col.clone(),
+                                data_type: DataType::Any,
+                            },
+                            alias: None,
+                        });
+                        columns.push(input_col.clone());
+                    }
+                    continue;
+                }
+            }
+
+            // Regular expression
+            expanded_expressions.push(proj_expr.clone());
+            let col_name = proj_expr.alias.clone().unwrap_or_else(|| {
+                extract_column_name(&proj_expr.expr)
+                    .unwrap_or_else(|| format!("column_{}", i))
+            });
+            columns.push(col_name);
+        }
 
         Self {
             input,
-            expressions,
+            expressions: expanded_expressions,
             columns,
             input_columns,
         }

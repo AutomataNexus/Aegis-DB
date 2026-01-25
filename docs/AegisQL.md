@@ -82,14 +82,27 @@ AegisQL is the query language for the Aegis Database Platform. It extends standa
 ### Connecting
 
 ```bash
-# Via CLI
-aegis-cli --host localhost --port 9090
+# Via CLI - using shorthand
+aegis-client -d nexusscribe shell
+
+# Via CLI - using server URL
+aegis-client -s http://localhost:9090 shell
+
+# Via CLI - execute query directly
+aegis-client -d nexusscribe query "SELECT * FROM users LIMIT 10"
 
 # Via REST API
 curl -X POST http://localhost:9090/api/v1/query \
   -H "Content-Type: application/json" \
-  -d '{"query": "SELECT * FROM users LIMIT 10"}'
+  -d '{"sql": "SELECT * FROM users LIMIT 10", "params": []}'
 ```
+
+**CLI Shorthand Names:**
+| Name | Port |
+|------|------|
+| `dashboard` | 9090 |
+| `axonml` | 7001 |
+| `nexusscribe` | 9091 |
 
 ### Basic Queries
 

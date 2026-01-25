@@ -211,14 +211,14 @@ Open http://localhost:8000 in your browser.
 
 Using the CLI:
 ```bash
-aegis query "SELECT 1 + 1 AS result"
+aegis-client -d dashboard query "SELECT 1 + 1 AS result"
 ```
 
 Using curl:
 ```bash
 curl -X POST http://localhost:9090/api/v1/query \
   -H "Content-Type: application/json" \
-  -d '{"sql": "SELECT 1 + 1 AS result"}'
+  -d '{"sql": "SELECT 1 + 1 AS result", "params": []}'
 ```
 
 ### 4. Store and Retrieve Data
@@ -361,125 +361,146 @@ export AEGIS_LDAP_PASSWORD=secret
 
 ## Using the CLI
 
-### Service Management
+The CLI tool is `aegis-client` (binary name: `aegis`). Build with `cargo build -p aegisdb-cli --release`.
+
+### Connecting to a Database
 
 ```bash
-# Start all services
-aegis start
+# Using shorthand names
+aegis-client -d nexusscribe query "SELECT 1"
+aegis-client -d axonml query "SELECT * FROM users"
+aegis-client -d dashboard status
 
-# Stop all services
-aegis stop
+# Using aegis:// URL
+aegis-client -d aegis://localhost:9091/mydb query "SELECT 1"
 
-# Restart all services
-aegis restart
+# Using host:port
+aegis-client -d localhost:7001 query "SELECT 1"
 
-# Check status
-aegis status
-
-# View logs
-aegis logs
-aegis logs server      # Server logs only
-aegis logs dashboard   # Dashboard logs only
-
-# Individual service control
-aegis server start
-aegis server stop
-aegis dashboard start
-aegis dashboard stop
-
-# Rebuild from source
-aegis build
+# Using server flag
+aegis-client -s http://localhost:9091 query "SELECT 1"
 ```
+
+**Shorthand Names:**
+| Name | Port | Description |
+|------|------|-------------|
+| `dashboard` | 9090 | Main dashboard server |
+| `local` | 9090 | Alias for dashboard |
+| `axonml` | 7001 | AxonML node |
+| `nexusscribe` | 9091 | NexusScribe node |
 
 ### Interactive Shell
 
 ```bash
 # Start interactive SQL shell
-aegis shell
+aegis-client -d nexusscribe shell
 
 # Connect to specific server
-aegis shell --host db.example.com --port 9090
-
-# With authentication
-aegis shell -u admin -P
+aegis-client -s http://db.example.com:9090 shell
 ```
 
-**Shell Commands:**
+**Shell Session:**
 
 ```
+Aegis SQL Shell
+Connected to: http://localhost:9091
+Type 'exit' or 'quit' to exit, 'help' for commands.
+
 aegis> SELECT * FROM users LIMIT 5;
-┌────┬─────────┬─────────────────────┐
-│ id │ name    │ email               │
-├────┼─────────┼─────────────────────┤
-│ 1  │ Alice   │ alice@example.com   │
-│ 2  │ Bob     │ bob@example.com     │
-└────┴─────────┴─────────────────────┘
-2 rows (0.012s)
++----+-------+-------------------+
+| id | name  | email             |
++====+=======+===================+
+| 1  | Alice | alice@example.com |
+| 2  | Bob   | bob@example.com   |
++----+-------+-------------------+
 
-aegis> \help
-Available commands:
-  \help       Show this help
-  \tables     List all tables
-  \describe   Describe a table
-  \format     Change output format (table, json, csv)
-  \timing     Toggle timing display
-  \quit       Exit the shell
+2 row(s) returned in 0 ms
 
-aegis> \format json
-Output format set to: json
+aegis> \d
+(lists tables)
 
-aegis> \quit
-Goodbye!
+aegis> \h
+Commands:
+  \q, exit, quit  - Exit the shell
+  \d              - List tables
+  \h, help        - Show this help
+  Any SQL         - Execute SQL query
+
+aegis> \q
+Bye!
 ```
 
 ### Query Execution
 
 ```bash
 # Execute a single query
-aegis query "SELECT * FROM users WHERE active = true"
-
-# Execute from file
-aegis query -f queries.sql
+aegis-client -d nexusscribe query "SELECT * FROM users WHERE active = true"
 
 # Output formats
-aegis query "SELECT * FROM users" --format table
-aegis query "SELECT * FROM users" --format json
-aegis query "SELECT * FROM users" --format csv
+aegis-client -d nexusscribe query "SELECT * FROM users" --format table
+aegis-client -d nexusscribe query "SELECT * FROM users" --format json
+aegis-client -d nexusscribe query "SELECT * FROM users" --format csv
 
 # Save output to file
-aegis query "SELECT * FROM users" -o users.json --format json
+aegis-client -d nexusscribe query "SELECT * FROM users" -f json > users.json
 ```
 
-### Data Import/Export
+### Key-Value Operations
 
-**Import:**
 ```bash
-# Import CSV
-aegis import users.csv --table users --format csv
+# Set a key
+aegis-client -d nexusscribe kv set mykey "myvalue"
 
-# Import JSON
-aegis import users.json --table users --format json
+# Get a key
+aegis-client -d nexusscribe kv get mykey
 
-# Import with options
-aegis import data.csv \
-  --table users \
-  --format csv \
-  --delimiter ";" \
-  --header true \
-  --batch-size 1000 \
-  --on-error skip
+# Delete a key
+aegis-client -d nexusscribe kv delete mykey
+
+# List all keys
+aegis-client -d nexusscribe kv list
+
+# List keys with prefix
+aegis-client -d nexusscribe kv list --prefix "user:"
 ```
 
-**Export:**
+### Status and Metrics
+
 ```bash
-# Export query results
-aegis export "SELECT * FROM users" -o users.csv --format csv
+# Server health check
+aegis-client -d nexusscribe status
 
-# Export entire table
-aegis export --table users -o backup.json --format json
+# Server metrics
+aegis-client -d nexusscribe metrics
 
-# Export with compression
-aegis export --table logs -o logs.csv.gz --compress gzip
+# Cluster information
+aegis-client -d nexusscribe cluster
+
+# List all tables
+aegis-client -d nexusscribe tables
+```
+
+### Command Reference
+
+```
+aegis-client [OPTIONS] <COMMAND>
+
+Commands:
+  query    Execute a SQL query
+  status   Check server health and status
+  metrics  Get server metrics
+  tables   List all tables
+  kv       Key-value store operations
+  cluster  Cluster information
+  shell    Interactive SQL shell
+  help     Print help
+
+Options:
+  -s, --server <SERVER>      Server URL [default: http://localhost:9090]
+  -d, --database <DATABASE>  Database: shorthand (nexusscribe, axonml, dashboard),
+                             URL (aegis://host:port/db), or host:port
+  -h, --help                 Print help
+  -V, --version              Print version
 ```
 
 ---

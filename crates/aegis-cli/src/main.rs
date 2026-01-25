@@ -3,13 +3,15 @@
 //! Command-line tool for managing and interacting with Aegis databases.
 //! Provides database operations, query execution, and administration commands.
 //!
-//! @version 0.1.1
+//! @version 0.1.2
 //! @author AutomataNexus Development Team
 
 use clap::{Parser, Subcommand};
 use comfy_table::{Table, Row, Cell, ContentArrangement};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 // =============================================================================
@@ -26,7 +28,7 @@ struct Cli {
     #[arg(short, long, global = true, default_value = "http://localhost:9090")]
     server: String,
 
-    /// Database connection URL (e.g., aegis://localhost:9090/dbname)
+    /// Database: shorthand (nexusscribe, axonml, dashboard), URL (aegis://host:port/db), or host:port
     #[arg(short, long, global = true)]
     database: Option<String>,
 
@@ -66,6 +68,36 @@ enum Commands {
 
     /// Interactive SQL shell
     Shell,
+
+    /// Manage registered nodes/databases
+    Nodes {
+        #[command(subcommand)]
+        action: NodesCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum NodesCommands {
+    /// List all registered nodes
+    List,
+    /// Add a new node shorthand
+    Add {
+        /// Shorthand name for the node
+        name: String,
+        /// Server URL (e.g., http://localhost:9091)
+        url: String,
+    },
+    /// Remove a node shorthand
+    Remove {
+        /// Shorthand name to remove
+        name: String,
+    },
+    /// Sync nodes from a running cluster
+    Sync {
+        /// Server to query for cluster nodes (default: http://localhost:9090)
+        #[arg(short, long, default_value = "http://localhost:9090")]
+        from: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -167,11 +199,117 @@ struct KvSetRequest {
 }
 
 // =============================================================================
+// Node Registry
+// =============================================================================
+
+/// Node registry stored in ~/.aegis/nodes.json
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct NodeRegistry {
+    nodes: HashMap<String, NodeEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct NodeEntry {
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    added_at: Option<String>,
+}
+
+impl NodeRegistry {
+    fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".aegis").join("nodes.json")
+    }
+
+    fn load() -> Self {
+        let path = Self::config_path();
+        if path.exists() {
+            if let Ok(data) = std::fs::read_to_string(&path) {
+                if let Ok(registry) = serde_json::from_str(&data) {
+                    return registry;
+                }
+            }
+        }
+        // Return default with built-in nodes
+        let mut registry = NodeRegistry::default();
+        registry.add_builtin_nodes();
+        registry
+    }
+
+    fn save(&self) -> Result<(), String> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create config directory: {}", e))?;
+        }
+        let data = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize: {}", e))?;
+        std::fs::write(&path, data)
+            .map_err(|e| format!("Failed to write config: {}", e))?;
+        Ok(())
+    }
+
+    fn add_builtin_nodes(&mut self) {
+        // Only add if not already present
+        if !self.nodes.contains_key("dashboard") {
+            self.nodes.insert("dashboard".to_string(), NodeEntry {
+                url: "http://localhost:9090".to_string(),
+                node_id: None,
+                role: Some("primary".to_string()),
+                status: Some("builtin".to_string()),
+                added_at: Some("builtin".to_string()),
+            });
+        }
+        if !self.nodes.contains_key("local") {
+            self.nodes.insert("local".to_string(), NodeEntry {
+                url: "http://localhost:9090".to_string(),
+                node_id: None,
+                role: Some("primary".to_string()),
+                status: Some("builtin".to_string()),
+                added_at: Some("builtin".to_string()),
+            });
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<&NodeEntry> {
+        self.nodes.get(&name.to_lowercase())
+    }
+
+    fn add(&mut self, name: &str, url: &str, node_id: Option<String>, role: Option<String>, status: Option<String>) {
+        self.nodes.insert(name.to_lowercase(), NodeEntry {
+            url: url.to_string(),
+            node_id,
+            role,
+            status,
+            added_at: Some(chrono::Utc::now().to_rfc3339()),
+        });
+    }
+
+    fn remove(&mut self, name: &str) -> bool {
+        self.nodes.remove(&name.to_lowercase()).is_some()
+    }
+}
+
+// =============================================================================
 // Main Entry Point
 // =============================================================================
 
-/// Parse an aegis:// URL into (server_url, database_name)
+/// Parse an aegis:// URL or shorthand name into (server_url, database_name)
 fn parse_database_url(url: &str) -> Result<(String, Option<String>), String> {
+    // Load node registry and check for shorthand names
+    let registry = NodeRegistry::load();
+    let lower = url.to_lowercase();
+
+    if let Some(entry) = registry.get(&lower) {
+        return Ok((entry.url.clone(), Some(lower)));
+    }
+
     if url.starts_with("aegis://") {
         let rest = &url[8..]; // Remove "aegis://"
         if let Some(slash_pos) = rest.find('/') {
@@ -186,7 +324,14 @@ fn parse_database_url(url: &str) -> Result<(String, Option<String>), String> {
     } else if url.starts_with("http://") || url.starts_with("https://") {
         Ok((url.to_string(), None))
     } else {
-        Err(format!("Invalid database URL: {}. Expected aegis://host:port/dbname or http(s)://...", url))
+        // Try to parse as host:port
+        if url.contains(':') {
+            Ok((format!("http://{}", url), None))
+        } else {
+            // List available shorthands in error message
+            let available: Vec<_> = registry.nodes.keys().collect();
+            Err(format!("Unknown shorthand '{}'. Available: {:?}. Or use aegis://host:port/db, http(s)://..., host:port", url, available))
+        }
     }
 }
 
@@ -219,6 +364,7 @@ async fn main() {
         Commands::Kv { action } => handle_kv(&client, &server, action).await,
         Commands::Cluster => get_cluster_info(&client, &server).await,
         Commands::Shell => run_shell(&client, &server).await,
+        Commands::Nodes { action } => handle_nodes(&client, action).await,
     };
 
     if let Err(e) = result {
@@ -574,4 +720,182 @@ fn format_value(value: &serde_json::Value) -> String {
         }
         serde_json::Value::Object(_) => serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()),
     }
+}
+
+// =============================================================================
+// Node Management
+// =============================================================================
+
+/// Node from /api/v1/admin/nodes endpoint
+#[derive(Debug, Deserialize)]
+struct ClusterNode {
+    id: String,
+    address: String,
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    status: String,
+}
+
+async fn handle_nodes(client: &Client, action: NodesCommands) -> Result<(), String> {
+    match action {
+        NodesCommands::List => {
+            let registry = NodeRegistry::load();
+
+            if registry.nodes.is_empty() {
+                println!("No nodes registered. Use 'aegis-client nodes add <name> <url>' or 'aegis-client nodes sync' to add nodes.");
+                return Ok(());
+            }
+
+            let mut table = Table::new();
+            table.set_content_arrangement(ContentArrangement::Dynamic);
+            table.set_header(vec!["Name", "URL", "Role", "Status", "Node ID"]);
+
+            let mut entries: Vec<_> = registry.nodes.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+
+            for (name, entry) in entries {
+                table.add_row(vec![
+                    name.as_str(),
+                    &entry.url,
+                    entry.role.as_deref().unwrap_or("-"),
+                    entry.status.as_deref().unwrap_or("-"),
+                    entry.node_id.as_deref().unwrap_or("-"),
+                ]);
+            }
+
+            println!("{}", table);
+            println!("\nConfig file: {}", NodeRegistry::config_path().display());
+        }
+
+        NodesCommands::Add { name, url } => {
+            let mut registry = NodeRegistry::load();
+
+            // Validate URL format
+            let url = if url.starts_with("http://") || url.starts_with("https://") {
+                url
+            } else if url.contains(':') {
+                format!("http://{}", url)
+            } else {
+                return Err(format!("Invalid URL: {}. Use http://host:port or host:port format", url));
+            };
+
+            // Try to get node info from the server
+            let node_id = match client.get(&format!("{}/health", url)).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    // Try to get node ID from cluster info
+                    if let Ok(info) = client.get(&format!("{}/api/v1/cluster/info", url)).send().await {
+                        if let Ok(json) = info.json::<serde_json::Value>().await {
+                            json.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => {
+                    eprintln!("Warning: Could not connect to {} to verify", url);
+                    None
+                }
+            };
+
+            registry.add(&name, &url, node_id, None, None);
+            registry.save()?;
+            println!("Added node '{}' -> {}", name, url);
+        }
+
+        NodesCommands::Remove { name } => {
+            let mut registry = NodeRegistry::load();
+
+            if registry.remove(&name) {
+                registry.save()?;
+                println!("Removed node '{}'", name);
+            } else {
+                return Err(format!("Node '{}' not found", name));
+            }
+        }
+
+        NodesCommands::Sync { from } => {
+            println!("Syncing nodes from {}...", from);
+
+            // Query the cluster for nodes
+            let url = format!("{}/api/v1/admin/nodes", from);
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to connect to {}: {}", from, e))?;
+
+            if !response.status().is_success() {
+                return Err(format!("Failed to get nodes: HTTP {}", response.status()));
+            }
+
+            // Response is a direct array of nodes
+            let nodes: Vec<ClusterNode> = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+            let mut registry = NodeRegistry::load();
+            let mut added = 0;
+
+            for node in nodes {
+                // Extract name from ID if present (format: "node-xxx (NodeName)")
+                let shorthand = if let Some(start) = node.id.find('(') {
+                    if let Some(end) = node.id.find(')') {
+                        node.id[start + 1..end].to_lowercase().replace(' ', "-").replace('_', "-")
+                    } else {
+                        node.id.split('-').last().unwrap_or(&node.id).to_string()
+                    }
+                } else {
+                    // Use last part of node ID as shorthand
+                    node.id.split('-').last().unwrap_or(&node.id).to_string()
+                };
+
+                // Convert address to URL
+                let url = if node.address.starts_with("http") {
+                    node.address.clone()
+                } else {
+                    format!("http://{}", node.address)
+                };
+
+                // Extract clean node ID (without name)
+                let clean_id = if let Some(paren_pos) = node.id.find(" (") {
+                    node.id[..paren_pos].to_string()
+                } else {
+                    node.id.clone()
+                };
+
+                // Check if already exists with same URL
+                let exists = registry.nodes.values().any(|e| e.url == url);
+                if !exists {
+                    let role = if node.role.is_empty() { None } else { Some(node.role.clone()) };
+                    let status = if node.status.is_empty() { None } else { Some(node.status.clone()) };
+                    registry.add(&shorthand, &url, Some(clean_id.clone()), role.clone(), status.clone());
+                    println!("  Added: {} -> {} [{}] ({})", shorthand, url,
+                        role.as_deref().unwrap_or("unknown"), clean_id);
+                    added += 1;
+                }
+            }
+
+            registry.save()?;
+
+            if added > 0 {
+                println!("\nSynced {} new node(s)", added);
+            } else {
+                println!("No new nodes to add (all already registered)");
+            }
+
+            // Show current nodes
+            println!("\nCurrent nodes:");
+            let mut entries: Vec<_> = registry.nodes.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            for (name, entry) in entries {
+                println!("  {} -> {}", name, entry.url);
+            }
+        }
+    }
+
+    Ok(())
 }
