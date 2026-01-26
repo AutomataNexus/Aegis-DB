@@ -32,7 +32,7 @@ pub mod crdt;
 
 pub use raft::{RaftNode, RaftState, RaftConfig};
 pub use log::{LogEntry, LogIndex, ReplicatedLog};
-pub use state::{StateMachine, Command, CommandResult};
+pub use state::{StateMachine, StateMachineBackend, DatabaseStateMachine, DatabaseOperationHandler, NoOpDatabaseHandler, Command, CommandType, CommandResult, Snapshot};
 pub use node::{NodeId, NodeInfo, NodeStatus};
 pub use cluster::{Cluster, ClusterConfig, ClusterState};
 pub use transport::{Message, MessageType, Transport};
