@@ -114,7 +114,10 @@ impl Channel {
     /// Publish an event to the channel.
     pub fn publish(&self, event: Event) -> Result<usize, ChannelError> {
         if self.config.persistent {
-            let mut history = self.history.write().unwrap();
+            let mut history = self
+                .history
+                .write()
+                .expect("history RwLock poisoned in publish");
             history.push_back(event.clone());
 
             while history.len() > self.config.retention_count {
@@ -125,7 +128,10 @@ impl Channel {
         let receivers = self.sender.send(event).unwrap_or(0);
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self
+                .stats
+                .write()
+                .expect("stats RwLock poisoned in publish");
             stats.events_published += 1;
             stats.last_event_time = Some(
                 std::time::SystemTime::now()
@@ -140,7 +146,10 @@ impl Channel {
 
     /// Subscribe to the channel.
     pub fn subscribe(&self, subscriber_id: SubscriberId) -> Result<ChannelReceiver, ChannelError> {
-        let subscribers = self.subscribers.read().unwrap();
+        let subscribers = self
+            .subscribers
+            .read()
+            .expect("subscribers RwLock poisoned in subscribe (read)");
         if subscribers.len() >= self.config.max_subscribers {
             return Err(ChannelError::TooManySubscribers);
         }
@@ -149,7 +158,10 @@ impl Channel {
         let receiver = self.sender.subscribe();
 
         {
-            let mut subscribers = self.subscribers.write().unwrap();
+            let mut subscribers = self
+                .subscribers
+                .write()
+                .expect("subscribers RwLock poisoned in subscribe (write)");
             subscribers.insert(
                 subscriber_id.clone(),
                 SubscriberInfo {
@@ -160,7 +172,10 @@ impl Channel {
         }
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self
+                .stats
+                .write()
+                .expect("stats RwLock poisoned in subscribe");
             stats.subscriber_count += 1;
         }
 
@@ -176,7 +191,10 @@ impl Channel {
         subscriber_id: SubscriberId,
         filter: EventFilter,
     ) -> Result<ChannelReceiver, ChannelError> {
-        let subscribers = self.subscribers.read().unwrap();
+        let subscribers = self
+            .subscribers
+            .read()
+            .expect("subscribers RwLock poisoned in subscribe_with_filter (read)");
         if subscribers.len() >= self.config.max_subscribers {
             return Err(ChannelError::TooManySubscribers);
         }
@@ -185,7 +203,10 @@ impl Channel {
         let receiver = self.sender.subscribe();
 
         {
-            let mut subscribers = self.subscribers.write().unwrap();
+            let mut subscribers = self
+                .subscribers
+                .write()
+                .expect("subscribers RwLock poisoned in subscribe_with_filter (write)");
             subscribers.insert(
                 subscriber_id.clone(),
                 SubscriberInfo {
@@ -196,7 +217,10 @@ impl Channel {
         }
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self
+                .stats
+                .write()
+                .expect("stats RwLock poisoned in subscribe_with_filter");
             stats.subscriber_count += 1;
         }
 
@@ -208,28 +232,43 @@ impl Channel {
 
     /// Unsubscribe from the channel.
     pub fn unsubscribe(&self, subscriber_id: &SubscriberId) {
-        let mut subscribers = self.subscribers.write().unwrap();
+        let mut subscribers = self
+            .subscribers
+            .write()
+            .expect("subscribers RwLock poisoned in unsubscribe");
         if subscribers.remove(subscriber_id).is_some() {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self
+                .stats
+                .write()
+                .expect("stats RwLock poisoned in unsubscribe");
             stats.subscriber_count = stats.subscriber_count.saturating_sub(1);
         }
     }
 
     /// Get the number of subscribers.
     pub fn subscriber_count(&self) -> usize {
-        let subscribers = self.subscribers.read().unwrap();
+        let subscribers = self
+            .subscribers
+            .read()
+            .expect("subscribers RwLock poisoned in subscriber_count");
         subscribers.len()
     }
 
     /// Get recent events from history.
     pub fn get_history(&self, count: usize) -> Vec<Event> {
-        let history = self.history.read().unwrap();
+        let history = self
+            .history
+            .read()
+            .expect("history RwLock poisoned in get_history");
         history.iter().rev().take(count).cloned().collect()
     }
 
     /// Get events from history after a timestamp.
     pub fn get_history_after(&self, timestamp: u64) -> Vec<Event> {
-        let history = self.history.read().unwrap();
+        let history = self
+            .history
+            .read()
+            .expect("history RwLock poisoned in get_history_after");
         history
             .iter()
             .filter(|e| e.timestamp > timestamp)
@@ -239,13 +278,19 @@ impl Channel {
 
     /// Get channel statistics.
     pub fn stats(&self) -> ChannelStats {
-        let stats = self.stats.read().unwrap();
+        let stats = self
+            .stats
+            .read()
+            .expect("stats RwLock poisoned in stats");
         stats.clone()
     }
 
     /// Clear history.
     pub fn clear_history(&self) {
-        let mut history = self.history.write().unwrap();
+        let mut history = self
+            .history
+            .write()
+            .expect("history RwLock poisoned in clear_history");
         history.clear();
     }
 }

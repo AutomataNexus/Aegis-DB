@@ -83,7 +83,7 @@ impl TimeSeriesEngine {
 
     /// Register a new metric.
     pub fn register_metric(&self, metric: Metric) -> Result<(), EngineError> {
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.metrics.write().expect("metrics lock poisoned");
 
         if metrics.contains_key(&metric.name) {
             return Err(EngineError::MetricAlreadyExists(metric.name));
@@ -95,13 +95,13 @@ impl TimeSeriesEngine {
 
     /// Get a registered metric by name.
     pub fn get_metric(&self, name: &str) -> Option<Metric> {
-        let metrics = self.metrics.read().unwrap();
+        let metrics = self.metrics.read().expect("metrics lock poisoned");
         metrics.get(name).cloned()
     }
 
     /// List all registered metrics.
     pub fn list_metrics(&self) -> Vec<Metric> {
-        let metrics = self.metrics.read().unwrap();
+        let metrics = self.metrics.read().expect("metrics lock poisoned");
         metrics.values().cloned().collect()
     }
 
@@ -126,7 +126,7 @@ impl TimeSeriesEngine {
         }
 
         let metric = {
-            let metrics = self.metrics.read().unwrap();
+            let metrics = self.metrics.read().expect("metrics lock poisoned");
             metrics.get(metric_name).cloned()
         };
 
@@ -135,7 +135,7 @@ impl TimeSeriesEngine {
         let series_id = self.index.register(&metric, &tags);
 
         {
-            let mut data = self.series_data.write().unwrap();
+            let mut data = self.series_data.write().expect("series_data lock poisoned");
             let buffer = data.entry(series_id.clone()).or_insert_with(|| {
                 SeriesBuffer::new(metric.clone(), tags.clone())
             });
@@ -152,7 +152,7 @@ impl TimeSeriesEngine {
         }
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write().expect("stats lock poisoned");
             stats.points_written += points.len() as u64;
             stats.bytes_written += (points.len() * 16) as u64;
         }
@@ -184,7 +184,7 @@ impl TimeSeriesEngine {
         };
 
         let series: Vec<Series> = {
-            let data = self.series_data.read().unwrap();
+            let data = self.series_data.read().expect("series_data lock poisoned");
             series_ids
                 .iter()
                 .filter_map(|id| data.get(id))
@@ -196,7 +196,7 @@ impl TimeSeriesEngine {
         result.query_time_ms = start_time.elapsed().as_millis() as u64;
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write().expect("stats lock poisoned");
             stats.queries_executed += 1;
             stats.points_scanned += result.points_scanned as u64;
         }
@@ -247,7 +247,7 @@ impl TimeSeriesEngine {
     /// Get all series for a metric.
     pub fn get_series(&self, metric_name: &str) -> Vec<Series> {
         let series_ids = self.index.find_by_metric(metric_name);
-        let data = self.series_data.read().unwrap();
+        let data = self.series_data.read().expect("series_data lock poisoned");
 
         series_ids
             .iter()
@@ -258,14 +258,14 @@ impl TimeSeriesEngine {
 
     /// Get a specific series by ID.
     pub fn get_series_by_id(&self, series_id: &str) -> Option<Series> {
-        let data = self.series_data.read().unwrap();
+        let data = self.series_data.read().expect("series_data lock poisoned");
         data.get(series_id).map(|buffer| buffer.to_series())
     }
 
     /// Delete a series.
     pub fn delete_series(&self, series_id: &str) -> bool {
         let removed = {
-            let mut data = self.series_data.write().unwrap();
+            let mut data = self.series_data.write().expect("series_data lock poisoned");
             data.remove(series_id).is_some()
         };
 
@@ -320,19 +320,19 @@ impl TimeSeriesEngine {
 
     /// Get engine statistics.
     pub fn stats(&self) -> EngineStats {
-        let stats = self.stats.read().unwrap();
+        let stats = self.stats.read().expect("stats lock poisoned");
         stats.clone()
     }
 
     /// Reset statistics.
     pub fn reset_stats(&self) {
-        let mut stats = self.stats.write().unwrap();
+        let mut stats = self.stats.write().expect("stats lock poisoned");
         *stats = EngineStats::default();
     }
 
     /// Get memory usage estimate.
     pub fn memory_usage(&self) -> usize {
-        let data = self.series_data.read().unwrap();
+        let data = self.series_data.read().expect("series_data lock poisoned");
         data.values().map(|b| b.memory_usage()).sum()
     }
 
@@ -342,7 +342,7 @@ impl TimeSeriesEngine {
 
     /// Compact all series buffers.
     pub fn compact(&self) {
-        let mut data = self.series_data.write().unwrap();
+        let mut data = self.series_data.write().expect("series_data lock poisoned");
         for buffer in data.values_mut() {
             buffer.compress();
         }
@@ -351,7 +351,7 @@ impl TimeSeriesEngine {
     /// Flush all pending writes.
     pub fn flush(&self) {
         // In a real implementation, this would persist to disk
-        let mut stats = self.stats.write().unwrap();
+        let mut stats = self.stats.write().expect("stats lock poisoned");
         stats.last_flush = Some(Utc::now());
     }
 }
@@ -493,7 +493,7 @@ mod tests {
                 timestamp: Utc::now() - Duration::minutes(100 - i),
                 value: i as f64,
             };
-            engine.write("cpu_usage", tags.clone(), point).unwrap();
+            engine.write("cpu_usage", tags.clone(), point).expect("write should succeed");
         }
 
         let query = TimeSeriesQuery::last("cpu_usage", Duration::hours(2));
@@ -512,11 +512,11 @@ mod tests {
 
         engine
             .write_now("temperature", tags.clone(), 23.5)
-            .unwrap();
+            .expect("write_now should succeed");
 
         let latest = engine.latest("temperature", Some(&tags));
         assert!(latest.is_some());
-        assert_eq!(latest.unwrap().value, 23.5);
+        assert_eq!(latest.expect("latest should have value").value, 23.5);
     }
 
     #[test]
@@ -530,12 +530,12 @@ mod tests {
                 timestamp: Utc::now() - Duration::seconds(10 - i),
                 value: i as f64,
             };
-            engine.write("values", tags.clone(), point).unwrap();
+            engine.write("values", tags.clone(), point).expect("write should succeed");
         }
 
         let avg = engine.aggregate("values", Duration::minutes(1), AggregateFunction::Avg);
         assert!(avg.is_some());
-        assert!((avg.unwrap() - 4.5).abs() < 0.001);
+        assert!((avg.expect("avg should have value") - 4.5).abs() < 0.001);
     }
 
     #[test]
@@ -546,7 +546,7 @@ mod tests {
             let mut tags = Tags::new();
             tags.insert("host", *host);
 
-            engine.write_now("cpu", tags, 50.0).unwrap();
+            engine.write_now("cpu", tags, 50.0).expect("write_now should succeed");
         }
 
         assert_eq!(engine.series_count(), 3);
@@ -559,12 +559,12 @@ mod tests {
         let mut tags1 = Tags::new();
         tags1.insert("region", "us-east");
         tags1.insert("host", "server1");
-        engine.write_now("memory", tags1, 1024.0).unwrap();
+        engine.write_now("memory", tags1, 1024.0).expect("write_now should succeed");
 
         let mut tags2 = Tags::new();
         tags2.insert("region", "us-west");
         tags2.insert("host", "server2");
-        engine.write_now("memory", tags2, 2048.0).unwrap();
+        engine.write_now("memory", tags2, 2048.0).expect("write_now should succeed");
 
         let keys = engine.tag_keys();
         assert!(keys.contains(&"region".to_string()));
@@ -581,7 +581,7 @@ mod tests {
 
         let mut tags = Tags::new();
         tags.insert("host", "server1");
-        engine.write_now("test_metric", tags.clone(), 100.0).unwrap();
+        engine.write_now("test_metric", tags.clone(), 100.0).expect("write_now should succeed");
 
         assert_eq!(engine.series_count(), 1);
 

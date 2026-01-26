@@ -40,12 +40,12 @@ impl TimeSeriesIndex {
         };
 
         {
-            let mut by_id = self.series_by_id.write().unwrap();
+            let mut by_id = self.series_by_id.write().expect("series_by_id lock poisoned");
             by_id.insert(series_id.clone(), metadata);
         }
 
         {
-            let mut by_metric = self.series_by_metric.write().unwrap();
+            let mut by_metric = self.series_by_metric.write().expect("series_by_metric lock poisoned");
             by_metric
                 .entry(metric.name.clone())
                 .or_default()
@@ -53,7 +53,7 @@ impl TimeSeriesIndex {
         }
 
         {
-            let mut by_tag = self.series_by_tag.write().unwrap();
+            let mut by_tag = self.series_by_tag.write().expect("series_by_tag lock poisoned");
             for (key, value) in tags.iter() {
                 by_tag
                     .entry(key.clone())
@@ -69,13 +69,13 @@ impl TimeSeriesIndex {
 
     /// Get series metadata by ID.
     pub fn get(&self, series_id: &str) -> Option<SeriesMetadata> {
-        let by_id = self.series_by_id.read().unwrap();
+        let by_id = self.series_by_id.read().expect("series_by_id lock poisoned");
         by_id.get(series_id).cloned()
     }
 
     /// Find series by metric name.
     pub fn find_by_metric(&self, metric_name: &str) -> Vec<String> {
-        let by_metric = self.series_by_metric.read().unwrap();
+        let by_metric = self.series_by_metric.read().expect("series_by_metric lock poisoned");
         by_metric
             .get(metric_name)
             .map(|set| set.iter().cloned().collect())
@@ -84,7 +84,7 @@ impl TimeSeriesIndex {
 
     /// Find series by tag key-value pair.
     pub fn find_by_tag(&self, key: &str, value: &str) -> Vec<String> {
-        let by_tag = self.series_by_tag.read().unwrap();
+        let by_tag = self.series_by_tag.read().expect("series_by_tag lock poisoned");
         by_tag
             .get(key)
             .and_then(|values| values.get(value))
@@ -96,7 +96,7 @@ impl TimeSeriesIndex {
     pub fn find_by_tags(&self, tags: &Tags) -> Vec<String> {
         let mut result: Option<HashSet<String>> = None;
 
-        let by_tag = self.series_by_tag.read().unwrap();
+        let by_tag = self.series_by_tag.read().expect("series_by_tag lock poisoned");
 
         for (key, value) in tags.iter() {
             let matching = by_tag
@@ -116,13 +116,13 @@ impl TimeSeriesIndex {
 
     /// Get all tag keys.
     pub fn tag_keys(&self) -> Vec<String> {
-        let by_tag = self.series_by_tag.read().unwrap();
+        let by_tag = self.series_by_tag.read().expect("series_by_tag lock poisoned");
         by_tag.keys().cloned().collect()
     }
 
     /// Get all values for a tag key.
     pub fn tag_values(&self, key: &str) -> Vec<String> {
-        let by_tag = self.series_by_tag.read().unwrap();
+        let by_tag = self.series_by_tag.read().expect("series_by_tag lock poisoned");
         by_tag
             .get(key)
             .map(|values| values.keys().cloned().collect())
@@ -131,13 +131,13 @@ impl TimeSeriesIndex {
 
     /// Get all metric names.
     pub fn metric_names(&self) -> Vec<String> {
-        let by_metric = self.series_by_metric.read().unwrap();
+        let by_metric = self.series_by_metric.read().expect("series_by_metric lock poisoned");
         by_metric.keys().cloned().collect()
     }
 
     /// Get the number of indexed series.
     pub fn len(&self) -> usize {
-        let by_id = self.series_by_id.read().unwrap();
+        let by_id = self.series_by_id.read().expect("series_by_id lock poisoned");
         by_id.len()
     }
 
@@ -149,7 +149,7 @@ impl TimeSeriesIndex {
     /// Remove a series from the index.
     pub fn remove(&self, series_id: &str) -> bool {
         let metadata = {
-            let mut by_id = self.series_by_id.write().unwrap();
+            let mut by_id = self.series_by_id.write().expect("series_by_id lock poisoned");
             by_id.remove(series_id)
         };
 
@@ -158,14 +158,14 @@ impl TimeSeriesIndex {
         };
 
         {
-            let mut by_metric = self.series_by_metric.write().unwrap();
+            let mut by_metric = self.series_by_metric.write().expect("series_by_metric lock poisoned");
             if let Some(set) = by_metric.get_mut(&metadata.metric_name) {
                 set.remove(series_id);
             }
         }
 
         {
-            let mut by_tag = self.series_by_tag.write().unwrap();
+            let mut by_tag = self.series_by_tag.write().expect("series_by_tag lock poisoned");
             for (key, value) in metadata.tags.iter() {
                 if let Some(values) = by_tag.get_mut(key) {
                     if let Some(set) = values.get_mut(value) {

@@ -419,7 +419,9 @@ impl TransactionManager {
         {
             let mut versions = self.versions.write();
             let txs = self.transactions.read();
-            let tx = txs.get(&tx_id).unwrap();
+            let tx = txs.get(&tx_id).ok_or_else(|| {
+                AegisError::Transaction("Transaction disappeared during commit".to_string())
+            })?;
 
             for key in &tx.write_set {
                 if let Some(version) = versions.get_mut(key) {
@@ -456,7 +458,9 @@ impl TransactionManager {
         {
             let mut versions = self.versions.write();
             let txs = self.transactions.read();
-            let tx = txs.get(&tx_id).unwrap();
+            let tx = txs.get(&tx_id).ok_or_else(|| {
+                AegisError::Transaction("Transaction disappeared during abort".to_string())
+            })?;
 
             for key in &tx.write_set {
                 if let Some(version) = versions.get_mut(key) {
@@ -526,7 +530,9 @@ impl TransactionManager {
 
         {
             let txs = self.transactions.read();
-            let tx = txs.get(&tx_id).unwrap();
+            let tx = txs.get(&tx_id).ok_or_else(|| {
+                AegisError::Transaction("Transaction disappeared during write".to_string())
+            })?;
             tx.locks_held.len(); // Just to use tx
         }
 

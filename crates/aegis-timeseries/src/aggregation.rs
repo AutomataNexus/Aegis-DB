@@ -47,7 +47,7 @@ impl AggregateFunction {
             Self::Last => *values.last()?,
             Self::Median => {
                 let mut sorted = values.to_vec();
-                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 let mid = sorted.len() / 2;
                 if sorted.len() % 2 == 0 {
                     (sorted[mid - 1] + sorted[mid]) / 2.0
@@ -227,7 +227,7 @@ impl Downsampler {
         let millis = timestamp.timestamp_millis();
         let interval_millis = self.interval.num_milliseconds();
         let bucket_millis = (millis / interval_millis) * interval_millis;
-        DateTime::from_timestamp_millis(bucket_millis).unwrap_or(timestamp)
+        DateTime::from_timestamp_millis(bucket_millis).expect("failed to create DateTime from bucket timestamp")
     }
 }
 
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_downsampler() {
-        let base_time = DateTime::from_timestamp(1700000000, 0).unwrap();
+        let base_time = DateTime::from_timestamp(1700000000, 0).expect("failed to create test base_time");
         let points: Vec<DataPoint> = (0..100)
             .map(|i| DataPoint {
                 timestamp: base_time + Duration::seconds(i),

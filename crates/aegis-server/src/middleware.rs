@@ -286,9 +286,9 @@ mod tests {
             .layer(axum::middleware::from_fn(request_id));
 
         let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .oneshot(Request::builder().uri("/").body(Body::empty()).expect("failed to build request"))
             .await
-            .unwrap();
+            .expect("failed to execute request");
 
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().contains_key("x-request-id"));
@@ -304,9 +304,9 @@ mod tests {
             .with_state(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .oneshot(Request::builder().uri("/").body(Body::empty()).expect("failed to build request"))
             .await
-            .unwrap();
+            .expect("failed to execute request");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
@@ -326,10 +326,10 @@ mod tests {
                     .uri("/")
                     .header("Authorization", "Bearer invalid_token")
                     .body(Body::empty())
-                    .unwrap()
+                    .expect("failed to build request")
             )
             .await
-            .unwrap();
+            .expect("failed to execute request");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
@@ -339,9 +339,9 @@ mod tests {
         let state = AppState::new(ServerConfig::default());
 
         // Create a test user and get a valid token
-        state.auth.create_user("authtest", "auth@test.com", "TestPassword123!", "admin").unwrap();
+        state.auth.create_user("authtest", "auth@test.com", "TestPassword123!", "admin").expect("failed to create test user");
         let login_response = state.auth.login("authtest", "TestPassword123!");
-        let token = login_response.token.unwrap();
+        let token = login_response.token.expect("login should return token");
 
         let app = Router::new()
             .route("/", get(handler))
@@ -354,10 +354,10 @@ mod tests {
                     .uri("/")
                     .header("Authorization", format!("Bearer {}", token))
                     .body(Body::empty())
-                    .unwrap()
+                    .expect("failed to build request")
             )
             .await
-            .unwrap();
+            .expect("failed to execute request");
 
         assert_eq!(response.status(), StatusCode::OK);
     }

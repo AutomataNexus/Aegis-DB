@@ -216,7 +216,7 @@ impl Histogram {
     /// Observe a value.
     pub fn observe(&self, value: f64) {
         self.count.fetch_add(1, Ordering::Relaxed);
-        *self.sum.write().unwrap() += value;
+        *self.sum.write().expect("Histogram sum RwLock poisoned") += value;
 
         for (i, &boundary) in self.buckets.iter().enumerate() {
             if value <= boundary {
@@ -245,7 +245,7 @@ impl Histogram {
 
     /// Get the sum of observations.
     pub fn sum(&self) -> f64 {
-        *self.sum.read().unwrap()
+        *self.sum.read().expect("Histogram sum RwLock poisoned")
     }
 
     /// Get the histogram value.
@@ -272,7 +272,7 @@ impl Histogram {
     /// Reset the histogram.
     pub fn reset(&self) {
         self.count.store(0, Ordering::Relaxed);
-        *self.sum.write().unwrap() = 0.0;
+        *self.sum.write().expect("Histogram sum RwLock poisoned") = 0.0;
         for bc in &self.bucket_counts {
             bc.store(0, Ordering::Relaxed);
         }
@@ -351,9 +351,9 @@ impl Summary {
     /// Observe a value.
     pub fn observe(&self, value: f64) {
         self.count.fetch_add(1, Ordering::Relaxed);
-        *self.sum.write().unwrap() += value;
+        *self.sum.write().expect("Summary sum RwLock poisoned") += value;
 
-        let mut values = self.values.write().unwrap();
+        let mut values = self.values.write().expect("Summary values RwLock poisoned");
         values.push(value);
 
         // Keep only max_samples
@@ -374,12 +374,12 @@ impl Summary {
 
     /// Get the sum of observations.
     pub fn sum(&self) -> f64 {
-        *self.sum.read().unwrap()
+        *self.sum.read().expect("Summary sum RwLock poisoned")
     }
 
     /// Get the summary value with quantiles.
     pub fn value(&self) -> SummaryValue {
-        let values = self.values.read().unwrap();
+        let values = self.values.read().expect("Summary values RwLock poisoned");
         let mut sorted: Vec<f64> = values.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -408,8 +408,8 @@ impl Summary {
     /// Reset the summary.
     pub fn reset(&self) {
         self.count.store(0, Ordering::Relaxed);
-        *self.sum.write().unwrap() = 0.0;
-        self.values.write().unwrap().clear();
+        *self.sum.write().expect("Summary sum RwLock poisoned") = 0.0;
+        self.values.write().expect("Summary values RwLock poisoned").clear();
     }
 }
 
@@ -440,7 +440,7 @@ impl MetricRegistry {
 
     /// Register or get a counter.
     pub fn counter(&self, name: &str) -> Arc<Counter> {
-        let mut counters = self.counters.write().unwrap();
+        let mut counters = self.counters.write().expect("MetricRegistry counters RwLock poisoned");
         counters
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Counter::new()))
@@ -454,7 +454,7 @@ impl MetricRegistry {
         labels: HashMap<String, String>,
     ) -> Arc<Counter> {
         let key = Self::labeled_key(name, &labels);
-        let mut counters = self.counters.write().unwrap();
+        let mut counters = self.counters.write().expect("MetricRegistry counters RwLock poisoned");
         counters
             .entry(key)
             .or_insert_with(|| Arc::new(Counter::with_labels(labels)))
@@ -463,7 +463,7 @@ impl MetricRegistry {
 
     /// Register or get a gauge.
     pub fn gauge(&self, name: &str) -> Arc<Gauge> {
-        let mut gauges = self.gauges.write().unwrap();
+        let mut gauges = self.gauges.write().expect("MetricRegistry gauges RwLock poisoned");
         gauges
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Gauge::new()))
@@ -473,7 +473,7 @@ impl MetricRegistry {
     /// Register or get a gauge with labels.
     pub fn gauge_with_labels(&self, name: &str, labels: HashMap<String, String>) -> Arc<Gauge> {
         let key = Self::labeled_key(name, &labels);
-        let mut gauges = self.gauges.write().unwrap();
+        let mut gauges = self.gauges.write().expect("MetricRegistry gauges RwLock poisoned");
         gauges
             .entry(key)
             .or_insert_with(|| Arc::new(Gauge::with_labels(labels)))
@@ -482,7 +482,7 @@ impl MetricRegistry {
 
     /// Register or get a histogram.
     pub fn histogram(&self, name: &str) -> Arc<Histogram> {
-        let mut histograms = self.histograms.write().unwrap();
+        let mut histograms = self.histograms.write().expect("MetricRegistry histograms RwLock poisoned");
         histograms
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Histogram::new()))
@@ -491,7 +491,7 @@ impl MetricRegistry {
 
     /// Register or get a histogram with custom buckets.
     pub fn histogram_with_buckets(&self, name: &str, buckets: Vec<f64>) -> Arc<Histogram> {
-        let mut histograms = self.histograms.write().unwrap();
+        let mut histograms = self.histograms.write().expect("MetricRegistry histograms RwLock poisoned");
         histograms
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Histogram::with_buckets(buckets)))
@@ -500,7 +500,7 @@ impl MetricRegistry {
 
     /// Register or get a summary.
     pub fn summary(&self, name: &str) -> Arc<Summary> {
-        let mut summaries = self.summaries.write().unwrap();
+        let mut summaries = self.summaries.write().expect("MetricRegistry summaries RwLock poisoned");
         summaries
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Summary::new()))
@@ -511,7 +511,7 @@ impl MetricRegistry {
     pub fn get_counters(&self) -> HashMap<String, u64> {
         self.counters
             .read()
-            .unwrap()
+            .expect("MetricRegistry counters RwLock poisoned")
             .iter()
             .map(|(k, v)| (k.clone(), v.get()))
             .collect()
@@ -521,7 +521,7 @@ impl MetricRegistry {
     pub fn get_gauges(&self) -> HashMap<String, i64> {
         self.gauges
             .read()
-            .unwrap()
+            .expect("MetricRegistry gauges RwLock poisoned")
             .iter()
             .map(|(k, v)| (k.clone(), v.get()))
             .collect()
@@ -531,7 +531,7 @@ impl MetricRegistry {
     pub fn get_histograms(&self) -> HashMap<String, HistogramValue> {
         self.histograms
             .read()
-            .unwrap()
+            .expect("MetricRegistry histograms RwLock poisoned")
             .iter()
             .map(|(k, v)| (k.clone(), v.value()))
             .collect()
@@ -541,7 +541,7 @@ impl MetricRegistry {
     pub fn get_summaries(&self) -> HashMap<String, SummaryValue> {
         self.summaries
             .read()
-            .unwrap()
+            .expect("MetricRegistry summaries RwLock poisoned")
             .iter()
             .map(|(k, v)| (k.clone(), v.value()))
             .collect()
@@ -552,7 +552,7 @@ impl MetricRegistry {
         let mut output = String::new();
 
         // Export counters
-        for (name, counter) in self.counters.read().unwrap().iter() {
+        for (name, counter) in self.counters.read().expect("MetricRegistry counters RwLock poisoned").iter() {
             output.push_str(&format!(
                 "# TYPE {} counter\n{} {}\n",
                 name,
@@ -562,7 +562,7 @@ impl MetricRegistry {
         }
 
         // Export gauges
-        for (name, gauge) in self.gauges.read().unwrap().iter() {
+        for (name, gauge) in self.gauges.read().expect("MetricRegistry gauges RwLock poisoned").iter() {
             output.push_str(&format!(
                 "# TYPE {} gauge\n{} {}\n",
                 name,
@@ -572,7 +572,7 @@ impl MetricRegistry {
         }
 
         // Export histograms
-        for (name, histogram) in self.histograms.read().unwrap().iter() {
+        for (name, histogram) in self.histograms.read().expect("MetricRegistry histograms RwLock poisoned").iter() {
             output.push_str(&format!("# TYPE {} histogram\n", name));
             let value = histogram.value();
             for (boundary, count) in &value.buckets {
@@ -584,7 +584,7 @@ impl MetricRegistry {
         }
 
         // Export summaries
-        for (name, summary) in self.summaries.read().unwrap().iter() {
+        for (name, summary) in self.summaries.read().expect("MetricRegistry summaries RwLock poisoned").iter() {
             output.push_str(&format!("# TYPE {} summary\n", name));
             let value = summary.value();
             for (quantile, v) in &value.quantiles {

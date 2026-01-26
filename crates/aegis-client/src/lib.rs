@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_client_config_from_url() {
-        let config = ClientConfig::from_url("aegis://localhost:9090/testdb").unwrap();
+        let config = ClientConfig::from_url("aegis://localhost:9090/testdb").expect("Should parse valid URL");
         assert_eq!(config.connection.host, "localhost");
         assert_eq!(config.connection.port, 9090);
         assert_eq!(config.connection.database, "testdb");

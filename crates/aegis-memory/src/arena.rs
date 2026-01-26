@@ -134,6 +134,7 @@ impl MemoryArena {
     }
 
     /// Allocate and initialize memory with a value.
+    #[allow(clippy::mut_from_ref)] // Arena uses interior mutability (Mutex)
     pub fn allocate_value<T>(&self, value: T) -> Option<&mut T> {
         let size = std::mem::size_of::<T>();
         let align = std::mem::align_of::<T>();
@@ -147,6 +148,7 @@ impl MemoryArena {
     }
 
     /// Allocate a slice from the arena.
+    #[allow(clippy::mut_from_ref)] // Arena uses interior mutability (Mutex)
     pub fn allocate_slice<T: Copy>(&self, len: usize) -> Option<&mut [T]> {
         let size = std::mem::size_of::<T>() * len;
         let align = std::mem::align_of::<T>();
@@ -202,8 +204,8 @@ mod tests {
     fn test_arena_allocation() {
         let arena = MemoryArena::new();
 
-        let ptr1 = arena.allocate(100).unwrap();
-        let ptr2 = arena.allocate(200).unwrap();
+        let ptr1 = arena.allocate(100).expect("First allocation should succeed");
+        let ptr2 = arena.allocate(200).expect("Second allocation should succeed");
 
         // NonNull guarantees non-null, so just check they're different
         assert_ne!(ptr1.as_ptr(), ptr2.as_ptr());
@@ -213,7 +215,7 @@ mod tests {
     fn test_arena_value_allocation() {
         let arena = MemoryArena::new();
 
-        let value = arena.allocate_value(42u64).unwrap();
+        let value = arena.allocate_value(42u64).expect("Value allocation should succeed");
         assert_eq!(*value, 42);
 
         *value = 100;
@@ -224,7 +226,7 @@ mod tests {
     fn test_arena_slice_allocation() {
         let arena = MemoryArena::new();
 
-        let slice = arena.allocate_slice::<u32>(10).unwrap();
+        let slice = arena.allocate_slice::<u32>(10).expect("Slice allocation should succeed");
         assert_eq!(slice.len(), 10);
 
         for (i, v) in slice.iter_mut().enumerate() {
@@ -240,7 +242,7 @@ mod tests {
     fn test_arena_reset() {
         let arena = MemoryArena::new();
 
-        arena.allocate(1000).unwrap();
+        arena.allocate(1000).expect("Allocation should succeed");
         let used_before = arena.total_used();
         assert!(used_before > 0);
 
@@ -254,6 +256,6 @@ mod tests {
         let arena = MemoryArena::with_chunk_size(1024);
 
         // Just verify the allocation succeeds - NonNull guarantees non-null
-        let _ptr = arena.allocate(2048).unwrap();
+        let _ptr = arena.allocate(2048).expect("Large allocation should succeed");
     }
 }

@@ -52,7 +52,8 @@ impl Parser {
                 statements.len()
             )));
         }
-        Ok(statements.into_iter().next().unwrap())
+        // Safe to use expect here: we verified statements.len() == 1 above
+        Ok(statements.into_iter().next().expect("statements verified to have exactly 1 element"))
     }
 
     fn convert_statement(&self, stmt: sp::Statement) -> Result<Statement> {

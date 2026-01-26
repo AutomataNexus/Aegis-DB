@@ -140,7 +140,7 @@ impl Page {
             )));
         }
 
-        let mut buf = &data[..];
+        let mut buf = data;
         let page_id = PageId(buf.get_u64_le());
         let page_type = PageType::from(buf.get_u8());
         let _padding = buf.get_u8();
@@ -315,8 +315,8 @@ mod tests {
         let mut page = Page::new(PageId(1), PageType::Data);
         let tuple = b"Hello, Aegis!";
 
-        let slot_id = page.insert_tuple(tuple).unwrap();
-        let read_tuple = page.read_tuple(slot_id).unwrap();
+        let slot_id = page.insert_tuple(tuple).expect("insert_tuple should succeed");
+        let read_tuple = page.read_tuple(slot_id).expect("read_tuple should succeed");
 
         assert_eq!(read_tuple, tuple);
     }
@@ -325,31 +325,31 @@ mod tests {
     fn test_page_multiple_tuples() {
         let mut page = Page::new(PageId(1), PageType::Data);
 
-        let slot1 = page.insert_tuple(b"First tuple").unwrap();
-        let slot2 = page.insert_tuple(b"Second tuple").unwrap();
-        let slot3 = page.insert_tuple(b"Third tuple").unwrap();
+        let slot1 = page.insert_tuple(b"First tuple").expect("insert first tuple should succeed");
+        let slot2 = page.insert_tuple(b"Second tuple").expect("insert second tuple should succeed");
+        let slot3 = page.insert_tuple(b"Third tuple").expect("insert third tuple should succeed");
 
-        assert_eq!(page.read_tuple(slot1).unwrap(), b"First tuple");
-        assert_eq!(page.read_tuple(slot2).unwrap(), b"Second tuple");
-        assert_eq!(page.read_tuple(slot3).unwrap(), b"Third tuple");
+        assert_eq!(page.read_tuple(slot1).expect("read first tuple should succeed"), b"First tuple");
+        assert_eq!(page.read_tuple(slot2).expect("read second tuple should succeed"), b"Second tuple");
+        assert_eq!(page.read_tuple(slot3).expect("read third tuple should succeed"), b"Third tuple");
     }
 
     #[test]
     fn test_page_delete() {
         let mut page = Page::new(PageId(1), PageType::Data);
-        let slot_id = page.insert_tuple(b"Delete me").unwrap();
+        let slot_id = page.insert_tuple(b"Delete me").expect("insert_tuple should succeed");
 
-        page.delete_tuple(slot_id).unwrap();
+        page.delete_tuple(slot_id).expect("delete_tuple should succeed");
         assert!(page.read_tuple(slot_id).is_err());
     }
 
     #[test]
     fn test_page_serialization() {
         let mut page = Page::new(PageId(42), PageType::Data);
-        page.insert_tuple(b"Test data").unwrap();
+        page.insert_tuple(b"Test data").expect("insert_tuple should succeed");
 
         let bytes = page.to_bytes();
-        let restored = Page::from_bytes(&bytes).unwrap();
+        let restored = Page::from_bytes(&bytes).expect("from_bytes should succeed");
 
         assert_eq!(restored.header.page_id, PageId(42));
         assert_eq!(restored.header.num_slots, 1);

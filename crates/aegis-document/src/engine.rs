@@ -70,7 +70,7 @@ impl DocumentEngine {
     /// Create a new collection.
     pub fn create_collection(&self, name: impl Into<String>) -> Result<(), EngineError> {
         let name = name.into();
-        let mut collections = self.collections.write().unwrap();
+        let mut collections = self.collections.write().expect("collections RwLock poisoned");
 
         if collections.len() >= self.config.max_collections {
             return Err(EngineError::TooManyCollections);
@@ -91,7 +91,7 @@ impl DocumentEngine {
         schema: Schema,
     ) -> Result<(), EngineError> {
         let name = name.into();
-        let mut collections = self.collections.write().unwrap();
+        let mut collections = self.collections.write().expect("collections RwLock poisoned");
 
         if collections.len() >= self.config.max_collections {
             return Err(EngineError::TooManyCollections);
@@ -107,7 +107,7 @@ impl DocumentEngine {
 
     /// Drop a collection.
     pub fn drop_collection(&self, name: &str) -> Result<(), EngineError> {
-        let mut collections = self.collections.write().unwrap();
+        let mut collections = self.collections.write().expect("collections RwLock poisoned");
 
         if collections.remove(name).is_none() {
             return Err(EngineError::CollectionNotFound(name.to_string()));
@@ -118,19 +118,19 @@ impl DocumentEngine {
 
     /// List all collection names.
     pub fn list_collections(&self) -> Vec<String> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         collections.keys().cloned().collect()
     }
 
     /// Check if a collection exists.
     pub fn collection_exists(&self, name: &str) -> bool {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         collections.contains_key(name)
     }
 
     /// Get collection statistics.
     pub fn collection_stats(&self, name: &str) -> Option<CollectionStats> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         collections.get(name).map(|c| CollectionStats {
             name: name.to_string(),
             document_count: c.count(),
@@ -148,7 +148,7 @@ impl DocumentEngine {
         collection: &str,
         doc: Document,
     ) -> Result<DocumentId, EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -158,7 +158,7 @@ impl DocumentEngine {
         drop(collections);
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write().expect("stats RwLock poisoned");
             stats.documents_inserted += 1;
         }
 
@@ -171,7 +171,7 @@ impl DocumentEngine {
         collection: &str,
         docs: Vec<Document>,
     ) -> Result<Vec<DocumentId>, EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -182,7 +182,7 @@ impl DocumentEngine {
         drop(collections);
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write().expect("stats RwLock poisoned");
             stats.documents_inserted += count as u64;
         }
 
@@ -191,7 +191,7 @@ impl DocumentEngine {
 
     /// Get a document by ID.
     pub fn get(&self, collection: &str, id: &DocumentId) -> Result<Option<Document>, EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -206,7 +206,7 @@ impl DocumentEngine {
         id: &DocumentId,
         doc: Document,
     ) -> Result<(), EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -216,7 +216,7 @@ impl DocumentEngine {
         drop(collections);
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write().expect("stats RwLock poisoned");
             stats.documents_updated += 1;
         }
 
@@ -225,7 +225,7 @@ impl DocumentEngine {
 
     /// Delete a document.
     pub fn delete(&self, collection: &str, id: &DocumentId) -> Result<Document, EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -235,7 +235,7 @@ impl DocumentEngine {
         drop(collections);
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write().expect("stats RwLock poisoned");
             stats.documents_deleted += 1;
         }
 
@@ -248,7 +248,7 @@ impl DocumentEngine {
 
     /// Find documents matching a query.
     pub fn find(&self, collection: &str, query: &Query) -> Result<QueryResult, EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -258,7 +258,7 @@ impl DocumentEngine {
         drop(collections);
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write().expect("stats RwLock poisoned");
             stats.queries_executed += 1;
         }
 
@@ -267,7 +267,7 @@ impl DocumentEngine {
 
     /// Find one document matching a query.
     pub fn find_one(&self, collection: &str, query: &Query) -> Result<Option<Document>, EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -277,7 +277,7 @@ impl DocumentEngine {
 
     /// Count documents matching a query.
     pub fn count(&self, collection: &str, query: &Query) -> Result<usize, EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -296,7 +296,7 @@ impl DocumentEngine {
         field: impl Into<String>,
         index_type: IndexType,
     ) -> Result<(), EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -307,7 +307,7 @@ impl DocumentEngine {
 
     /// Drop an index.
     pub fn drop_index(&self, collection: &str, field: &str) -> Result<(), EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -318,7 +318,7 @@ impl DocumentEngine {
 
     /// List indexes on a collection.
     pub fn list_indexes(&self, collection: &str) -> Result<Vec<String>, EngineError> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.collections.read().expect("collections RwLock poisoned");
         let coll = collections
             .get(collection)
             .ok_or_else(|| EngineError::CollectionNotFound(collection.to_string()))?;
@@ -332,13 +332,13 @@ impl DocumentEngine {
 
     /// Get engine statistics.
     pub fn stats(&self) -> EngineStats {
-        let stats = self.stats.read().unwrap();
+        let stats = self.stats.read().expect("stats RwLock poisoned");
         stats.clone()
     }
 
     /// Reset statistics.
     pub fn reset_stats(&self) {
-        let mut stats = self.stats.write().unwrap();
+        let mut stats = self.stats.write().expect("stats RwLock poisoned");
         *stats = EngineStats::default();
     }
 }

@@ -178,7 +178,9 @@ impl Event {
 /// Data payload for an event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+#[derive(Default)]
 pub enum EventData {
+    #[default]
     Null,
     Bool(bool),
     Int(i64),
@@ -215,11 +217,6 @@ impl EventData {
     }
 }
 
-impl Default for EventData {
-    fn default() -> Self {
-        Self::Null
-    }
-}
 
 impl From<String> for EventData {
     fn from(s: String) -> Self {

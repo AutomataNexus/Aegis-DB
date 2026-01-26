@@ -89,7 +89,7 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            bind_address: "0.0.0.0:5432".parse().unwrap(),
+            bind_address: "0.0.0.0:5432".parse().expect("valid default bind address"),
             advertise_address: None,
             max_connections: 1000,
             connection_timeout: Duration::from_secs(30),

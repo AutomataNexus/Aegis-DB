@@ -310,8 +310,8 @@ fn parse_database_url(url: &str) -> Result<(String, Option<String>), String> {
         return Ok((entry.url.clone(), Some(lower)));
     }
 
-    if url.starts_with("aegis://") {
-        let rest = &url[8..]; // Remove "aegis://"
+    if let Some(rest) = url.strip_prefix("aegis://") {
+        // Remove "aegis://"
         if let Some(slash_pos) = rest.find('/') {
             let host_port = &rest[..slash_pos];
             let db_name = &rest[slash_pos + 1..];
@@ -408,7 +408,7 @@ async fn execute_query(client: &Client, server: &str, sql: &str, format: &str) -
             "csv" => {
                 println!("{}", data.columns.join(","));
                 for row in &data.rows {
-                    let values: Vec<String> = row.iter().map(|v| format_value(v)).collect();
+                    let values: Vec<String> = row.iter().map(format_value).collect();
                     println!("{}", values.join(","));
                 }
             }
@@ -419,7 +419,7 @@ async fn execute_query(client: &Client, server: &str, sql: &str, format: &str) -
                 } else {
                     let mut table = Table::new();
                     table.set_content_arrangement(ContentArrangement::Dynamic);
-                    table.set_header(data.columns.iter().map(|c| Cell::new(c)));
+                    table.set_header(data.columns.iter().map(Cell::new));
 
                     for row in &data.rows {
                         let cells: Vec<Cell> = row.iter().map(|v| Cell::new(format_value(v))).collect();
@@ -781,10 +781,10 @@ async fn handle_nodes(client: &Client, action: NodesCommands) -> Result<(), Stri
             };
 
             // Try to get node info from the server
-            let node_id = match client.get(&format!("{}/health", url)).send().await {
+            let node_id = match client.get(format!("{}/health", url)).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     // Try to get node ID from cluster info
-                    if let Ok(info) = client.get(&format!("{}/api/v1/cluster/info", url)).send().await {
+                    if let Ok(info) = client.get(format!("{}/api/v1/cluster/info", url)).send().await {
                         if let Ok(json) = info.json::<serde_json::Value>().await {
                             json.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string())
                         } else {
@@ -844,13 +844,13 @@ async fn handle_nodes(client: &Client, action: NodesCommands) -> Result<(), Stri
                 // Extract name from ID if present (format: "node-xxx (NodeName)")
                 let shorthand = if let Some(start) = node.id.find('(') {
                     if let Some(end) = node.id.find(')') {
-                        node.id[start + 1..end].to_lowercase().replace(' ', "-").replace('_', "-")
+                        node.id[start + 1..end].to_lowercase().replace([' ', '_'], "-")
                     } else {
-                        node.id.split('-').last().unwrap_or(&node.id).to_string()
+                        node.id.split('-').next_back().unwrap_or(&node.id).to_string()
                     }
                 } else {
                     // Use last part of node ID as shorthand
-                    node.id.split('-').last().unwrap_or(&node.id).to_string()
+                    node.id.split('-').next_back().unwrap_or(&node.id).to_string()
                 };
 
                 // Convert address to URL

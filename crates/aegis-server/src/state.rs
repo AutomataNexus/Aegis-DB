@@ -90,7 +90,7 @@ impl AppState {
                 if let Ok(entries) = std::fs::read_dir(&docs_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.extension().map_or(false, |e| e == "json") {
+                        if path.extension().is_some_and(|e| e == "json") {
                             if let Some(collection_name) = path.file_stem().and_then(|s| s.to_str()) {
                                 if let Ok(data) = std::fs::read_to_string(&path) {
                                     if let Ok(docs) = serde_json::from_str::<Vec<serde_json::Value>>(&data) {
@@ -232,7 +232,7 @@ impl AppState {
         let mut last_bytes_out: u64 = 0;
 
         // Initialize network bytes
-        for (_name, data) in networks.list() {
+        for data in networks.list().values() {
             last_bytes_in += data.total_received();
             last_bytes_out += data.total_transmitted();
         }
@@ -263,7 +263,7 @@ impl AppState {
             // Calculate network throughput
             let mut current_bytes_in: u64 = 0;
             let mut current_bytes_out: u64 = 0;
-            for (_name, data) in networks.list() {
+            for data in networks.list().values() {
                 current_bytes_in += data.total_received();
                 current_bytes_out += data.total_transmitted();
             }
@@ -982,7 +982,7 @@ mod tests {
         assert_eq!(entry.value, serde_json::json!("value1"));
 
         // Get
-        let retrieved = store.get("key1").unwrap();
+        let retrieved = store.get("key1").expect("key1 should exist after set");
         assert_eq!(retrieved.value, serde_json::json!("value1"));
 
         // List

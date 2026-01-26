@@ -16,18 +16,15 @@ use aegis_common::Value;
 
 /// The type of index to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub enum IndexType {
     /// B-tree index for range queries and ordered scans.
+    #[default]
     BTree,
     /// Hash index for equality lookups (faster for exact matches).
     Hash,
 }
 
-impl Default for IndexType {
-    fn default() -> Self {
-        IndexType::BTree
-    }
-}
 
 // =============================================================================
 // Index Key
@@ -166,7 +163,7 @@ impl BTreeIndex {
 
     /// Insert a key-rowid pair into the index.
     pub fn insert(&self, key: IndexKey, row_id: RowId) -> Result<(), IndexError> {
-        let mut tree = self.tree.write().unwrap();
+        let mut tree = self.tree.write().expect("BTreeIndex tree lock poisoned");
 
         if self.unique {
             if let Some(existing) = tree.get(&key) {
@@ -179,19 +176,19 @@ impl BTreeIndex {
             }
         }
 
-        let entry = tree.entry(key).or_insert_with(HashSet::new);
+        let entry = tree.entry(key).or_default();
         if entry.insert(row_id) {
-            *self.entry_count.write().unwrap() += 1;
+            *self.entry_count.write().expect("BTreeIndex entry_count lock poisoned") += 1;
         }
         Ok(())
     }
 
     /// Remove a key-rowid pair from the index.
     pub fn remove(&self, key: &IndexKey, row_id: RowId) -> bool {
-        let mut tree = self.tree.write().unwrap();
+        let mut tree = self.tree.write().expect("BTreeIndex tree lock poisoned");
         if let Some(row_ids) = tree.get_mut(key) {
             if row_ids.remove(&row_id) {
-                *self.entry_count.write().unwrap() -= 1;
+                *self.entry_count.write().expect("BTreeIndex entry_count lock poisoned") -= 1;
                 if row_ids.is_empty() {
                     tree.remove(key);
                 }
@@ -203,7 +200,7 @@ impl BTreeIndex {
 
     /// Look up an exact key.
     pub fn get(&self, key: &IndexKey) -> Vec<RowId> {
-        let tree = self.tree.read().unwrap();
+        let tree = self.tree.read().expect("BTreeIndex tree lock poisoned");
         tree.get(key)
             .map(|ids| ids.iter().copied().collect())
             .unwrap_or_default()
@@ -217,7 +214,7 @@ impl BTreeIndex {
         start_inclusive: bool,
         end_inclusive: bool,
     ) -> Vec<RowId> {
-        let tree = self.tree.read().unwrap();
+        let tree = self.tree.read().expect("BTreeIndex tree lock poisoned");
         let mut result = Vec::new();
 
         use std::ops::Bound;
@@ -243,13 +240,13 @@ impl BTreeIndex {
 
     /// Get all row IDs in index order.
     pub fn scan_all(&self) -> Vec<RowId> {
-        let tree = self.tree.read().unwrap();
+        let tree = self.tree.read().expect("BTreeIndex tree lock poisoned");
         tree.values().flat_map(|ids| ids.iter().copied()).collect()
     }
 
     /// Get the number of entries in the index.
     pub fn len(&self) -> usize {
-        *self.entry_count.read().unwrap()
+        *self.entry_count.read().expect("BTreeIndex entry_count lock poisoned")
     }
 
     /// Check if the index is empty.
@@ -259,9 +256,9 @@ impl BTreeIndex {
 
     /// Clear all entries from the index.
     pub fn clear(&self) {
-        let mut tree = self.tree.write().unwrap();
+        let mut tree = self.tree.write().expect("BTreeIndex tree lock poisoned");
         tree.clear();
-        *self.entry_count.write().unwrap() = 0;
+        *self.entry_count.write().expect("BTreeIndex entry_count lock poisoned") = 0;
     }
 }
 
@@ -300,7 +297,7 @@ impl HashIndex {
 
     /// Insert a key-rowid pair into the index.
     pub fn insert(&self, key: IndexKey, row_id: RowId) -> Result<(), IndexError> {
-        let mut map = self.map.write().unwrap();
+        let mut map = self.map.write().expect("HashIndex map lock poisoned");
 
         if self.unique {
             if let Some(existing) = map.get(&key) {
@@ -313,19 +310,19 @@ impl HashIndex {
             }
         }
 
-        let entry = map.entry(key).or_insert_with(HashSet::new);
+        let entry = map.entry(key).or_default();
         if entry.insert(row_id) {
-            *self.entry_count.write().unwrap() += 1;
+            *self.entry_count.write().expect("HashIndex entry_count lock poisoned") += 1;
         }
         Ok(())
     }
 
     /// Remove a key-rowid pair from the index.
     pub fn remove(&self, key: &IndexKey, row_id: RowId) -> bool {
-        let mut map = self.map.write().unwrap();
+        let mut map = self.map.write().expect("HashIndex map lock poisoned");
         if let Some(row_ids) = map.get_mut(key) {
             if row_ids.remove(&row_id) {
-                *self.entry_count.write().unwrap() -= 1;
+                *self.entry_count.write().expect("HashIndex entry_count lock poisoned") -= 1;
                 if row_ids.is_empty() {
                     map.remove(key);
                 }
@@ -337,7 +334,7 @@ impl HashIndex {
 
     /// Look up an exact key.
     pub fn get(&self, key: &IndexKey) -> Vec<RowId> {
-        let map = self.map.read().unwrap();
+        let map = self.map.read().expect("HashIndex map lock poisoned");
         map.get(key)
             .map(|ids| ids.iter().copied().collect())
             .unwrap_or_default()
@@ -345,7 +342,7 @@ impl HashIndex {
 
     /// Get the number of entries in the index.
     pub fn len(&self) -> usize {
-        *self.entry_count.read().unwrap()
+        *self.entry_count.read().expect("HashIndex entry_count lock poisoned")
     }
 
     /// Check if the index is empty.
@@ -355,9 +352,9 @@ impl HashIndex {
 
     /// Clear all entries from the index.
     pub fn clear(&self) {
-        let mut map = self.map.write().unwrap();
+        let mut map = self.map.write().expect("HashIndex map lock poisoned");
         map.clear();
-        *self.entry_count.write().unwrap() = 0;
+        *self.entry_count.write().expect("HashIndex entry_count lock poisoned") = 0;
     }
 }
 
@@ -487,7 +484,7 @@ impl TableIndexManager {
     ) -> Result<(), IndexError> {
         match index_type {
             IndexType::BTree => {
-                let mut indexes = self.btree_indexes.write().unwrap();
+                let mut indexes = self.btree_indexes.write().expect("TableIndexManager btree_indexes lock poisoned");
                 if indexes.contains_key(&name) {
                     return Err(IndexError::DuplicateKey(format!("Index '{}' already exists", name)));
                 }
@@ -497,7 +494,7 @@ impl TableIndexManager {
                 );
             }
             IndexType::Hash => {
-                let mut indexes = self.hash_indexes.write().unwrap();
+                let mut indexes = self.hash_indexes.write().expect("TableIndexManager hash_indexes lock poisoned");
                 if indexes.contains_key(&name) {
                     return Err(IndexError::DuplicateKey(format!("Index '{}' already exists", name)));
                 }
@@ -512,12 +509,12 @@ impl TableIndexManager {
 
     /// Drop an index.
     pub fn drop_index(&self, name: &str) -> Result<(), IndexError> {
-        let mut btree = self.btree_indexes.write().unwrap();
+        let mut btree = self.btree_indexes.write().expect("TableIndexManager btree_indexes lock poisoned");
         if btree.remove(name).is_some() {
             return Ok(());
         }
 
-        let mut hash = self.hash_indexes.write().unwrap();
+        let mut hash = self.hash_indexes.write().expect("TableIndexManager hash_indexes lock poisoned");
         if hash.remove(name).is_some() {
             return Ok(());
         }
@@ -532,14 +529,14 @@ impl TableIndexManager {
         column_values: &HashMap<String, Value>,
     ) -> Result<(), IndexError> {
         // Insert into B-tree indexes
-        let btree = self.btree_indexes.read().unwrap();
+        let btree = self.btree_indexes.read().expect("TableIndexManager btree_indexes lock poisoned");
         for index in btree.values() {
             let key = self.build_key(&index.columns, column_values);
             index.insert(key, row_id)?;
         }
 
         // Insert into hash indexes
-        let hash = self.hash_indexes.read().unwrap();
+        let hash = self.hash_indexes.read().expect("TableIndexManager hash_indexes lock poisoned");
         for index in hash.values() {
             let key = self.build_key(&index.columns, column_values);
             index.insert(key, row_id)?;
@@ -551,14 +548,14 @@ impl TableIndexManager {
     /// Remove a row from all indexes.
     pub fn remove_row(&self, row_id: RowId, column_values: &HashMap<String, Value>) {
         // Remove from B-tree indexes
-        let btree = self.btree_indexes.read().unwrap();
+        let btree = self.btree_indexes.read().expect("TableIndexManager btree_indexes lock poisoned");
         for index in btree.values() {
             let key = self.build_key(&index.columns, column_values);
             index.remove(&key, row_id);
         }
 
         // Remove from hash indexes
-        let hash = self.hash_indexes.read().unwrap();
+        let hash = self.hash_indexes.read().expect("TableIndexManager hash_indexes lock poisoned");
         for index in hash.values() {
             let key = self.build_key(&index.columns, column_values);
             index.remove(&key, row_id);
@@ -579,13 +576,13 @@ impl TableIndexManager {
     /// Look up rows by index for equality.
     pub fn lookup_eq(&self, index_name: &str, key: &IndexKey) -> Option<Vec<RowId>> {
         // Check B-tree indexes
-        let btree = self.btree_indexes.read().unwrap();
+        let btree = self.btree_indexes.read().expect("TableIndexManager btree_indexes lock poisoned");
         if let Some(index) = btree.get(index_name) {
             return Some(index.get(key));
         }
 
         // Check hash indexes
-        let hash = self.hash_indexes.read().unwrap();
+        let hash = self.hash_indexes.read().expect("TableIndexManager hash_indexes lock poisoned");
         if let Some(index) = hash.get(index_name) {
             return Some(index.get(key));
         }
@@ -602,7 +599,7 @@ impl TableIndexManager {
         start_inclusive: bool,
         end_inclusive: bool,
     ) -> Option<Vec<RowId>> {
-        let btree = self.btree_indexes.read().unwrap();
+        let btree = self.btree_indexes.read().expect("TableIndexManager btree_indexes lock poisoned");
         btree.get(index_name).map(|index| {
             index.range(start, end, start_inclusive, end_inclusive)
         })
@@ -611,7 +608,7 @@ impl TableIndexManager {
     /// Find the best index for a set of columns.
     pub fn find_index_for_columns(&self, columns: &[String]) -> Option<(String, IndexType)> {
         // First try to find an exact match in hash indexes (faster for equality)
-        let hash = self.hash_indexes.read().unwrap();
+        let hash = self.hash_indexes.read().expect("TableIndexManager hash_indexes lock poisoned");
         for (name, index) in hash.iter() {
             if index.columns == columns {
                 return Some((name.clone(), IndexType::Hash));
@@ -619,7 +616,7 @@ impl TableIndexManager {
         }
 
         // Then try B-tree indexes (can use prefix of columns)
-        let btree = self.btree_indexes.read().unwrap();
+        let btree = self.btree_indexes.read().expect("TableIndexManager btree_indexes lock poisoned");
         for (name, index) in btree.iter() {
             if columns.len() <= index.columns.len()
                 && index.columns[..columns.len()] == columns[..]
@@ -633,19 +630,19 @@ impl TableIndexManager {
 
     /// Get all index names.
     pub fn index_names(&self) -> Vec<String> {
-        let btree = self.btree_indexes.read().unwrap();
-        let hash = self.hash_indexes.read().unwrap();
+        let btree = self.btree_indexes.read().expect("TableIndexManager btree_indexes lock poisoned");
+        let hash = self.hash_indexes.read().expect("TableIndexManager hash_indexes lock poisoned");
         btree.keys().chain(hash.keys()).cloned().collect()
     }
 
     /// Get index info by name.
     pub fn get_index_info(&self, name: &str) -> Option<(Vec<String>, bool, IndexType)> {
-        let btree = self.btree_indexes.read().unwrap();
+        let btree = self.btree_indexes.read().expect("TableIndexManager btree_indexes lock poisoned");
         if let Some(index) = btree.get(name) {
             return Some((index.columns.clone(), index.unique, IndexType::BTree));
         }
 
-        let hash = self.hash_indexes.read().unwrap();
+        let hash = self.hash_indexes.read().expect("TableIndexManager hash_indexes lock poisoned");
         if let Some(index) = hash.get(name) {
             return Some((index.columns.clone(), index.unique, IndexType::Hash));
         }
@@ -661,14 +658,14 @@ impl TableIndexManager {
         row_id: RowId,
     ) -> Result<(), IndexError> {
         // Check B-tree indexes
-        let btree = self.btree_indexes.read().unwrap();
+        let btree = self.btree_indexes.read().expect("TableIndexManager btree_indexes lock poisoned");
         if let Some(index) = btree.get(index_name) {
             return index.insert(key, row_id);
         }
         drop(btree);
 
         // Check hash indexes
-        let hash = self.hash_indexes.read().unwrap();
+        let hash = self.hash_indexes.read().expect("TableIndexManager hash_indexes lock poisoned");
         if let Some(index) = hash.get(index_name) {
             return index.insert(key, row_id);
         }
@@ -684,14 +681,14 @@ impl TableIndexManager {
         row_id: RowId,
     ) -> Result<bool, IndexError> {
         // Check B-tree indexes
-        let btree = self.btree_indexes.read().unwrap();
+        let btree = self.btree_indexes.read().expect("TableIndexManager btree_indexes lock poisoned");
         if let Some(index) = btree.get(index_name) {
             return Ok(index.remove(key, row_id));
         }
         drop(btree);
 
         // Check hash indexes
-        let hash = self.hash_indexes.read().unwrap();
+        let hash = self.hash_indexes.read().expect("TableIndexManager hash_indexes lock poisoned");
         if let Some(index) = hash.get(index_name) {
             return Ok(index.remove(key, row_id));
         }

@@ -30,7 +30,7 @@ pub fn create_router(state: AppState) -> Router {
             .allow_origin(AllowOrigin::exact(
                 format!("http://{}:{}", state.config.host, state.config.port)
                     .parse()
-                    .unwrap_or_else(|_| "http://localhost:3000".parse().unwrap())
+                    .unwrap_or_else(|_| "http://localhost:3000".parse().expect("default CORS origin should be valid"))
             ))
             .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
@@ -197,10 +197,10 @@ mod tests {
                 Request::builder()
                     .uri("/health")
                     .body(Body::empty())
-                    .unwrap(),
+                    .expect("failed to build request"),
             )
             .await
-            .unwrap();
+            .expect("failed to execute request");
 
         assert_eq!(response.status(), StatusCode::OK);
     }
@@ -215,10 +215,10 @@ mod tests {
                 Request::builder()
                     .uri("/nonexistent")
                     .body(Body::empty())
-                    .unwrap(),
+                    .expect("failed to build request"),
             )
             .await
-            .unwrap();
+            .expect("failed to execute request");
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
