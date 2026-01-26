@@ -5,7 +5,12 @@
 //! @version 0.2.0
 //! @author AutomataNexus Development Team
 
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use parking_lot::RwLock;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -305,64 +310,49 @@ pub struct AuthService {
 
 impl AuthService {
     /// Create a new authentication service.
+    ///
+    /// If AEGIS_ADMIN_USERNAME and AEGIS_ADMIN_PASSWORD environment variables
+    /// are set, an initial admin user will be created. Otherwise, the system
+    /// starts with no users and the first user must be created via the API
+    /// or CLI.
     pub fn new() -> Self {
         let mut users = HashMap::new();
+        let mut user_count = 0;
 
-        // Create default admin user
-        let admin = User {
-            id: "user-001".to_string(),
-            username: "admin".to_string(),
-            email: "admin@aegisdb.io".to_string(),
-            password_hash: hash_password("admin"),
-            role: UserRole::Admin,
-            mfa_enabled: true,
-            mfa_secret: Some("JBSWY3DPEHPK3PXP".to_string()), // Base32 encoded secret
-            created_at: now_timestamp(),
-            last_login: None,
-        };
-        users.insert(admin.username.clone(), admin);
+        // Check for initial admin user from environment variables
+        if let (Ok(username), Ok(password)) = (
+            std::env::var("AEGIS_ADMIN_USERNAME"),
+            std::env::var("AEGIS_ADMIN_PASSWORD"),
+        ) {
+            // Validate password meets security requirements
+            if password.len() >= 12 {
+                let email = std::env::var("AEGIS_ADMIN_EMAIL")
+                    .unwrap_or_else(|_| format!("{}@localhost", username));
 
-        // Create demo user (no MFA)
-        let demo = User {
-            id: "user-002".to_string(),
-            username: "demo".to_string(),
-            email: "demo@aegisdb.io".to_string(),
-            password_hash: hash_password("demo"),
-            role: UserRole::Viewer,
-            mfa_enabled: false,
-            mfa_secret: None,
-            created_at: now_timestamp(),
-            last_login: None,
-        };
-        users.insert(demo.username.clone(), demo);
-
-        // Create operator user
-        let operator = User {
-            id: "user-003".to_string(),
-            username: "operator".to_string(),
-            email: "operator@aegisdb.io".to_string(),
-            password_hash: hash_password("operator"),
-            role: UserRole::Operator,
-            mfa_enabled: false,
-            mfa_secret: None,
-            created_at: now_timestamp(),
-            last_login: None,
-        };
-        users.insert(operator.username.clone(), operator);
-
-        // Create DevOps admin user (Andrew Jewell)
-        let devops = User {
-            id: "user-004".to_string(),
-            username: "DevOps".to_string(),
-            email: "DevOps@automatanexus.com".to_string(),
-            password_hash: hash_password("Invertedskynet2$"),
-            role: UserRole::Admin,
-            mfa_enabled: false,
-            mfa_secret: None,
-            created_at: now_timestamp(),
-            last_login: None,
-        };
-        users.insert(devops.username.clone(), devops);
+                user_count += 1;
+                let admin = User {
+                    id: format!("user-{:03}", user_count),
+                    username: username.clone(),
+                    email,
+                    password_hash: hash_password(&password),
+                    role: UserRole::Admin,
+                    mfa_enabled: false,
+                    mfa_secret: None,
+                    created_at: now_timestamp(),
+                    last_login: None,
+                };
+                tracing::info!("Created initial admin user '{}' from environment", username);
+                users.insert(admin.username.clone(), admin);
+            } else {
+                tracing::warn!(
+                    "AEGIS_ADMIN_PASSWORD must be at least 12 characters. Initial admin user not created."
+                );
+            }
+        } else {
+            tracing::info!(
+                "No initial admin configured. Set AEGIS_ADMIN_USERNAME and AEGIS_ADMIN_PASSWORD to create one."
+            );
+        }
 
         Self {
             users: RwLock::new(users),
@@ -513,6 +503,21 @@ impl AuthService {
             return Err(format!("User '{}' already exists", username));
         }
 
+        // Validate password strength
+        if password.len() < 8 {
+            return Err("Password must be at least 8 characters".to_string());
+        }
+
+        // Validate username (alphanumeric and underscore only)
+        if !username.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err("Username must contain only alphanumeric characters and underscores".to_string());
+        }
+
+        // Basic email validation
+        if !email.contains('@') || !email.contains('.') {
+            return Err("Invalid email format".to_string());
+        }
+
         let user_role = match role.to_lowercase().as_str() {
             "admin" => UserRole::Admin,
             "operator" => UserRole::Operator,
@@ -521,7 +526,7 @@ impl AuthService {
 
         let id = format!("user-{:03}", users.len() + 1);
         let user = User {
-            id,
+            id: id.clone(),
             username: username.to_string(),
             email: email.to_string(),
             password_hash: hash_password(password),
@@ -534,6 +539,10 @@ impl AuthService {
 
         let user_info = UserInfo::from(&user);
         users.insert(username.to_string(), user);
+
+        // Note: Role assignment should be handled by RbacManager separately
+        tracing::info!("Created user '{}' with role '{}'", username, role);
+
         Ok(user_info)
     }
 
@@ -580,6 +589,47 @@ impl AuthService {
         Ok(())
     }
 
+    /// Enable MFA for a user and return the generated secret.
+    /// The secret should be stored by the user in their authenticator app.
+    pub fn enable_mfa(&self, username: &str) -> Result<String, String> {
+        let mut users = self.users.write();
+
+        let user = users.get_mut(username)
+            .ok_or_else(|| format!("User '{}' not found", username))?;
+
+        if user.mfa_enabled {
+            return Err("MFA is already enabled for this user".to_string());
+        }
+
+        // Generate a new MFA secret
+        let secret = generate_mfa_secret();
+        user.mfa_secret = Some(secret.clone());
+        user.mfa_enabled = true;
+
+        tracing::info!("Enabled MFA for user '{}'", username);
+
+        Ok(secret)
+    }
+
+    /// Disable MFA for a user.
+    pub fn disable_mfa(&self, username: &str) -> Result<(), String> {
+        let mut users = self.users.write();
+
+        let user = users.get_mut(username)
+            .ok_or_else(|| format!("User '{}' not found", username))?;
+
+        if !user.mfa_enabled {
+            return Err("MFA is not enabled for this user".to_string());
+        }
+
+        user.mfa_secret = None;
+        user.mfa_enabled = false;
+
+        tracing::info!("Disabled MFA for user '{}'", username);
+
+        Ok(())
+    }
+
     /// Clean up expired sessions.
     pub fn cleanup_expired(&self) {
         let mut sessions = self.sessions.write();
@@ -600,39 +650,74 @@ impl Default for AuthService {
 // Helper Functions
 // =============================================================================
 
-/// Generate a secure random token.
+/// Generate a cryptographically secure random token (256-bit).
 fn generate_token() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 32] = rng.gen();
+    hex::encode(&bytes)
+}
 
-    let mut hasher = DefaultHasher::new();
-    SystemTime::now().hash(&mut hasher);
-    std::process::id().hash(&mut hasher);
+/// Generate a cryptographically secure random token using hex encoding.
+mod hex {
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
 
-    // Add some randomness from timing
-    let start = Instant::now();
-    for _ in 0..1000 {
-        std::hint::black_box(1 + 1);
+    pub fn encode(bytes: &[u8]) -> String {
+        let mut result = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            result.push(HEX_CHARS[(byte >> 4) as usize] as char);
+            result.push(HEX_CHARS[(byte & 0x0f) as usize] as char);
+        }
+        result
     }
-    start.elapsed().as_nanos().hash(&mut hasher);
-
-    format!("{:016x}{:016x}", hasher.finish(), now_timestamp())
 }
 
-/// Hash a password (simplified - in production use bcrypt/argon2).
+/// Hash a password using Argon2id with a random salt.
 fn hash_password(password: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
 
-    let mut hasher = DefaultHasher::new();
-    password.hash(&mut hasher);
-    "aegis_salt_v1".hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    argon2
+        .hash_password(password.as_bytes(), &salt)
+        .expect("Failed to hash password")
+        .to_string()
 }
 
-/// Verify a password against its hash.
+/// Verify a password against its Argon2 hash.
 fn verify_password(password: &str, hash: &str) -> bool {
-    hash_password(password) == hash
+    let parsed_hash = match PasswordHash::new(hash) {
+        Ok(h) => h,
+        Err(_) => return false,
+    };
+
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .is_ok()
+}
+
+/// Generate a cryptographically secure MFA secret (Base32 encoded).
+fn generate_mfa_secret() -> String {
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 20] = rng.gen(); // 160 bits for TOTP
+
+    // Base32 encode (RFC 4648)
+    const BASE32_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let mut result = String::with_capacity(32);
+
+    for chunk in bytes.chunks(5) {
+        let mut buffer = [0u8; 5];
+        buffer[..chunk.len()].copy_from_slice(chunk);
+
+        result.push(BASE32_ALPHABET[(buffer[0] >> 3) as usize] as char);
+        result.push(BASE32_ALPHABET[((buffer[0] & 0x07) << 2 | buffer[1] >> 6) as usize] as char);
+        result.push(BASE32_ALPHABET[((buffer[1] & 0x3E) >> 1) as usize] as char);
+        result.push(BASE32_ALPHABET[((buffer[1] & 0x01) << 4 | buffer[2] >> 4) as usize] as char);
+        result.push(BASE32_ALPHABET[((buffer[2] & 0x0F) << 1 | buffer[3] >> 7) as usize] as char);
+        result.push(BASE32_ALPHABET[((buffer[3] & 0x7C) >> 2) as usize] as char);
+        result.push(BASE32_ALPHABET[((buffer[3] & 0x03) << 3 | buffer[4] >> 5) as usize] as char);
+        result.push(BASE32_ALPHABET[(buffer[4] & 0x1F) as usize] as char);
+    }
+
+    result
 }
 
 /// Verify a TOTP code using RFC 6238 algorithm.
@@ -879,12 +964,8 @@ impl RbacManager {
         ];
         roles.insert("analyst".to_string(), Role::new("analyst", "Data analyst with read access", analyst_permissions));
 
-        // Default user-role mappings
-        let mut user_roles: HashMap<String, HashSet<String>> = HashMap::new();
-        user_roles.insert("user-001".to_string(), ["admin".to_string()].into_iter().collect());
-        user_roles.insert("user-002".to_string(), ["viewer".to_string()].into_iter().collect());
-        user_roles.insert("user-003".to_string(), ["operator".to_string()].into_iter().collect());
-        user_roles.insert("user-004".to_string(), ["admin".to_string()].into_iter().collect()); // DevOps admin
+        // User-role mappings start empty - assigned when users are created
+        let user_roles: HashMap<String, HashSet<String>> = HashMap::new();
 
         Self {
             roles: RwLock::new(roles),
@@ -1723,38 +1804,62 @@ fn urlencoding_encode(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Helper to create an auth service with a test user
+    fn auth_with_test_user() -> AuthService {
+        let auth = AuthService::new();
+        auth.create_user("testuser", "test@example.com", "TestPassword123!", "viewer").unwrap();
+        auth
+    }
+
+    /// Helper to create an auth service with an admin user (MFA enabled)
+    fn auth_with_admin_user() -> (AuthService, String) {
+        let auth = AuthService::new();
+        auth.create_user("testadmin", "admin@example.com", "AdminPassword123!", "admin").unwrap();
+
+        // Enable MFA and get the secret
+        let secret = generate_mfa_secret();
+        {
+            let mut users = auth.users.write();
+            if let Some(user) = users.get_mut("testadmin") {
+                user.mfa_enabled = true;
+                user.mfa_secret = Some(secret.clone());
+            }
+        }
+
+        (auth, secret)
+    }
+
     #[test]
     fn test_login_success() {
-        let auth = AuthService::new();
-        let response = auth.login("demo", "demo");
+        let auth = auth_with_test_user();
+        let response = auth.login("testuser", "TestPassword123!");
         assert!(response.token.is_some());
         assert!(response.user.is_some());
     }
 
     #[test]
     fn test_login_invalid_password() {
-        let auth = AuthService::new();
-        let response = auth.login("demo", "wrong");
+        let auth = auth_with_test_user();
+        let response = auth.login("testuser", "wrong");
         assert!(response.error.is_some());
     }
 
     #[test]
     fn test_login_mfa_required() {
-        let auth = AuthService::new();
-        let response = auth.login("admin", "admin");
+        let (auth, _secret) = auth_with_admin_user();
+        let response = auth.login("testadmin", "AdminPassword123!");
         assert!(response.requires_mfa == Some(true));
         assert!(response.token.is_some());
     }
 
     #[test]
     fn test_mfa_verification() {
-        let auth = AuthService::new();
-        let login_response = auth.login("admin", "admin");
+        let (auth, secret) = auth_with_admin_user();
+        let login_response = auth.login("testadmin", "AdminPassword123!");
         let temp_token = login_response.token.unwrap();
 
-        // Generate a valid TOTP code using the admin's secret
-        let secret = "JBSWY3DPEHPK3PXP";
-        let totp_code = generate_test_totp(secret);
+        // Generate a valid TOTP code using the user's secret
+        let totp_code = generate_test_totp(&secret);
 
         let mfa_response = auth.verify_mfa(&totp_code, &temp_token);
         assert!(mfa_response.token.is_some(), "MFA verification failed: {:?}", mfa_response.error);
@@ -1796,23 +1901,53 @@ mod tests {
 
     #[test]
     fn test_session_validation() {
-        let auth = AuthService::new();
-        let response = auth.login("demo", "demo");
+        let auth = auth_with_test_user();
+        let response = auth.login("testuser", "TestPassword123!");
         let token = response.token.unwrap();
 
         let user = auth.validate_session(&token);
         assert!(user.is_some());
-        assert_eq!(user.unwrap().username, "demo");
+        assert_eq!(user.unwrap().username, "testuser");
     }
 
     #[test]
     fn test_logout() {
-        let auth = AuthService::new();
-        let response = auth.login("demo", "demo");
+        let auth = auth_with_test_user();
+        let response = auth.login("testuser", "TestPassword123!");
         let token = response.token.unwrap();
 
         assert!(auth.logout(&token));
         assert!(auth.validate_session(&token).is_none());
+    }
+
+    #[test]
+    fn test_password_validation() {
+        let auth = AuthService::new();
+
+        // Password too short
+        let result = auth.create_user("user1", "test@example.com", "short", "viewer");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("8 characters"));
+    }
+
+    #[test]
+    fn test_username_validation() {
+        let auth = AuthService::new();
+
+        // Invalid username (contains special chars)
+        let result = auth.create_user("user@name", "test@example.com", "ValidPassword123", "viewer");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("alphanumeric"));
+    }
+
+    #[test]
+    fn test_email_validation() {
+        let auth = AuthService::new();
+
+        // Invalid email
+        let result = auth.create_user("username", "invalid-email", "ValidPassword123", "viewer");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("email"));
     }
 
     // RBAC Tests
@@ -1828,13 +1963,18 @@ mod tests {
     #[test]
     fn test_rbac_check_permission() {
         let rbac = RbacManager::new();
+
+        // Assign admin role to a test user
+        rbac.assign_role("test-user-1", "admin").unwrap();
+        rbac.assign_role("test-user-2", "viewer").unwrap();
+
         // Admin user should have all permissions
-        assert!(rbac.check_permission("user-001", Permission::DatabaseCreate));
-        assert!(rbac.check_permission("user-001", Permission::ClusterManage));
+        assert!(rbac.check_permission("test-user-1", Permission::DatabaseCreate));
+        assert!(rbac.check_permission("test-user-1", Permission::ClusterManage));
 
         // Viewer should only have read permissions
-        assert!(rbac.check_permission("user-002", Permission::DataSelect));
-        assert!(!rbac.check_permission("user-002", Permission::DataInsert));
+        assert!(rbac.check_permission("test-user-2", Permission::DataSelect));
+        assert!(!rbac.check_permission("test-user-2", Permission::DataInsert));
     }
 
     #[test]
@@ -1856,10 +1996,10 @@ mod tests {
     #[test]
     fn test_rbac_assign_role() {
         let rbac = RbacManager::new();
-        let result = rbac.assign_role("user-004", "analyst");
+        let result = rbac.assign_role("new-user", "analyst");
         assert!(result.is_ok());
 
-        let roles = rbac.get_user_roles("user-004");
+        let roles = rbac.get_user_roles("new-user");
         assert!(roles.contains(&"analyst".to_string()));
     }
 
@@ -1874,7 +2014,7 @@ mod tests {
     #[test]
     fn test_audit_log_entry() {
         let audit = AuditLogger::new(1000);
-        audit.log_login_success("user-001", "admin", Some("192.168.1.1"));
+        audit.log_login_success("user-001", "testuser", Some("192.168.1.1"));
 
         let entries = audit.get_entries(10, 0);
         assert_eq!(entries.len(), 1);
@@ -1916,6 +2056,39 @@ mod tests {
         assert_eq!(audit.count(), 5);
     }
 
+    // Password hashing tests
+    #[test]
+    fn test_password_hashing_unique() {
+        let hash1 = hash_password("testpassword");
+        let hash2 = hash_password("testpassword");
+        // Each hash should be different due to random salt
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_password_verification() {
+        let password = "SecurePassword123!";
+        let hash = hash_password(password);
+        assert!(verify_password(password, &hash));
+        assert!(!verify_password("wrongpassword", &hash));
+    }
+
+    #[test]
+    fn test_token_generation_unique() {
+        let token1 = generate_token();
+        let token2 = generate_token();
+        assert_ne!(token1, token2);
+        assert_eq!(token1.len(), 64); // 256 bits = 64 hex chars
+    }
+
+    #[test]
+    fn test_mfa_secret_generation() {
+        let secret1 = generate_mfa_secret();
+        let secret2 = generate_mfa_secret();
+        assert_ne!(secret1, secret2);
+        assert_eq!(secret1.len(), 32); // 160 bits = 32 base32 chars
+    }
+
     // LDAP Tests
     #[test]
     fn test_ldap_authenticator_config_validation() {
@@ -1939,34 +2112,6 @@ mod tests {
         assert!(!result.success);
         assert!(result.error.is_some());
         assert!(result.error.unwrap().contains("Password is required"));
-    }
-
-    #[tokio::test]
-    async fn test_ldap_authenticator_real_connection() {
-        // This test requires an actual LDAP server
-        // Set AEGIS_LDAP_TEST_URL env var to enable (e.g., ldap://localhost:389)
-        let ldap_url = std::env::var("AEGIS_LDAP_TEST_URL").ok();
-
-        if let Some(url) = ldap_url {
-            let mut config = LdapConfig::default();
-            config.server_url = url;
-
-            // Also check for test credentials
-            let username = std::env::var("AEGIS_LDAP_TEST_USER").unwrap_or_else(|_| "testuser".to_string());
-            let password = std::env::var("AEGIS_LDAP_TEST_PASSWORD").unwrap_or_else(|_| "testpass".to_string());
-
-            let ldap = LdapAuthenticator::new(config);
-            let result = ldap.authenticate(&username, &password);
-
-            // With a real LDAP server, this should either succeed or fail with auth error
-            // (not a connection error)
-            if !result.success {
-                // Should be an auth failure, not a config/connection issue
-                println!("LDAP auth result: {:?}", result.error);
-            }
-        } else {
-            println!("Skipping real LDAP test - set AEGIS_LDAP_TEST_URL to enable");
-        }
     }
 
     #[test]

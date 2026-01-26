@@ -11,6 +11,7 @@ use crate::admin::AdminService;
 use crate::auth::{AuthService, RbacManager};
 use crate::config::ServerConfig;
 use crate::handlers::{MetricsDataPoint, ServerSettings};
+use crate::middleware::RateLimiter;
 use aegis_document::{Document, DocumentEngine};
 use aegis_query::{Executor, Parser, Planner};
 use aegis_query::planner::PlannerSchema;
@@ -46,6 +47,8 @@ pub struct AppState {
     pub metrics_history: Arc<RwLock<Vec<MetricsDataPoint>>>,
     pub graph_store: Arc<GraphStore>,
     pub rbac: Arc<RbacManager>,
+    pub rate_limiter: Arc<RateLimiter>,
+    pub login_rate_limiter: Arc<RateLimiter>,
     data_dir: Option<PathBuf>,
 }
 
@@ -134,6 +137,10 @@ impl AppState {
             config.peers.clone(),
         ));
 
+        // Create rate limiters using config values
+        let rate_limiter = Arc::new(RateLimiter::new(config.rate_limit_per_minute));
+        let login_rate_limiter = Arc::new(RateLimiter::new(config.login_rate_limit_per_minute));
+
         Self {
             config: Arc::new(config),
             query_engine: Arc::new(QueryEngine::new()),
@@ -149,6 +156,8 @@ impl AppState {
             metrics_history,
             graph_store,
             rbac: Arc::new(RbacManager::new()),
+            rate_limiter,
+            login_rate_limiter,
             data_dir,
         }
     }

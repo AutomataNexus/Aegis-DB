@@ -47,6 +47,13 @@ hmac = "0.12"
 sha1 = "0.10"
 # System metrics
 sysinfo = "0.30"
+# Secure password hashing
+argon2 = "0.5"
+# Cryptographically secure random
+rand = "0.8"
+# TLS support
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls-pemfile = "2.0"
 
 [dev-dependencies]
 tempfile = { workspace = true }
