@@ -13,10 +13,11 @@
 //! @author AutomataNexus Development Team
 
 use crate::planner::{
-    AggregateFunction, AlterTableNode, CreateIndexNode, CreateTableConstraint, CreateTableNode,
-    DeleteNode, DropIndexNode, DropTableNode, InsertNode, InsertPlanSource, JoinStrategy,
-    PlanAlterOperation, PlanBinaryOp, PlanExpression, PlanJoinType, PlanLiteral, PlanNode,
-    PlanUnaryOp, QueryPlan, ScanNode, UpdateNode,
+    AggregateExpr, AggregateFunction, AggregateNode, AlterTableNode, CreateIndexNode,
+    CreateTableConstraint, CreateTableNode, DeleteNode, DropIndexNode, DropTableNode, FilterNode,
+    InsertNode, InsertPlanSource, JoinNode, JoinStrategy, LimitNode, PlanAlterOperation,
+    PlanBinaryOp, PlanExpression, PlanJoinType, PlanLiteral, PlanNode, PlanUnaryOp, ProjectNode,
+    ProjectionExpr, QueryPlan, ScanNode, SortKey, SortNode, UpdateNode,
 };
 use aegis_common::{DataType, Row, Value};
 use std::collections::HashMap;
@@ -70,12 +71,33 @@ pub struct TableData {
     pub rows: Vec<Row>,
 }
 
+/// Stored table constraint.
+#[derive(Debug, Clone)]
+pub struct StoredConstraint {
+    pub name: String,
+    pub constraint_type: StoredConstraintType,
+}
+
+/// Stored constraint type.
+#[derive(Debug, Clone)]
+pub enum StoredConstraintType {
+    PrimaryKey { columns: Vec<String> },
+    Unique { columns: Vec<String> },
+    ForeignKey {
+        columns: Vec<String>,
+        ref_table: String,
+        ref_columns: Vec<String>,
+    },
+    Check { expression_text: String },
+}
+
 /// Table schema information.
 #[derive(Debug, Clone)]
 pub struct TableSchema {
     pub name: String,
     pub columns: Vec<ColumnSchema>,
     pub primary_key: Option<Vec<String>>,
+    pub constraints: Vec<StoredConstraint>,
 }
 
 /// Column schema information.
@@ -133,6 +155,7 @@ impl ExecutionContext {
         name: String,
         columns: Vec<ColumnSchema>,
         primary_key: Option<Vec<String>>,
+        constraints: Vec<StoredConstraint>,
         if_not_exists: bool,
     ) -> ExecutorResult<()> {
         if self.tables.contains_key(&name) {
@@ -152,6 +175,7 @@ impl ExecutionContext {
             name: name.clone(),
             columns,
             primary_key,
+            constraints,
         };
         self.table_schemas.insert(name.clone(), schema);
 
@@ -196,18 +220,25 @@ impl ExecutionContext {
                         col.name, name
                     )));
                 }
+
+                // Evaluate default expression if provided
+                let default = col.default.as_ref()
+                    .map(|expr| evaluate_default_expression(expr))
+                    .transpose()?;
+
                 schema.columns.push(ColumnSchema {
                     name: col.name.clone(),
                     data_type: col.data_type.clone(),
                     nullable: col.nullable,
-                    default: None, // TODO: evaluate default expression
+                    default: default.clone(),
                 });
 
-                // Add null values to existing rows
+                // Add default (or null) values to existing rows
+                let fill_value = default.unwrap_or(Value::Null);
                 if let Some(table_data) = self.tables.get(name) {
                     let mut table = table_data.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
                     for row in table.rows.iter_mut() {
-                        row.values.push(Value::Null);
+                        row.values.push(fill_value.clone());
                     }
                 }
             }
@@ -237,7 +268,7 @@ impl ExecutionContext {
                     .ok_or_else(|| ExecutorError::ColumnNotFound(old_name.clone()))?;
                 col.name = new_name.clone();
             }
-            PlanAlterOperation::AlterColumn { name: col_name, data_type, set_not_null, set_default: _ } => {
+            PlanAlterOperation::AlterColumn { name: col_name, data_type, set_not_null, set_default } => {
                 let col = schema.columns.iter_mut().find(|c| c.name == *col_name)
                     .ok_or_else(|| ExecutorError::ColumnNotFound(col_name.clone()))?;
 
@@ -247,14 +278,20 @@ impl ExecutionContext {
                 if let Some(not_null) = set_not_null {
                     col.nullable = !not_null;
                 }
-                // TODO: handle set_default
+                // Handle set_default: None = no change, Some(None) = drop default, Some(Some(expr)) = set new default
+                if let Some(new_default) = set_default {
+                    col.default = new_default.as_ref()
+                        .map(|expr| evaluate_default_expression(expr))
+                        .transpose()?;
+                }
             }
             PlanAlterOperation::RenameTable { new_name } => {
                 // Move data to new table name
                 if let Some(rows) = self.tables.remove(name) {
                     self.tables.insert(new_name.clone(), rows);
                 }
-                if let Some(schema) = self.table_schemas.remove(name) {
+                if let Some(mut schema) = self.table_schemas.remove(name) {
+                    schema.name = new_name.clone();
                     self.table_schemas.insert(new_name.clone(), schema);
                 }
                 if let Some(indexes) = self.indexes.remove(name) {
@@ -263,11 +300,81 @@ impl ExecutionContext {
                 // Return early since name is now invalid
                 return Ok(());
             }
-            PlanAlterOperation::AddConstraint(_constraint) => {
-                // TODO: implement constraint handling
+            PlanAlterOperation::AddConstraint(constraint) => {
+                // Pre-validate foreign key reference before getting mutable borrow
+                if let CreateTableConstraint::ForeignKey { ref_table, .. } = constraint {
+                    if !self.table_schemas.contains_key(ref_table) {
+                        return Err(ExecutorError::TableNotFound(ref_table.clone()));
+                    }
+                }
+
+                // Now safe to get mutable reference for the rest of the operation
+                let schema = self.table_schemas.get_mut(name)
+                    .ok_or_else(|| ExecutorError::TableNotFound(name.to_string()))?;
+
+                let constraint_count = schema.constraints.len() + 1;
+                let (name_suffix, constraint_type) = match constraint {
+                    CreateTableConstraint::PrimaryKey { columns } => {
+                        // Check if primary key already exists
+                        if schema.primary_key.is_some() {
+                            return Err(ExecutorError::InvalidOperation(
+                                format!("Table '{}' already has a primary key", name)
+                            ));
+                        }
+                        schema.primary_key = Some(columns.clone());
+                        ("pk", StoredConstraintType::PrimaryKey { columns: columns.clone() })
+                    }
+                    CreateTableConstraint::Unique { columns } => {
+                        // Validate columns exist
+                        for col in columns {
+                            if !schema.columns.iter().any(|c| c.name == *col) {
+                                return Err(ExecutorError::ColumnNotFound(col.clone()));
+                            }
+                        }
+                        ("uq", StoredConstraintType::Unique { columns: columns.clone() })
+                    }
+                    CreateTableConstraint::ForeignKey { columns, ref_table, ref_columns } => {
+                        // Validate columns exist
+                        for col in columns {
+                            if !schema.columns.iter().any(|c| c.name == *col) {
+                                return Err(ExecutorError::ColumnNotFound(col.clone()));
+                            }
+                        }
+                        // ref_table validated above
+                        ("fk", StoredConstraintType::ForeignKey {
+                            columns: columns.clone(),
+                            ref_table: ref_table.clone(),
+                            ref_columns: ref_columns.clone(),
+                        })
+                    }
+                    CreateTableConstraint::Check { expression } => {
+                        ("ck", StoredConstraintType::Check {
+                            expression_text: format!("{:?}", expression),
+                        })
+                    }
+                };
+                schema.constraints.push(StoredConstraint {
+                    name: format!("{}_{}{}", name, name_suffix, constraint_count),
+                    constraint_type,
+                });
+                return Ok(());
             }
-            PlanAlterOperation::DropConstraint { name: _ } => {
-                // TODO: implement constraint handling
+            PlanAlterOperation::DropConstraint { name: constraint_name } => {
+                let pos = schema.constraints.iter().position(|c| c.name == *constraint_name);
+                match pos {
+                    Some(idx) => {
+                        let removed = schema.constraints.remove(idx);
+                        // If dropping primary key constraint, also clear primary_key field
+                        if matches!(removed.constraint_type, StoredConstraintType::PrimaryKey { .. }) {
+                            schema.primary_key = None;
+                        }
+                    }
+                    None => {
+                        return Err(ExecutorError::InvalidOperation(
+                            format!("Constraint '{}' not found on table '{}'", constraint_name, name)
+                        ));
+                    }
+                }
             }
         }
 
@@ -358,6 +465,10 @@ impl ExecutionContext {
         let mut table_data = table.write()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
 
+        // Get schema to access column defaults
+        let schema = self.table_schemas.get(table_name)
+            .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
+
         // If no columns specified, use all columns in order
         let target_columns: Vec<String> = if columns.is_empty() {
             table_data.columns.clone()
@@ -374,11 +485,15 @@ impl ExecutionContext {
         }
 
         let mut inserted = 0u64;
-        let num_columns = table_data.columns.len();
+
+        // Build default values for each column
+        let defaults: Vec<Value> = schema.columns.iter()
+            .map(|col| col.default.clone().unwrap_or(Value::Null))
+            .collect();
 
         for row_values in rows {
-            // Create a new row with nulls
-            let mut new_row: Vec<Value> = vec![Value::Null; num_columns];
+            // Create a new row initialized with defaults (or Null if no default)
+            let mut new_row: Vec<Value> = defaults.clone();
 
             // Fill in the provided values
             for (i, &col_idx) in column_indices.iter().enumerate() {
@@ -546,7 +661,19 @@ impl Executor {
 
     /// Execute a query plan.
     pub fn execute(&self, plan: &QueryPlan) -> ExecutorResult<QueryResult> {
-        match &plan.root {
+        self.execute_internal(&plan.root)
+    }
+
+    /// Execute a query plan with bound parameters.
+    /// Parameters are indexed starting from 1 (e.g., $1, $2, etc.)
+    pub fn execute_with_params(&self, plan: &QueryPlan, params: &[Value]) -> ExecutorResult<QueryResult> {
+        // Substitute placeholders with actual parameter values
+        let bound_plan = substitute_parameters(&plan.root, params)?;
+        self.execute_internal(&bound_plan)
+    }
+
+    fn execute_internal(&self, root: &PlanNode) -> ExecutorResult<QueryResult> {
+        match root {
             // DDL operations
             PlanNode::CreateTable(node) => self.execute_create_table(node),
             PlanNode::DropTable(node) => self.execute_drop_table(node),
@@ -560,7 +687,7 @@ impl Executor {
             PlanNode::Delete(node) => self.execute_delete(node),
 
             // Query operations (SELECT)
-            _ => self.execute_query(&plan.root),
+            _ => self.execute_query(root),
         }
     }
 
@@ -584,13 +711,16 @@ impl Executor {
     /// Execute CREATE TABLE.
     fn execute_create_table(&self, node: &CreateTableNode) -> ExecutorResult<QueryResult> {
         let columns: Vec<ColumnSchema> = node.columns.iter().map(|col| {
-            ColumnSchema {
+            let default = col.default.as_ref()
+                .map(|expr| evaluate_default_expression(expr))
+                .transpose()?;
+            Ok(ColumnSchema {
                 name: col.name.clone(),
                 data_type: col.data_type.clone(),
                 nullable: col.nullable,
-                default: None, // TODO: evaluate default expression
-            }
-        }).collect();
+                default,
+            })
+        }).collect::<ExecutorResult<Vec<_>>>()?;
 
         // Extract primary key from constraints
         let primary_key = node.constraints.iter()
@@ -610,10 +740,53 @@ impl Executor {
                 if pk_cols.is_empty() { None } else { Some(pk_cols) }
             });
 
+        // Convert plan constraints to stored constraints with auto-generated names
+        let mut stored_constraints = Vec::new();
+        let mut constraint_counter = 0;
+        for c in &node.constraints {
+            constraint_counter += 1;
+            let (name_suffix, constraint_type) = match c {
+                CreateTableConstraint::PrimaryKey { columns } => {
+                    ("pk", StoredConstraintType::PrimaryKey { columns: columns.clone() })
+                }
+                CreateTableConstraint::Unique { columns } => {
+                    ("uq", StoredConstraintType::Unique { columns: columns.clone() })
+                }
+                CreateTableConstraint::ForeignKey { columns, ref_table, ref_columns } => {
+                    ("fk", StoredConstraintType::ForeignKey {
+                        columns: columns.clone(),
+                        ref_table: ref_table.clone(),
+                        ref_columns: ref_columns.clone(),
+                    })
+                }
+                CreateTableConstraint::Check { expression } => {
+                    ("ck", StoredConstraintType::Check {
+                        expression_text: format!("{:?}", expression),
+                    })
+                }
+            };
+            stored_constraints.push(StoredConstraint {
+                name: format!("{}_{}{}", node.table_name, name_suffix, constraint_counter),
+                constraint_type,
+            });
+        }
+
+        // Add column-level unique constraints
+        for col in &node.columns {
+            if col.unique {
+                constraint_counter += 1;
+                stored_constraints.push(StoredConstraint {
+                    name: format!("{}_{}_uq{}", node.table_name, col.name, constraint_counter),
+                    constraint_type: StoredConstraintType::Unique { columns: vec![col.name.clone()] },
+                });
+            }
+        }
+
         self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?.create_table(
             node.table_name.clone(),
             columns,
             primary_key,
+            stored_constraints,
             node.if_not_exists,
         )?;
 
@@ -1575,10 +1748,327 @@ impl Operator for EmptyOperator {
 // Expression Evaluation
 // =============================================================================
 
+/// Context for expression evaluation, optionally holding executor for subqueries.
+pub struct EvalContext<'a> {
+    executor: Option<&'a Executor>,
+}
+
+impl<'a> EvalContext<'a> {
+    pub fn new() -> Self {
+        Self { executor: None }
+    }
+
+    pub fn with_executor(executor: &'a Executor) -> Self {
+        Self { executor: Some(executor) }
+    }
+
+    /// Execute a subquery and return all result rows.
+    fn execute_subquery(&self, subquery: &PlanNode) -> ExecutorResult<Vec<Row>> {
+        let executor = self.executor.ok_or_else(|| {
+            ExecutorError::Internal("Subquery requires execution context".to_string())
+        })?;
+        let plan = QueryPlan {
+            root: subquery.clone(),
+            estimated_cost: 0.0,
+            estimated_rows: 0,
+        };
+        let result = executor.execute(&plan)?;
+        Ok(result.rows)
+    }
+}
+
+impl Default for EvalContext<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Evaluate a default expression (constant expression that doesn't need row context).
+fn evaluate_default_expression(expr: &PlanExpression) -> ExecutorResult<Value> {
+    let empty_row = Row { values: vec![] };
+    let empty_columns: Vec<String> = vec![];
+    evaluate_expression(expr, &empty_row, &empty_columns)
+}
+
+/// Substitute parameter placeholders in a query plan with actual values.
+fn substitute_parameters(node: &PlanNode, params: &[Value]) -> ExecutorResult<PlanNode> {
+    match node {
+        PlanNode::Scan(scan) => {
+            // ScanNode doesn't have predicates - predicates are in Filter nodes
+            // Just need to handle index_scan key_range expressions if present
+            let index_scan = if let Some(idx) = &scan.index_scan {
+                let start = idx.key_range.start.as_ref()
+                    .map(|e| substitute_expr(e, params))
+                    .transpose()?;
+                let end = idx.key_range.end.as_ref()
+                    .map(|e| substitute_expr(e, params))
+                    .transpose()?;
+                Some(crate::planner::IndexScan {
+                    index_name: idx.index_name.clone(),
+                    key_range: crate::planner::KeyRange {
+                        start,
+                        start_inclusive: idx.key_range.start_inclusive,
+                        end,
+                        end_inclusive: idx.key_range.end_inclusive,
+                    },
+                })
+            } else {
+                None
+            };
+            Ok(PlanNode::Scan(ScanNode {
+                table_name: scan.table_name.clone(),
+                alias: scan.alias.clone(),
+                columns: scan.columns.clone(),
+                index_scan,
+            }))
+        }
+        PlanNode::Filter(filter) => {
+            let input = Box::new(substitute_parameters(&filter.input, params)?);
+            let predicate = substitute_expr(&filter.predicate, params)?;
+            Ok(PlanNode::Filter(FilterNode { input, predicate }))
+        }
+        PlanNode::Project(proj) => {
+            let input = Box::new(substitute_parameters(&proj.input, params)?);
+            let expressions = proj.expressions.iter()
+                .map(|pe| Ok(ProjectionExpr {
+                    expr: substitute_expr(&pe.expr, params)?,
+                    alias: pe.alias.clone(),
+                }))
+                .collect::<ExecutorResult<Vec<_>>>()?;
+            Ok(PlanNode::Project(ProjectNode { input, expressions }))
+        }
+        PlanNode::Sort(sort) => {
+            let input = Box::new(substitute_parameters(&sort.input, params)?);
+            let order_by = sort.order_by.iter()
+                .map(|sk| Ok(SortKey {
+                    expr: substitute_expr(&sk.expr, params)?,
+                    ascending: sk.ascending,
+                    nulls_first: sk.nulls_first,
+                }))
+                .collect::<ExecutorResult<Vec<_>>>()?;
+            Ok(PlanNode::Sort(SortNode { input, order_by }))
+        }
+        PlanNode::Limit(limit) => {
+            let input = Box::new(substitute_parameters(&limit.input, params)?);
+            Ok(PlanNode::Limit(LimitNode {
+                input,
+                limit: limit.limit,
+                offset: limit.offset,
+            }))
+        }
+        PlanNode::Aggregate(agg) => {
+            let input = Box::new(substitute_parameters(&agg.input, params)?);
+            let group_by = agg.group_by.iter()
+                .map(|e| substitute_expr(e, params))
+                .collect::<ExecutorResult<Vec<_>>>()?;
+            let aggregates = agg.aggregates.iter()
+                .map(|ae| Ok(AggregateExpr {
+                    function: ae.function,
+                    argument: ae.argument.as_ref().map(|a| substitute_expr(a, params)).transpose()?,
+                    distinct: ae.distinct,
+                    alias: ae.alias.clone(),
+                }))
+                .collect::<ExecutorResult<Vec<_>>>()?;
+            Ok(PlanNode::Aggregate(AggregateNode { input, group_by, aggregates }))
+        }
+        PlanNode::Join(join) => {
+            let left = Box::new(substitute_parameters(&join.left, params)?);
+            let right = Box::new(substitute_parameters(&join.right, params)?);
+            let condition = join.condition.as_ref()
+                .map(|c| substitute_expr(c, params))
+                .transpose()?;
+            Ok(PlanNode::Join(JoinNode {
+                left,
+                right,
+                join_type: join.join_type,
+                condition,
+                strategy: join.strategy,
+            }))
+        }
+        PlanNode::Insert(insert) => {
+            let source = match &insert.source {
+                InsertPlanSource::Values(rows) => {
+                    let substituted = rows.iter()
+                        .map(|row| row.iter().map(|e| substitute_expr(e, params)).collect::<ExecutorResult<Vec<_>>>())
+                        .collect::<ExecutorResult<Vec<_>>>()?;
+                    InsertPlanSource::Values(substituted)
+                }
+                InsertPlanSource::Query(q) => {
+                    InsertPlanSource::Query(Box::new(substitute_parameters(q, params)?))
+                }
+            };
+            Ok(PlanNode::Insert(InsertNode {
+                table_name: insert.table_name.clone(),
+                columns: insert.columns.clone(),
+                source,
+            }))
+        }
+        PlanNode::Update(update) => {
+            let assignments = update.assignments.iter()
+                .map(|(col, expr)| Ok((col.clone(), substitute_expr(expr, params)?)))
+                .collect::<ExecutorResult<Vec<_>>>()?;
+            let where_clause = update.where_clause.as_ref()
+                .map(|p| substitute_expr(p, params))
+                .transpose()?;
+            Ok(PlanNode::Update(UpdateNode {
+                table_name: update.table_name.clone(),
+                assignments,
+                where_clause,
+            }))
+        }
+        PlanNode::Delete(delete) => {
+            let where_clause = delete.where_clause.as_ref()
+                .map(|p| substitute_expr(p, params))
+                .transpose()?;
+            Ok(PlanNode::Delete(DeleteNode {
+                table_name: delete.table_name.clone(),
+                where_clause,
+            }))
+        }
+        // DDL operations don't have parameters, return as-is
+        PlanNode::CreateTable(_) |
+        PlanNode::DropTable(_) |
+        PlanNode::AlterTable(_) |
+        PlanNode::CreateIndex(_) |
+        PlanNode::DropIndex(_) |
+        PlanNode::Empty => Ok(node.clone()),
+    }
+}
+
+/// Substitute parameter placeholders in an expression with actual values.
+fn substitute_expr(expr: &PlanExpression, params: &[Value]) -> ExecutorResult<PlanExpression> {
+    match expr {
+        PlanExpression::Placeholder(idx) => {
+            // Parameters are 1-indexed ($1, $2, etc.)
+            let param_idx = *idx - 1;
+            params.get(param_idx)
+                .map(|v| value_to_literal(v))
+                .ok_or_else(|| ExecutorError::Internal(format!(
+                    "Missing parameter ${}: expected {} parameters but got {}",
+                    idx, idx, params.len()
+                )))
+        }
+        PlanExpression::BinaryOp { op, left, right } => {
+            Ok(PlanExpression::BinaryOp {
+                op: op.clone(),
+                left: Box::new(substitute_expr(left, params)?),
+                right: Box::new(substitute_expr(right, params)?),
+            })
+        }
+        PlanExpression::UnaryOp { op, expr: inner } => {
+            Ok(PlanExpression::UnaryOp {
+                op: op.clone(),
+                expr: Box::new(substitute_expr(inner, params)?),
+            })
+        }
+        PlanExpression::Function { name, args, return_type } => {
+            let new_args = args.iter()
+                .map(|a| substitute_expr(a, params))
+                .collect::<ExecutorResult<Vec<_>>>()?;
+            Ok(PlanExpression::Function { name: name.clone(), args: new_args, return_type: return_type.clone() })
+        }
+        PlanExpression::Case { operand, conditions, else_result } => {
+            let new_operand = operand.as_ref()
+                .map(|o| substitute_expr(o, params))
+                .transpose()?
+                .map(Box::new);
+            let new_conditions = conditions.iter()
+                .map(|(cond, result)| Ok((substitute_expr(cond, params)?, substitute_expr(result, params)?)))
+                .collect::<ExecutorResult<Vec<_>>>()?;
+            let new_else = else_result.as_ref()
+                .map(|e| substitute_expr(e, params))
+                .transpose()?
+                .map(Box::new);
+            Ok(PlanExpression::Case {
+                operand: new_operand,
+                conditions: new_conditions,
+                else_result: new_else,
+            })
+        }
+        PlanExpression::InList { expr: inner, list, negated } => {
+            let new_inner = Box::new(substitute_expr(inner, params)?);
+            let new_list = list.iter()
+                .map(|e| substitute_expr(e, params))
+                .collect::<ExecutorResult<Vec<_>>>()?;
+            Ok(PlanExpression::InList { expr: new_inner, list: new_list, negated: *negated })
+        }
+        PlanExpression::InSubquery { expr: inner, subquery, negated } => {
+            let new_inner = Box::new(substitute_expr(inner, params)?);
+            let new_subquery = Box::new(substitute_parameters(subquery, params)?);
+            Ok(PlanExpression::InSubquery { expr: new_inner, subquery: new_subquery, negated: *negated })
+        }
+        PlanExpression::Exists { subquery, negated } => {
+            let new_subquery = Box::new(substitute_parameters(subquery, params)?);
+            Ok(PlanExpression::Exists { subquery: new_subquery, negated: *negated })
+        }
+        PlanExpression::ScalarSubquery(subquery) => {
+            let new_subquery = Box::new(substitute_parameters(subquery, params)?);
+            Ok(PlanExpression::ScalarSubquery(new_subquery))
+        }
+        PlanExpression::Between { expr: inner, low, high, negated } => {
+            Ok(PlanExpression::Between {
+                expr: Box::new(substitute_expr(inner, params)?),
+                low: Box::new(substitute_expr(low, params)?),
+                high: Box::new(substitute_expr(high, params)?),
+                negated: *negated,
+            })
+        }
+        PlanExpression::Like { expr: inner, pattern, negated } => {
+            Ok(PlanExpression::Like {
+                expr: Box::new(substitute_expr(inner, params)?),
+                pattern: Box::new(substitute_expr(pattern, params)?),
+                negated: *negated,
+            })
+        }
+        PlanExpression::IsNull { expr: inner, negated } => {
+            Ok(PlanExpression::IsNull {
+                expr: Box::new(substitute_expr(inner, params)?),
+                negated: *negated,
+            })
+        }
+        PlanExpression::Cast { expr: inner, target_type } => {
+            Ok(PlanExpression::Cast {
+                expr: Box::new(substitute_expr(inner, params)?),
+                target_type: target_type.clone(),
+            })
+        }
+        // Literals and columns don't have parameters
+        PlanExpression::Literal(_) | PlanExpression::Column { .. } => Ok(expr.clone()),
+    }
+}
+
+/// Convert a Value back to a PlanExpression::Literal.
+fn value_to_literal(value: &Value) -> PlanExpression {
+    let lit = match value {
+        Value::Null => PlanLiteral::Null,
+        Value::Boolean(b) => PlanLiteral::Boolean(*b),
+        Value::Integer(i) => PlanLiteral::Integer(*i),
+        Value::Float(f) => PlanLiteral::Float(*f),
+        Value::String(s) => PlanLiteral::String(s.clone()),
+        Value::Bytes(b) => PlanLiteral::String(String::from_utf8_lossy(b).to_string()),
+        Value::Timestamp(t) => PlanLiteral::Integer(t.timestamp_millis()),
+        // Arrays and objects can be serialized to string representation for parameters
+        Value::Array(arr) => PlanLiteral::String(format!("{:?}", arr)),
+        Value::Object(obj) => PlanLiteral::String(format!("{:?}", obj)),
+    };
+    PlanExpression::Literal(lit)
+}
+
+/// Evaluate expression without subquery support (backwards compatible).
 fn evaluate_expression(
     expr: &PlanExpression,
     row: &Row,
     columns: &[String],
+) -> ExecutorResult<Value> {
+    evaluate_expression_with_context(expr, row, columns, &EvalContext::new())
+}
+
+/// Evaluate expression with optional subquery support.
+fn evaluate_expression_with_context(
+    expr: &PlanExpression,
+    row: &Row,
+    columns: &[String],
+    ctx: &EvalContext,
 ) -> ExecutorResult<Value> {
     match expr {
         PlanExpression::Literal(lit) => Ok(match lit {
@@ -1603,31 +2093,31 @@ fn evaluate_expression(
         }
 
         PlanExpression::BinaryOp { left, op, right } => {
-            let left_val = evaluate_expression(left, row, columns)?;
-            let right_val = evaluate_expression(right, row, columns)?;
+            let left_val = evaluate_expression_with_context(left, row, columns, ctx)?;
+            let right_val = evaluate_expression_with_context(right, row, columns, ctx)?;
             evaluate_binary_op(*op, &left_val, &right_val)
         }
 
         PlanExpression::UnaryOp { op, expr } => {
-            let val = evaluate_expression(expr, row, columns)?;
+            let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
             evaluate_unary_op(*op, &val)
         }
 
         PlanExpression::IsNull { expr, negated } => {
-            let val = evaluate_expression(expr, row, columns)?;
+            let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
             let is_null = matches!(val, Value::Null);
             Ok(Value::Boolean(if *negated { !is_null } else { is_null }))
         }
 
         PlanExpression::Cast { expr, target_type } => {
-            let val = evaluate_expression(expr, row, columns)?;
+            let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
             cast_value(&val, target_type)
         }
 
         PlanExpression::Function { name, args, .. } => {
             let arg_values: Vec<Value> = args
                 .iter()
-                .map(|a| evaluate_expression(a, row, columns))
+                .map(|a| evaluate_expression_with_context(a, row, columns, ctx))
                 .collect::<ExecutorResult<Vec<_>>>()?;
             evaluate_function(name, &arg_values)
         }
@@ -1636,36 +2126,36 @@ fn evaluate_expression(
             match operand {
                 Some(operand_expr) => {
                     // CASE operand WHEN value THEN result ... END
-                    let operand_val = evaluate_expression(operand_expr, row, columns)?;
+                    let operand_val = evaluate_expression_with_context(operand_expr, row, columns, ctx)?;
                     for (when_expr, then_expr) in conditions {
-                        let when_val = evaluate_expression(when_expr, row, columns)?;
+                        let when_val = evaluate_expression_with_context(when_expr, row, columns, ctx)?;
                         if compare_values(&operand_val, &when_val)? == std::cmp::Ordering::Equal {
-                            return evaluate_expression(then_expr, row, columns);
+                            return evaluate_expression_with_context(then_expr, row, columns, ctx);
                         }
                     }
                 }
                 None => {
                     // CASE WHEN condition THEN result ... END
                     for (when_expr, then_expr) in conditions {
-                        let when_val = evaluate_expression(when_expr, row, columns)?;
+                        let when_val = evaluate_expression_with_context(when_expr, row, columns, ctx)?;
                         if matches!(when_val, Value::Boolean(true)) {
-                            return evaluate_expression(then_expr, row, columns);
+                            return evaluate_expression_with_context(then_expr, row, columns, ctx);
                         }
                     }
                 }
             }
             // Return ELSE result or NULL
             match else_result {
-                Some(else_expr) => evaluate_expression(else_expr, row, columns),
+                Some(else_expr) => evaluate_expression_with_context(else_expr, row, columns, ctx),
                 None => Ok(Value::Null),
             }
         }
 
         PlanExpression::InList { expr, list, negated } => {
-            let val = evaluate_expression(expr, row, columns)?;
+            let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
             let mut found = false;
             for item in list {
-                let item_val = evaluate_expression(item, row, columns)?;
+                let item_val = evaluate_expression_with_context(item, row, columns, ctx)?;
                 if compare_values(&val, &item_val)? == std::cmp::Ordering::Equal {
                     found = true;
                     break;
@@ -1675,9 +2165,9 @@ fn evaluate_expression(
         }
 
         PlanExpression::Between { expr, low, high, negated } => {
-            let val = evaluate_expression(expr, row, columns)?;
-            let low_val = evaluate_expression(low, row, columns)?;
-            let high_val = evaluate_expression(high, row, columns)?;
+            let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
+            let low_val = evaluate_expression_with_context(low, row, columns, ctx)?;
+            let high_val = evaluate_expression_with_context(high, row, columns, ctx)?;
 
             let ge_low = compare_values(&val, &low_val)? != std::cmp::Ordering::Less;
             let le_high = compare_values(&val, &high_val)? != std::cmp::Ordering::Greater;
@@ -1687,8 +2177,8 @@ fn evaluate_expression(
         }
 
         PlanExpression::Like { expr, pattern, negated } => {
-            let val = evaluate_expression(expr, row, columns)?;
-            let pattern_val = evaluate_expression(pattern, row, columns)?;
+            let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
+            let pattern_val = evaluate_expression_with_context(pattern, row, columns, ctx)?;
 
             let val_str = match val {
                 Value::String(s) => s,
@@ -1756,20 +2246,55 @@ fn evaluate_expression(
             Ok(Value::Boolean(if *negated { !matches } else { matches }))
         }
 
-        PlanExpression::InSubquery { .. } => {
-            // Subquery evaluation requires execution context, return placeholder for now
-            // This would need to execute the subquery and check if value is in results
-            Err(ExecutorError::Internal("IN subquery evaluation requires execution context".to_string()))
+        PlanExpression::InSubquery { expr, subquery, negated } => {
+            // Evaluate the expression to check
+            let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
+
+            // Execute the subquery
+            let subquery_rows = ctx.execute_subquery(subquery)?;
+
+            // Check if val is in any of the subquery results (first column)
+            let mut found = false;
+            for subquery_row in &subquery_rows {
+                if let Some(subquery_val) = subquery_row.values.first() {
+                    if compare_values(&val, subquery_val)? == std::cmp::Ordering::Equal {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            Ok(Value::Boolean(if *negated { !found } else { found }))
         }
 
-        PlanExpression::Exists { .. } => {
-            // EXISTS subquery evaluation requires execution context
-            Err(ExecutorError::Internal("EXISTS subquery evaluation requires execution context".to_string()))
+        PlanExpression::Exists { subquery, negated } => {
+            // Execute the subquery and check if it returns any rows
+            let subquery_rows = ctx.execute_subquery(subquery)?;
+            let exists = !subquery_rows.is_empty();
+
+            Ok(Value::Boolean(if *negated { !exists } else { exists }))
         }
 
-        PlanExpression::ScalarSubquery(_) => {
-            // Scalar subquery evaluation requires execution context
-            Err(ExecutorError::Internal("Scalar subquery evaluation requires execution context".to_string()))
+        PlanExpression::ScalarSubquery(subquery) => {
+            // Execute the subquery and return the single value
+            let subquery_rows = ctx.execute_subquery(subquery)?;
+
+            if subquery_rows.is_empty() {
+                return Ok(Value::Null);
+            }
+
+            if subquery_rows.len() > 1 {
+                return Err(ExecutorError::Internal(
+                    "Scalar subquery returned more than one row".to_string()
+                ));
+            }
+
+            // Return the first column of the first row
+            subquery_rows[0]
+                .values
+                .first()
+                .cloned()
+                .ok_or_else(|| ExecutorError::Internal("Scalar subquery returned no columns".to_string()))
         }
 
         PlanExpression::Placeholder(idx) => {
@@ -2803,5 +3328,505 @@ mod tests {
         // Verify the column was dropped
         let schema = executor.context.read().unwrap().get_table_schema("alter_test").unwrap().clone();
         assert_eq!(schema.columns.len(), 1);
+    }
+
+    #[test]
+    fn test_alter_table_constraints() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, AlterTableNode, PlanAlterOperation, CreateTableConstraint};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // Create a table with two columns
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "constraint_test".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "email".to_string(),
+                        data_type: DataType::Text,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Add a UNIQUE constraint
+        let add_unique_plan = QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: "constraint_test".to_string(),
+                operations: vec![
+                    PlanAlterOperation::AddConstraint(CreateTableConstraint::Unique {
+                        columns: vec!["email".to_string()],
+                    }),
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&add_unique_plan).unwrap();
+
+        // Verify the constraint was added
+        let schema = executor.context.read().unwrap().get_table_schema("constraint_test").unwrap().clone();
+        assert_eq!(schema.constraints.len(), 1);
+        assert!(schema.constraints[0].name.contains("uq"));
+
+        // Add a PRIMARY KEY constraint
+        let add_pk_plan = QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: "constraint_test".to_string(),
+                operations: vec![
+                    PlanAlterOperation::AddConstraint(CreateTableConstraint::PrimaryKey {
+                        columns: vec!["id".to_string()],
+                    }),
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&add_pk_plan).unwrap();
+
+        // Verify the primary key was set
+        let schema = executor.context.read().unwrap().get_table_schema("constraint_test").unwrap().clone();
+        assert_eq!(schema.primary_key, Some(vec!["id".to_string()]));
+        assert_eq!(schema.constraints.len(), 2);
+
+        // Try adding another PRIMARY KEY (should fail)
+        let add_dup_pk_plan = QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: "constraint_test".to_string(),
+                operations: vec![
+                    PlanAlterOperation::AddConstraint(CreateTableConstraint::PrimaryKey {
+                        columns: vec!["email".to_string()],
+                    }),
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        let result = executor.execute(&add_dup_pk_plan);
+        assert!(result.is_err());
+
+        // Drop the UNIQUE constraint by name
+        let pk_constraint_name = {
+            let schema = executor.context.read().unwrap().get_table_schema("constraint_test").unwrap().clone();
+            schema.constraints.iter()
+                .find(|c| matches!(c.constraint_type, StoredConstraintType::Unique { .. }))
+                .map(|c| c.name.clone())
+                .unwrap()
+        };
+
+        let drop_constraint_plan = QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: "constraint_test".to_string(),
+                operations: vec![
+                    PlanAlterOperation::DropConstraint {
+                        name: pk_constraint_name,
+                    },
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&drop_constraint_plan).unwrap();
+
+        // Verify the constraint was dropped
+        let schema = executor.context.read().unwrap().get_table_schema("constraint_test").unwrap().clone();
+        assert_eq!(schema.constraints.len(), 1);
+        // Only the PK constraint should remain
+        assert!(matches!(schema.constraints[0].constraint_type, StoredConstraintType::PrimaryKey { .. }));
+    }
+
+    #[test]
+    fn test_create_table_with_constraints() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, CreateTableConstraint};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // Create a table with constraints
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "users".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "email".to_string(),
+                        data_type: DataType::Text,
+                        nullable: false,
+                        default: None,
+                        primary_key: false,
+                        unique: true, // Column-level unique
+                    },
+                    CreateColumnDef {
+                        name: "name".to_string(),
+                        data_type: DataType::Text,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![
+                    CreateTableConstraint::Unique {
+                        columns: vec!["name".to_string()],
+                    },
+                ],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Verify schema has primary key and constraints
+        let schema = executor.context.read().unwrap().get_table_schema("users").unwrap().clone();
+        assert_eq!(schema.primary_key, Some(vec!["id".to_string()]));
+        // Should have: pk, uq for name, uq for email (column-level)
+        assert!(schema.constraints.len() >= 2);
+    }
+
+    #[test]
+    fn test_column_default_values() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource, PlanExpression, PlanLiteral};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // Create a table with a default value
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "defaults_test".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "status".to_string(),
+                        data_type: DataType::Text,
+                        nullable: false,
+                        default: Some(PlanExpression::Literal(PlanLiteral::String("active".to_string()))),
+                        primary_key: false,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "count".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: true,
+                        default: Some(PlanExpression::Literal(PlanLiteral::Integer(0))),
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Verify default values are stored in schema
+        let schema = executor.context.read().unwrap().get_table_schema("defaults_test").unwrap().clone();
+        assert_eq!(schema.columns[1].default, Some(Value::String("active".to_string())));
+        assert_eq!(schema.columns[2].default, Some(Value::Integer(0)));
+
+        // Insert a row specifying only the id column
+        let insert_plan = QueryPlan {
+            root: PlanNode::Insert(InsertNode {
+                table_name: "defaults_test".to_string(),
+                columns: vec!["id".to_string()],
+                source: InsertPlanSource::Values(vec![
+                    vec![PlanExpression::Literal(PlanLiteral::Integer(1))],
+                ]),
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 1,
+        };
+        executor.execute(&insert_plan).unwrap();
+
+        // Verify the default values were used
+        let context = executor.context.read().unwrap();
+        let table = context.get_table("defaults_test").unwrap();
+        let table_data = table.read().unwrap();
+
+        assert_eq!(table_data.rows.len(), 1);
+        assert_eq!(table_data.rows[0].values[0], Value::Integer(1)); // id
+        assert_eq!(table_data.rows[0].values[1], Value::String("active".to_string())); // status default
+        assert_eq!(table_data.rows[0].values[2], Value::Integer(0)); // count default
+    }
+
+    #[test]
+    fn test_alter_column_default() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, AlterTableNode, PlanAlterOperation, PlanExpression, PlanLiteral};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // Create a table
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "alter_default_test".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "value".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Alter column to add a default
+        let alter_plan = QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: "alter_default_test".to_string(),
+                operations: vec![
+                    PlanAlterOperation::AlterColumn {
+                        name: "value".to_string(),
+                        data_type: None,
+                        set_not_null: None,
+                        set_default: Some(Some(PlanExpression::Literal(PlanLiteral::Integer(42)))),
+                    },
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&alter_plan).unwrap();
+
+        // Verify the default was set
+        let schema = executor.context.read().unwrap().get_table_schema("alter_default_test").unwrap().clone();
+        assert_eq!(schema.columns[1].default, Some(Value::Integer(42)));
+
+        // Alter column to drop the default
+        let drop_default_plan = QueryPlan {
+            root: PlanNode::AlterTable(AlterTableNode {
+                table_name: "alter_default_test".to_string(),
+                operations: vec![
+                    PlanAlterOperation::AlterColumn {
+                        name: "value".to_string(),
+                        data_type: None,
+                        set_not_null: None,
+                        set_default: Some(None), // Drop default
+                    },
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&drop_default_plan).unwrap();
+
+        // Verify the default was removed
+        let schema = executor.context.read().unwrap().get_table_schema("alter_default_test").unwrap().clone();
+        assert_eq!(schema.columns[1].default, None);
+    }
+
+    #[test]
+    fn test_parameterized_query() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource, FilterNode};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // Create a test table
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "params_test".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "name".to_string(),
+                        data_type: DataType::Text,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Insert some data
+        let insert_plan = QueryPlan {
+            root: PlanNode::Insert(InsertNode {
+                table_name: "params_test".to_string(),
+                columns: vec!["id".to_string(), "name".to_string()],
+                source: InsertPlanSource::Values(vec![
+                    vec![
+                        PlanExpression::Literal(PlanLiteral::Integer(1)),
+                        PlanExpression::Literal(PlanLiteral::String("Alice".to_string())),
+                    ],
+                    vec![
+                        PlanExpression::Literal(PlanLiteral::Integer(2)),
+                        PlanExpression::Literal(PlanLiteral::String("Bob".to_string())),
+                    ],
+                    vec![
+                        PlanExpression::Literal(PlanLiteral::Integer(3)),
+                        PlanExpression::Literal(PlanLiteral::String("Charlie".to_string())),
+                    ],
+                ]),
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 3,
+        };
+        executor.execute(&insert_plan).unwrap();
+
+        // Create a query with a placeholder: SELECT * FROM params_test WHERE id = $1
+        let query_plan = QueryPlan {
+            root: PlanNode::Filter(FilterNode {
+                input: Box::new(PlanNode::Scan(ScanNode {
+                    table_name: "params_test".to_string(),
+                    alias: None,
+                    columns: vec!["id".to_string(), "name".to_string()],
+                    index_scan: None,
+                })),
+                predicate: PlanExpression::BinaryOp {
+                    left: Box::new(PlanExpression::Column {
+                        table: None,
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                    }),
+                    op: PlanBinaryOp::Equal,
+                    right: Box::new(PlanExpression::Placeholder(1)),
+                },
+            }),
+            estimated_cost: 10.0,
+            estimated_rows: 1,
+        };
+
+        // Execute with parameter $1 = 2 (should find Bob)
+        let result = executor.execute_with_params(&query_plan, &[Value::Integer(2)]).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], Value::Integer(2));
+        assert_eq!(result.rows[0].values[1], Value::String("Bob".to_string()));
+
+        // Execute with parameter $1 = 1 (should find Alice)
+        let result = executor.execute_with_params(&query_plan, &[Value::Integer(1)]).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[1], Value::String("Alice".to_string()));
+
+        // Execute with parameter $1 = 99 (should find nothing)
+        let result = executor.execute_with_params(&query_plan, &[Value::Integer(99)]).unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_parameterized_insert() {
+        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource};
+
+        let executor = Executor::new(ExecutionContext::new());
+
+        // Create a test table
+        let create_plan = QueryPlan {
+            root: PlanNode::CreateTable(CreateTableNode {
+                table_name: "param_insert_test".to_string(),
+                columns: vec![
+                    CreateColumnDef {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        nullable: false,
+                        default: None,
+                        primary_key: true,
+                        unique: false,
+                    },
+                    CreateColumnDef {
+                        name: "value".to_string(),
+                        data_type: DataType::Text,
+                        nullable: true,
+                        default: None,
+                        primary_key: false,
+                        unique: false,
+                    },
+                ],
+                constraints: vec![],
+                if_not_exists: false,
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 0,
+        };
+        executor.execute(&create_plan).unwrap();
+
+        // Create an INSERT with placeholders: INSERT INTO param_insert_test (id, value) VALUES ($1, $2)
+        let insert_plan = QueryPlan {
+            root: PlanNode::Insert(InsertNode {
+                table_name: "param_insert_test".to_string(),
+                columns: vec!["id".to_string(), "value".to_string()],
+                source: InsertPlanSource::Values(vec![
+                    vec![
+                        PlanExpression::Placeholder(1),
+                        PlanExpression::Placeholder(2),
+                    ],
+                ]),
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 1,
+        };
+
+        // Execute insert with parameters
+        executor.execute_with_params(&insert_plan, &[
+            Value::Integer(42),
+            Value::String("test value".to_string()),
+        ]).unwrap();
+
+        // Verify the data was inserted
+        let context = executor.context.read().unwrap();
+        let table = context.get_table("param_insert_test").unwrap();
+        let table_data = table.read().unwrap();
+
+        assert_eq!(table_data.rows.len(), 1);
+        assert_eq!(table_data.rows[0].values[0], Value::Integer(42));
+        assert_eq!(table_data.rows[0].values[1], Value::String("test value".to_string()));
     }
 }

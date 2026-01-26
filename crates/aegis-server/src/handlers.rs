@@ -138,20 +138,45 @@ pub struct ColumnInfo {
 }
 
 /// List all tables.
-pub async fn list_tables(State(_state): State<AppState>) -> Json<TablesResponse> {
-    Json(TablesResponse { tables: vec![] })
+pub async fn list_tables(State(state): State<AppState>) -> Json<TablesResponse> {
+    let table_names = state.query_engine.list_tables();
+    let tables: Vec<TableInfo> = table_names
+        .into_iter()
+        .filter_map(|name| state.query_engine.get_table_info(&name))
+        .map(|info| TableInfo {
+            name: info.name,
+            columns: info.columns.into_iter().map(|c| ColumnInfo {
+                name: c.name,
+                data_type: c.data_type,
+                nullable: c.nullable,
+            }).collect(),
+            row_count: info.row_count,
+        })
+        .collect();
+    Json(TablesResponse { tables })
 }
 
 /// Get table details.
 pub async fn get_table(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    Json(TableInfo {
-        name,
-        columns: vec![],
-        row_count: None,
-    })
+    match state.query_engine.get_table_info(&name) {
+        Some(info) => Json(TableInfo {
+            name: info.name,
+            columns: info.columns.into_iter().map(|c| ColumnInfo {
+                name: c.name,
+                data_type: c.data_type,
+                nullable: c.nullable,
+            }).collect(),
+            row_count: info.row_count,
+        }),
+        None => Json(TableInfo {
+            name,
+            columns: vec![],
+            row_count: None,
+        }),
+    }
 }
 
 // =============================================================================

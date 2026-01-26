@@ -602,6 +602,40 @@ impl QueryEngine {
             .map(|ctx| ctx.list_tables())
             .unwrap_or_default()
     }
+
+    /// Get table schema information.
+    pub fn get_table_info(&self, name: &str) -> Option<TableInfo> {
+        let ctx = self.context.read().ok()?;
+        let schema = ctx.get_table_schema(name)?;
+        let table_data = ctx.get_table(name)?;
+        let row_count = table_data.read().ok().map(|t| t.rows.len() as u64);
+
+        Some(TableInfo {
+            name: schema.name.clone(),
+            columns: schema.columns.iter().map(|c| ColumnInfo {
+                name: c.name.clone(),
+                data_type: format!("{:?}", c.data_type),
+                nullable: c.nullable,
+            }).collect(),
+            row_count,
+        })
+    }
+}
+
+/// Table information for API response.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TableInfo {
+    pub name: String,
+    pub columns: Vec<ColumnInfo>,
+    pub row_count: Option<u64>,
+}
+
+/// Column information for API response.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
 }
 
 impl Default for QueryEngine {

@@ -8,10 +8,31 @@ use crate::types::{
     MfaSetupData, NodeMetrics, NodeRole, NodeStatus, QueryBuilderResult, RecentActivity, User, UserRole,
 };
 use gloo_net::http::Request;
+use web_sys::window;
 
-/// Base URL for the Aegis DB API server.
-/// In production, this should be configurable via environment or config.
-const API_BASE_URL: &str = "http://127.0.0.1:9090";
+/// Get the API base URL.
+/// Uses the current window origin by default (same-origin requests).
+/// Can be overridden by setting data-api-url attribute on document root.
+fn get_api_base_url() -> String {
+    // First try to get from document attribute (for explicit configuration)
+    if let Some(win) = window() {
+        if let Some(doc) = win.document() {
+            if let Some(root) = doc.document_element() {
+                if let Some(url) = root.get_attribute("data-api-url") {
+                    if !url.is_empty() {
+                        return url;
+                    }
+                }
+            }
+        }
+        // Fall back to same-origin
+        if let Ok(origin) = win.location().origin() {
+            return origin;
+        }
+    }
+    // Fallback for development
+    "http://127.0.0.1:9090".to_string()
+}
 
 /// API error type.
 #[derive(Debug, Clone)]
@@ -42,10 +63,10 @@ pub struct AegisClient {
 }
 
 impl AegisClient {
-    /// Create a new client with the default base URL.
+    /// Create a new client with the default base URL (same-origin or configured).
     pub fn new() -> Self {
         Self {
-            base_url: API_BASE_URL.to_string(),
+            base_url: get_api_base_url(),
             token: None,
         }
     }
@@ -477,7 +498,7 @@ struct ServerUserInfo {
 
 /// Login to the Aegis DB server.
 pub async fn login(username: &str, password: &str) -> Result<AuthResponse, String> {
-    let url = format!("{}/api/v1/auth/login", API_BASE_URL);
+    let url = format!("{}/api/v1/auth/login", &get_api_base_url());
 
     let response = Request::post(&url)
         .header("Content-Type", "application/json")
@@ -523,7 +544,7 @@ struct ServerMfaVerifyRequest {
 
 /// Verify MFA code against the server.
 pub async fn verify_mfa(code: &str, token: &str) -> Result<AuthResponse, String> {
-    let url = format!("{}/api/v1/auth/mfa/verify", API_BASE_URL);
+    let url = format!("{}/api/v1/auth/mfa/verify", &get_api_base_url());
 
     let response = Request::post(&url)
         .header("Content-Type", "application/json")
@@ -562,7 +583,7 @@ pub async fn verify_mfa(code: &str, token: &str) -> Result<AuthResponse, String>
 
 /// Logout from the server.
 pub async fn logout(token: &str) -> Result<bool, String> {
-    let url = format!("{}/api/v1/auth/logout", API_BASE_URL);
+    let url = format!("{}/api/v1/auth/logout", &get_api_base_url());
 
     #[derive(serde::Serialize)]
     struct LogoutRequest {
@@ -646,7 +667,7 @@ struct ServerActivity {
 
 /// Get recent activity from the server.
 pub async fn get_recent_activity() -> Result<Vec<RecentActivity>, String> {
-    let url = format!("{}/api/v1/admin/activities?limit=20", API_BASE_URL);
+    let url = format!("{}/api/v1/admin/activities?limit=20", &get_api_base_url());
 
     let response = Request::get(&url)
         .send()
@@ -682,7 +703,7 @@ pub async fn get_recent_activity() -> Result<Vec<RecentActivity>, String> {
 
 /// Get all keys from the KV store.
 pub async fn list_keys() -> Result<Vec<KeyValueEntry>, String> {
-    let url = format!("{}/api/v1/kv/keys", API_BASE_URL);
+    let url = format!("{}/api/v1/kv/keys", &get_api_base_url());
 
     let response = Request::get(&url)
         .send()
@@ -698,7 +719,7 @@ pub async fn list_keys() -> Result<Vec<KeyValueEntry>, String> {
 
 /// Set a key in the KV store.
 pub async fn set_key(key: &str, value: serde_json::Value, ttl: Option<u64>) -> Result<KeyValueEntry, String> {
-    let url = format!("{}/api/v1/kv/keys", API_BASE_URL);
+    let url = format!("{}/api/v1/kv/keys", &get_api_base_url());
 
     #[derive(serde::Serialize)]
     struct SetKeyRequest {
@@ -728,7 +749,7 @@ pub async fn set_key(key: &str, value: serde_json::Value, ttl: Option<u64>) -> R
 
 /// Delete a key from the KV store.
 pub async fn delete_key(key: &str) -> Result<bool, String> {
-    let url = format!("{}/api/v1/kv/keys/{}", API_BASE_URL, key);
+    let url = format!("{}/api/v1/kv/keys/{}", &get_api_base_url(), key);
 
     let response = Request::delete(&url)
         .send()
@@ -754,7 +775,7 @@ pub async fn delete_key(key: &str) -> Result<bool, String> {
 
 /// Get all collections from the document store.
 pub async fn list_collections() -> Result<Vec<DocumentCollection>, String> {
-    let url = format!("{}/api/v1/documents/collections", API_BASE_URL);
+    let url = format!("{}/api/v1/documents/collections", &get_api_base_url());
 
     let response = Request::get(&url)
         .send()
@@ -770,7 +791,7 @@ pub async fn list_collections() -> Result<Vec<DocumentCollection>, String> {
 
 /// Get documents from a specific collection.
 pub async fn get_collection_documents(collection_name: &str) -> Result<Vec<DocumentEntry>, String> {
-    let url = format!("{}/api/v1/documents/collections/{}", API_BASE_URL, collection_name);
+    let url = format!("{}/api/v1/documents/collections/{}", &get_api_base_url(), collection_name);
 
     let response = Request::get(&url)
         .send()
@@ -790,7 +811,7 @@ pub async fn get_collection_documents(collection_name: &str) -> Result<Vec<Docum
 
 /// Get graph data (nodes and edges).
 pub async fn get_graph_data() -> Result<GraphData, String> {
-    let url = format!("{}/api/v1/graph/data", API_BASE_URL);
+    let url = format!("{}/api/v1/graph/data", &get_api_base_url());
 
     let response = Request::get(&url)
         .send()
@@ -810,7 +831,7 @@ pub async fn get_graph_data() -> Result<GraphData, String> {
 
 /// Execute a query via the query builder.
 pub async fn execute_builder_query(query: &str, paradigm: &str) -> Result<QueryBuilderResult, String> {
-    let url = format!("{}/api/v1/query-builder/execute", API_BASE_URL);
+    let url = format!("{}/api/v1/query-builder/execute", &get_api_base_url());
 
     #[derive(serde::Serialize)]
     struct QueryBuilderRequest {
@@ -866,7 +887,7 @@ pub struct NodeLogsResponse {
 
 /// Restart a node.
 pub async fn restart_node(node_id: &str) -> Result<NodeActionResponse, String> {
-    let url = format!("{}/api/v1/admin/nodes/{}/restart", API_BASE_URL, node_id);
+    let url = format!("{}/api/v1/admin/nodes/{}/restart", &get_api_base_url(), node_id);
 
     let response = Request::post(&url)
         .header("Content-Type", "application/json")
@@ -885,7 +906,7 @@ pub async fn restart_node(node_id: &str) -> Result<NodeActionResponse, String> {
 
 /// Drain a node (prepare for maintenance).
 pub async fn drain_node(node_id: &str) -> Result<NodeActionResponse, String> {
-    let url = format!("{}/api/v1/admin/nodes/{}/drain", API_BASE_URL, node_id);
+    let url = format!("{}/api/v1/admin/nodes/{}/drain", &get_api_base_url(), node_id);
 
     let response = Request::post(&url)
         .header("Content-Type", "application/json")
@@ -904,7 +925,7 @@ pub async fn drain_node(node_id: &str) -> Result<NodeActionResponse, String> {
 
 /// Remove a node from the cluster.
 pub async fn remove_node(node_id: &str) -> Result<NodeActionResponse, String> {
-    let url = format!("{}/api/v1/admin/nodes/{}", API_BASE_URL, node_id);
+    let url = format!("{}/api/v1/admin/nodes/{}", &get_api_base_url(), node_id);
 
     let response = Request::delete(&url)
         .send()
@@ -921,8 +942,8 @@ pub async fn remove_node(node_id: &str) -> Result<NodeActionResponse, String> {
 /// Get logs for a specific node.
 pub async fn get_node_logs(node_id: &str, limit: Option<usize>) -> Result<NodeLogsResponse, String> {
     let url = match limit {
-        Some(l) => format!("{}/api/v1/admin/nodes/{}/logs?limit={}", API_BASE_URL, node_id, l),
-        None => format!("{}/api/v1/admin/nodes/{}/logs", API_BASE_URL, node_id),
+        Some(l) => format!("{}/api/v1/admin/nodes/{}/logs?limit={}", &get_api_base_url(), node_id, l),
+        None => format!("{}/api/v1/admin/nodes/{}/logs", &get_api_base_url(), node_id),
     };
 
     let response = Request::get(&url)
@@ -973,7 +994,7 @@ impl Default for ServerSettings {
 
 /// Get server settings.
 pub async fn get_settings() -> Result<ServerSettings, String> {
-    let url = format!("{}/api/v1/admin/settings", API_BASE_URL);
+    let url = format!("{}/api/v1/admin/settings", &get_api_base_url());
 
     let response = Request::get(&url)
         .send()
@@ -989,7 +1010,7 @@ pub async fn get_settings() -> Result<ServerSettings, String> {
 
 /// Update server settings.
 pub async fn update_settings(settings: &ServerSettings) -> Result<(), String> {
-    let url = format!("{}/api/v1/admin/settings", API_BASE_URL);
+    let url = format!("{}/api/v1/admin/settings", &get_api_base_url());
 
     let response = Request::put(&url)
         .header("Content-Type", "application/json")
@@ -1025,7 +1046,7 @@ pub struct UserListItem {
 
 /// List all users.
 pub async fn list_users() -> Result<Vec<UserListItem>, String> {
-    let url = format!("{}/api/v1/admin/users", API_BASE_URL);
+    let url = format!("{}/api/v1/admin/users", &get_api_base_url());
 
     let response = Request::get(&url)
         .send()
@@ -1041,7 +1062,7 @@ pub async fn list_users() -> Result<Vec<UserListItem>, String> {
 
 /// Create a new user.
 pub async fn create_user(username: &str, email: &str, password: &str, role: &str) -> Result<UserListItem, String> {
-    let url = format!("{}/api/v1/admin/users", API_BASE_URL);
+    let url = format!("{}/api/v1/admin/users", &get_api_base_url());
 
     #[derive(serde::Serialize)]
     struct CreateUserRequest {
@@ -1095,7 +1116,7 @@ pub struct UserUpdate {
 
 /// Update a user.
 pub async fn update_user(username: &str, updates: &UserUpdate) -> Result<UserListItem, String> {
-    let url = format!("{}/api/v1/admin/users/{}", API_BASE_URL, username);
+    let url = format!("{}/api/v1/admin/users/{}", &get_api_base_url(), username);
 
     let response = Request::put(&url)
         .header("Content-Type", "application/json")
@@ -1126,7 +1147,7 @@ pub async fn update_user(username: &str, updates: &UserUpdate) -> Result<UserLis
 
 /// Delete a user.
 pub async fn delete_user(username: &str) -> Result<(), String> {
-    let url = format!("{}/api/v1/admin/users/{}", API_BASE_URL, username);
+    let url = format!("{}/api/v1/admin/users/{}", &get_api_base_url(), username);
 
     let response = Request::delete(&url)
         .send()
@@ -1167,7 +1188,7 @@ pub struct RoleInfo {
 
 /// List all roles.
 pub async fn list_roles() -> Result<Vec<RoleInfo>, String> {
-    let url = format!("{}/api/v1/admin/roles", API_BASE_URL);
+    let url = format!("{}/api/v1/admin/roles", &get_api_base_url());
 
     let response = Request::get(&url)
         .send()
@@ -1183,7 +1204,7 @@ pub async fn list_roles() -> Result<Vec<RoleInfo>, String> {
 
 /// Create a new role.
 pub async fn create_role(name: &str, description: &str, permissions: &[String]) -> Result<RoleInfo, String> {
-    let url = format!("{}/api/v1/admin/roles", API_BASE_URL);
+    let url = format!("{}/api/v1/admin/roles", &get_api_base_url());
 
     #[derive(serde::Serialize)]
     struct CreateRoleRequest {
@@ -1220,7 +1241,7 @@ pub async fn create_role(name: &str, description: &str, permissions: &[String]) 
 
 /// Delete a role.
 pub async fn delete_role(name: &str) -> Result<(), String> {
-    let url = format!("{}/api/v1/admin/roles/{}", API_BASE_URL, name);
+    let url = format!("{}/api/v1/admin/roles/{}", &get_api_base_url(), name);
 
     let response = Request::delete(&url)
         .send()
@@ -1271,7 +1292,7 @@ pub struct MetricsTimeseriesResponse {
 
 /// Get metrics timeseries data for a given time range.
 pub async fn get_metrics_timeseries(time_range: &str) -> Result<Vec<MetricsDataPoint>, String> {
-    let url = format!("{}/api/v1/admin/metrics/timeseries", API_BASE_URL);
+    let url = format!("{}/api/v1/admin/metrics/timeseries", &get_api_base_url());
 
     #[derive(serde::Serialize)]
     struct MetricsTimeseriesRequest {
@@ -1319,7 +1340,7 @@ pub struct GraphEdgeInfo {
 
 /// Create a new graph node.
 pub async fn create_graph_node(label: &str, properties: serde_json::Value) -> Result<GraphNodeInfo, String> {
-    let url = format!("{}/api/v1/graph/nodes", API_BASE_URL);
+    let url = format!("{}/api/v1/graph/nodes", &get_api_base_url());
 
     #[derive(serde::Serialize)]
     struct CreateNodeRequest {
@@ -1355,7 +1376,7 @@ pub async fn create_graph_node(label: &str, properties: serde_json::Value) -> Re
 
 /// Create a new graph edge.
 pub async fn create_graph_edge(source: &str, target: &str, relationship: &str) -> Result<GraphEdgeInfo, String> {
-    let url = format!("{}/api/v1/graph/edges", API_BASE_URL);
+    let url = format!("{}/api/v1/graph/edges", &get_api_base_url());
 
     #[derive(serde::Serialize)]
     struct CreateEdgeRequest {
@@ -1393,7 +1414,7 @@ pub async fn create_graph_edge(source: &str, target: &str, relationship: &str) -
 
 /// Delete a graph node.
 pub async fn delete_graph_node(node_id: &str) -> Result<(), String> {
-    let url = format!("{}/api/v1/graph/nodes/{}", API_BASE_URL, node_id);
+    let url = format!("{}/api/v1/graph/nodes/{}", &get_api_base_url(), node_id);
 
     let response = Request::delete(&url)
         .send()
@@ -1413,7 +1434,7 @@ pub async fn delete_graph_node(node_id: &str) -> Result<(), String> {
 
 /// Create a new collection.
 pub async fn create_collection(name: &str) -> Result<DocumentCollection, String> {
-    let url = format!("{}/api/v1/documents/collections", API_BASE_URL);
+    let url = format!("{}/api/v1/documents/collections", &get_api_base_url());
 
     #[derive(serde::Serialize)]
     struct CreateCollectionRequest {
@@ -1439,7 +1460,7 @@ pub async fn create_collection(name: &str) -> Result<DocumentCollection, String>
 
 /// Insert a document into a collection.
 pub async fn insert_document(collection: &str, document: serde_json::Value) -> Result<DocumentEntry, String> {
-    let url = format!("{}/api/v1/documents/collections/{}/documents", API_BASE_URL, collection);
+    let url = format!("{}/api/v1/documents/collections/{}/documents", &get_api_base_url(), collection);
 
     let response = Request::post(&url)
         .header("Content-Type", "application/json")
@@ -1458,7 +1479,7 @@ pub async fn insert_document(collection: &str, document: serde_json::Value) -> R
 
 /// Delete a document from a collection.
 pub async fn delete_document(collection: &str, doc_id: &str) -> Result<(), String> {
-    let url = format!("{}/api/v1/documents/collections/{}/documents/{}", API_BASE_URL, collection, doc_id);
+    let url = format!("{}/api/v1/documents/collections/{}/documents/{}", &get_api_base_url(), collection, doc_id);
 
     let response = Request::delete(&url)
         .send()
