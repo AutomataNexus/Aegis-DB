@@ -113,23 +113,8 @@ impl AppState {
         let node_name_display = config.node_name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default();
         activity.log_system(&format!("Aegis DB server started - Node: {}{}", config.node_id, node_name_display));
 
-        // Create graph store with initial data
+        // Create empty graph store (no sample data)
         let graph_store = Arc::new(GraphStore::new());
-        graph_store.create_node("Person", serde_json::json!({"name": "Alice", "age": 30}));
-        graph_store.create_node("Person", serde_json::json!({"name": "Bob", "age": 25}));
-        graph_store.create_node("Person", serde_json::json!({"name": "Charlie", "age": 35}));
-        graph_store.create_node("Company", serde_json::json!({"name": "TechCorp", "industry": "Technology"}));
-        graph_store.create_node("Project", serde_json::json!({"name": "Project Alpha", "status": "active"}));
-
-        // Create initial edges
-        let nodes = graph_store.list_nodes();
-        if nodes.len() >= 5 {
-            let _ = graph_store.create_edge(&nodes[0].id, &nodes[3].id, "WORKS_AT");
-            let _ = graph_store.create_edge(&nodes[1].id, &nodes[3].id, "WORKS_AT");
-            let _ = graph_store.create_edge(&nodes[0].id, &nodes[1].id, "KNOWS");
-            let _ = graph_store.create_edge(&nodes[0].id, &nodes[4].id, "WORKS_ON");
-            let _ = graph_store.create_edge(&nodes[2].id, &nodes[4].id, "WORKS_ON");
-        }
 
         // Initialize metrics history with some data points
         let metrics_history = Arc::new(RwLock::new(Vec::new()));
@@ -217,25 +202,70 @@ impl AppState {
         }
     }
 
-    /// Background task to collect metrics periodically.
+    /// Background task to collect real system metrics periodically.
     async fn collect_metrics_loop(metrics_history: Arc<RwLock<Vec<MetricsDataPoint>>>) {
+        use sysinfo::{System, Networks};
+
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+        let mut sys = System::new_all();
+        let mut networks = Networks::new_with_refreshed_list();
+        let mut last_bytes_in: u64 = 0;
+        let mut last_bytes_out: u64 = 0;
+
+        // Initialize network bytes
+        for (_name, data) in networks.list() {
+            last_bytes_in += data.total_received();
+            last_bytes_out += data.total_transmitted();
+        }
 
         loop {
             interval.tick().await;
 
+            // Refresh system info
+            sys.refresh_all();
+            networks.refresh();
+
             let now = Utc::now().timestamp();
 
-            // Collect system metrics (simulated for now, but uses real time)
+            // Calculate CPU usage (average across all CPUs)
+            let cpu_percent = sys.cpus().iter()
+                .map(|cpu| cpu.cpu_usage() as f64)
+                .sum::<f64>() / sys.cpus().len().max(1) as f64;
+
+            // Calculate memory usage
+            let memory_total = sys.total_memory();
+            let memory_used = sys.used_memory();
+            let memory_percent = if memory_total > 0 {
+                (memory_used as f64 / memory_total as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            // Calculate network throughput
+            let mut current_bytes_in: u64 = 0;
+            let mut current_bytes_out: u64 = 0;
+            for (_name, data) in networks.list() {
+                current_bytes_in += data.total_received();
+                current_bytes_out += data.total_transmitted();
+            }
+
+            let bytes_in = current_bytes_in.saturating_sub(last_bytes_in);
+            let bytes_out = current_bytes_out.saturating_sub(last_bytes_out);
+            last_bytes_in = current_bytes_in;
+            last_bytes_out = current_bytes_out;
+
+            // Get process count as proxy for connections
+            let connections = sys.processes().len() as u64;
+
             let point = MetricsDataPoint {
                 timestamp: now,
-                cpu_percent: 15.0 + (now % 30) as f64 + ((now % 7) as f64 * 2.0),
-                memory_percent: 45.0 + ((now / 60) % 20) as f64,
-                queries_per_second: 100.0 + ((now % 50) as f64 * 3.0),
-                latency_ms: 2.5 + ((now % 10) as f64 * 0.3),
-                connections: 25 + ((now / 120) as u64 % 50),
-                bytes_in: 1_000_000 + ((now as u64 % 500_000)),
-                bytes_out: 2_000_000 + ((now as u64 % 1_000_000)),
+                cpu_percent,
+                memory_percent,
+                queries_per_second: 0.0, // Will be updated by actual query tracking
+                latency_ms: 0.0,         // Will be updated by actual query tracking
+                connections,
+                bytes_in,
+                bytes_out,
             };
 
             let mut history = metrics_history.write().await;
@@ -248,28 +278,12 @@ impl AppState {
         }
     }
 
-    /// Initialize metrics history with historical data.
+    /// Initialize metrics history - starts empty, will be populated by real metrics collection.
     pub async fn init_metrics_history(&self) {
-        let now = Utc::now().timestamp();
-        let mut history = self.metrics_history.write().await;
-
-        // Generate 24 hours of historical data at 1-minute intervals
-        for i in (0..1440).rev() {
-            let timestamp = now - (i * 60);
-            let hour_factor = ((timestamp / 3600) % 24) as f64;
-
-            let point = MetricsDataPoint {
-                timestamp,
-                cpu_percent: 15.0 + hour_factor * 1.5 + ((timestamp % 30) as f64),
-                memory_percent: 45.0 + ((timestamp / 60) % 20) as f64,
-                queries_per_second: 80.0 + hour_factor * 8.0 + ((timestamp % 50) as f64 * 2.0),
-                latency_ms: 2.0 + ((timestamp % 10) as f64 * 0.2),
-                connections: 20 + (hour_factor as u64 * 3) + ((timestamp / 120) as u64 % 30),
-                bytes_in: 800_000 + (hour_factor as u64 * 50_000) + (timestamp as u64 % 300_000),
-                bytes_out: 1_500_000 + (hour_factor as u64 * 100_000) + (timestamp as u64 % 600_000),
-            };
-            history.push(point);
-        }
+        // Metrics history starts empty and is populated by the background collection task
+        // with real system metrics. No fake historical data is generated.
+        let history = self.metrics_history.write().await;
+        tracing::info!("Metrics history initialized (currently {} data points)", history.len());
     }
 
     /// Get comprehensive database statistics.
