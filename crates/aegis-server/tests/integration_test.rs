@@ -1086,6 +1086,33 @@ async fn test_graph_data_endpoint_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
+    // First, create some graph nodes
+    let node1_body = serde_json::json!({
+        "label": "Person",
+        "properties": {"name": "Alice", "age": 30}
+    });
+    let (status, json) = post_json(&mut app, "/api/v1/graph/nodes", node1_body).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let node1_id = json["node"]["id"].as_str().unwrap().to_string();
+
+    let node2_body = serde_json::json!({
+        "label": "Person",
+        "properties": {"name": "Bob", "age": 25}
+    });
+    let (status, json) = post_json(&mut app, "/api/v1/graph/nodes", node2_body).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let node2_id = json["node"]["id"].as_str().unwrap().to_string();
+
+    // Create an edge between them
+    let edge_body = serde_json::json!({
+        "source": node1_id,
+        "target": node2_id,
+        "relationship": "KNOWS"
+    });
+    let (status, _) = post_json(&mut app, "/api/v1/graph/edges", edge_body).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Now get graph data
     let (status, json) = get_json(&mut app, "/api/v1/graph/data").await;
 
     assert_eq!(status, StatusCode::OK);
