@@ -263,6 +263,63 @@ pub async fn login_rate_limit(
 }
 
 // =============================================================================
+// Security Headers Middleware
+// =============================================================================
+
+/// Add HTTP security headers to all responses.
+/// Includes Content-Security-Policy, X-Content-Type-Options, X-Frame-Options,
+/// X-XSS-Protection, Referrer-Policy, and optionally Strict-Transport-Security
+/// when TLS is enabled.
+pub async fn security_headers(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response<Body> {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+
+    // Content-Security-Policy: Restrict resource loading to same origin
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static("default-src 'self'"),
+    );
+
+    // X-Content-Type-Options: Prevent MIME type sniffing
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+
+    // X-Frame-Options: Prevent clickjacking by disabling framing
+    headers.insert(
+        "x-frame-options",
+        HeaderValue::from_static("DENY"),
+    );
+
+    // X-XSS-Protection: Enable browser XSS filtering
+    headers.insert(
+        "x-xss-protection",
+        HeaderValue::from_static("1; mode=block"),
+    );
+
+    // Referrer-Policy: Control referrer information sent with requests
+    headers.insert(
+        "referrer-policy",
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+
+    // Strict-Transport-Security: Only add when TLS is enabled
+    if state.config.tls.is_some() {
+        headers.insert(
+            "strict-transport-security",
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        );
+    }
+
+    response
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -403,5 +460,71 @@ mod tests {
 
         // Should still work after cleanup
         assert!(limiter.check("client_1"));
+    }
+
+    #[tokio::test]
+    async fn test_security_headers_without_tls() {
+        let state = AppState::new(ServerConfig::default());
+
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers))
+            .with_state(state);
+
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).expect("failed to build request"))
+            .await
+            .expect("failed to execute request");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Check security headers are present
+        assert_eq!(
+            response.headers().get("content-security-policy").map(|v| v.to_str().unwrap()),
+            Some("default-src 'self'")
+        );
+        assert_eq!(
+            response.headers().get("x-content-type-options").map(|v| v.to_str().unwrap()),
+            Some("nosniff")
+        );
+        assert_eq!(
+            response.headers().get("x-frame-options").map(|v| v.to_str().unwrap()),
+            Some("DENY")
+        );
+        assert_eq!(
+            response.headers().get("x-xss-protection").map(|v| v.to_str().unwrap()),
+            Some("1; mode=block")
+        );
+        assert_eq!(
+            response.headers().get("referrer-policy").map(|v| v.to_str().unwrap()),
+            Some("strict-origin-when-cross-origin")
+        );
+
+        // HSTS should NOT be present without TLS
+        assert!(response.headers().get("strict-transport-security").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_security_headers_with_tls() {
+        let config = ServerConfig::default().with_tls("/path/to/cert.pem", "/path/to/key.pem");
+        let state = AppState::new(config);
+
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers))
+            .with_state(state);
+
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).expect("failed to build request"))
+            .await
+            .expect("failed to execute request");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // HSTS should be present with TLS
+        assert_eq!(
+            response.headers().get("strict-transport-security").map(|v| v.to_str().unwrap()),
+            Some("max-age=31536000; includeSubDomains")
+        );
     }
 }

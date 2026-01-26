@@ -114,20 +114,26 @@ The server uses secure defaults:
 
 ### Local Authentication
 
-Users are authenticated against locally stored credentials:
+Users are authenticated against locally stored credentials. Configure credentials via environment variables:
+
+```bash
+# Set credentials before starting the server
+export AEGIS_ADMIN_USERNAME=your_admin_username
+export AEGIS_ADMIN_PASSWORD=your_secure_password
+```
 
 ```bash
 # Login
 curl -X POST https://localhost:9090/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "demo", "password": "demo"}'
+  -d "{\"username\": \"$AEGIS_ADMIN_USERNAME\", \"password\": \"$AEGIS_ADMIN_PASSWORD\"}"
 
 # Response
 {
   "token": "abc123...",
   "user": {
-    "username": "demo",
-    "role": "viewer",
+    "username": "your_username",
+    "role": "admin",
     "mfa_enabled": false
   }
 }
@@ -424,7 +430,7 @@ All security-relevant actions are logged:
 - [ ] **Enable TLS** - Never run without encryption in production
 - [ ] **Use strong certificates** - Obtain from trusted CA (Let's Encrypt)
 - [ ] **Configure Vault** - Use HashiCorp Vault for secrets
-- [ ] **Change default passwords** - Never use `demo/demo` in production
+- [ ] **Configure secure credentials** - Set `AEGIS_ADMIN_USERNAME` and `AEGIS_ADMIN_PASSWORD` environment variables
 - [ ] **Enable MFA** - Require 2FA for admin accounts
 - [ ] **Use Nginx** - Deploy behind reverse proxy
 - [ ] **Configure rate limiting** - Protect against brute force

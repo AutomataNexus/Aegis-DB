@@ -29,6 +29,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 bincode = { workspace = true }
 tracing = { workspace = true }
+aes-gcm = { workspace = true }
+hex = "0.4"
+getrandom = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
