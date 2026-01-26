@@ -7,6 +7,9 @@
 //! @author AutomataNexus Development Team
 
 use crate::backup;
+use crate::breach;
+use crate::consent;
+use crate::gdpr;
 use crate::handlers;
 use crate::middleware;
 use crate::state::AppState;
@@ -162,6 +165,40 @@ pub fn create_router(state: AppState) -> Router {
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query));
 
+    // GDPR/CCPA compliance routes
+    let compliance_routes = Router::new()
+        // Data deletion (GDPR right to erasure - Article 17)
+        .route("/data-subject/:identifier", delete(gdpr::delete_data_subject))
+        // Data export (GDPR right to data portability - Article 20)
+        .route("/export", post(gdpr::export_data_subject))
+        .route("/certificates", get(gdpr::list_deletion_certificates))
+        .route("/certificates/:cert_id", get(gdpr::get_deletion_certificate))
+        .route("/certificates/:cert_id/verify", get(gdpr::verify_deletion_certificate))
+        .route("/audit/:subject_id", get(gdpr::get_deletion_audit))
+        .route("/audit/verify", get(gdpr::verify_audit_integrity))
+        // Consent management
+        .route("/consent", post(consent::record_consent))
+        .route("/consent/stats", get(consent::get_consent_stats))
+        .route("/consent/:subject_id", get(consent::get_consent_status))
+        .route("/consent/:subject_id", delete(consent::delete_consent_data))
+        .route("/consent/:subject_id/history", get(consent::get_consent_history))
+        .route("/consent/:subject_id/export", get(consent::export_consent_data))
+        .route("/consent/:subject_id/check/:purpose", get(consent::check_consent_status))
+        .route("/consent/:subject_id/:purpose", delete(consent::withdraw_consent))
+        // CCPA Do Not Sell
+        .route("/do-not-sell", get(consent::get_do_not_sell_list))
+        // Breach detection and notification (HIPAA/GDPR)
+        .route("/breaches", get(breach::list_breaches))
+        .route("/breaches/stats", get(breach::get_breach_stats))
+        .route("/breaches/cleanup", post(breach::trigger_cleanup))
+        .route("/breaches/:id", get(breach::get_breach))
+        .route("/breaches/:id/acknowledge", post(breach::acknowledge_breach))
+        .route("/breaches/:id/resolve", post(breach::resolve_breach))
+        .route("/breaches/:id/report", get(breach::get_breach_report))
+        .route("/security-events", get(breach::list_security_events))
+        // Apply authentication middleware to all compliance routes
+        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+
     Router::new()
         .route("/health", get(handlers::health_check))
         .nest("/api/v1", api_routes)
@@ -174,6 +211,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/streaming", streaming_routes)
         .nest("/api/v1/graph", graph_routes)
         .nest("/api/v1/query-builder", query_routes)
+        .nest("/api/v1/compliance", compliance_routes)
         .fallback(handlers::not_found)
         .layer(TraceLayer::new_for_http())
         .layer(cors)

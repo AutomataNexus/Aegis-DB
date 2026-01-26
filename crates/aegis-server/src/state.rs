@@ -9,7 +9,10 @@
 use crate::activity::ActivityLogger;
 use crate::admin::AdminService;
 use crate::auth::{AuthService, RbacManager};
+use crate::breach::{BreachDetector, WebhookNotifier};
 use crate::config::ServerConfig;
+use crate::consent::ConsentManager;
+use crate::gdpr::GdprService;
 use crate::handlers::{MetricsDataPoint, ServerSettings};
 use crate::middleware::RateLimiter;
 use aegis_document::{Document, DocumentEngine};
@@ -49,6 +52,9 @@ pub struct AppState {
     pub rbac: Arc<RbacManager>,
     pub rate_limiter: Arc<RateLimiter>,
     pub login_rate_limiter: Arc<RateLimiter>,
+    pub gdpr: Arc<GdprService>,
+    pub consent_manager: Arc<ConsentManager>,
+    pub breach_detector: Arc<BreachDetector>,
     data_dir: Option<PathBuf>,
 }
 
@@ -163,6 +169,15 @@ impl AppState {
             None => Arc::new(QueryEngine::new()),
         };
 
+        // Create breach detector with optional webhook notifier
+        let breach_detector = Arc::new(BreachDetector::new());
+        if let Ok(webhook_url) = std::env::var("AEGIS_BREACH_WEBHOOK_URL") {
+            if !webhook_url.is_empty() {
+                tracing::info!("Breach webhook notification enabled: {}", webhook_url);
+                breach_detector.register_notifier(Box::new(WebhookNotifier::new(&webhook_url)));
+            }
+        }
+
         Self {
             config: Arc::new(config),
             query_engine,
@@ -180,6 +195,9 @@ impl AppState {
             rbac: Arc::new(RbacManager::new()),
             rate_limiter,
             login_rate_limiter,
+            gdpr: Arc::new(GdprService::new()),
+            consent_manager: Arc::new(ConsentManager::new()),
+            breach_detector,
             data_dir,
         }
     }
