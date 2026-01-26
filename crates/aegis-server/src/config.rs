@@ -21,6 +21,8 @@ pub struct ServerConfig {
     pub request_timeout_secs: u64,
     pub body_limit_bytes: usize,
     pub enable_cors: bool,
+    /// Allowed CORS origins (empty = same-origin only, "*" = any)
+    pub cors_allowed_origins: Vec<String>,
     pub tls: Option<TlsConfig>,
     pub data_dir: Option<String>,
     /// Unique node ID
@@ -31,6 +33,10 @@ pub struct ServerConfig {
     pub cluster_name: String,
     /// Peer addresses for cluster membership
     pub peers: Vec<String>,
+    /// Rate limit: max requests per minute per IP
+    pub rate_limit_per_minute: u32,
+    /// Rate limit: max login attempts per minute per IP
+    pub login_rate_limit_per_minute: u32,
 }
 
 impl Default for ServerConfig {
@@ -42,12 +48,15 @@ impl Default for ServerConfig {
             request_timeout_secs: 30,
             body_limit_bytes: 10 * 1024 * 1024, // 10MB
             enable_cors: true,
+            cors_allowed_origins: Vec::new(), // Empty = same-origin only (secure default)
             tls: None,
             data_dir: None,
             node_id: generate_node_id(),
             node_name: None,
             cluster_name: "aegis-cluster".to_string(),
             peers: Vec::new(),
+            rate_limit_per_minute: 100,
+            login_rate_limit_per_minute: 30,
         }
     }
 }
