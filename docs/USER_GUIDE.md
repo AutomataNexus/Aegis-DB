@@ -45,6 +45,7 @@
    - [Time Series](#time-series-api)
    - [Streaming](#streaming-api)
    - [Admin Endpoints](#admin-endpoints)
+   - [Compliance APIs (GDPR, CCPA, HIPAA)](#compliance-apis-gdpr-ccpa-hipaa)
 8. [Data Models](#data-models)
    - [SQL/Relational](#sqlrelational)
    - [Key-Value Store](#key-value-store)
@@ -1039,6 +1040,421 @@ GET /api/v1/admin/alerts
 **Activity Log:**
 ```bash
 GET /api/v1/admin/activities?limit=50&type=query
+```
+
+### Compliance APIs (GDPR, CCPA, HIPAA)
+
+AegisDB provides built-in compliance APIs to help organizations meet regulatory requirements for data protection and privacy. These endpoints support GDPR (EU), CCPA (California), and HIPAA (US Healthcare) compliance workflows.
+
+#### Data Subject Rights (GDPR Article 17 & 20)
+
+**Right to Erasure (Delete Personal Data):**
+
+Permanently delete all data associated with a data subject. Returns a cryptographic deletion certificate for audit purposes.
+
+```bash
+DELETE /api/v1/compliance/data-subject/{identifier}
+```
+
+Example:
+```bash
+curl -X DELETE http://localhost:9090/api/v1/compliance/data-subject/user@example.com \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+```json
+{
+  "success": true,
+  "certificate_id": "cert-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "subject_identifier": "user@example.com",
+  "deleted_at": "2024-01-15T10:30:00Z",
+  "records_deleted": 47,
+  "tables_affected": ["users", "orders", "activity_logs"]
+}
+```
+
+**Data Portability (Export Personal Data):**
+
+Export all data associated with a data subject in a machine-readable format.
+
+```bash
+POST /api/v1/compliance/export
+Content-Type: application/json
+
+{
+  "subject_identifier": "user@example.com",
+  "format": "json",
+  "include_metadata": true
+}
+```
+
+Example:
+```bash
+curl -X POST http://localhost:9090/api/v1/compliance/export \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subject_identifier": "user@example.com",
+    "format": "json",
+    "include_metadata": true
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "export_id": "export-12345",
+  "subject_identifier": "user@example.com",
+  "format": "json",
+  "download_url": "/api/v1/compliance/export/export-12345/download",
+  "expires_at": "2024-01-16T10:30:00Z",
+  "size_bytes": 245678,
+  "record_count": 156
+}
+```
+
+**List Deletion Certificates:**
+
+Retrieve all deletion certificates for audit and compliance reporting.
+
+```bash
+GET /api/v1/compliance/certificates
+GET /api/v1/compliance/certificates?from=2024-01-01&to=2024-01-31
+```
+
+Example:
+```bash
+curl http://localhost:9090/api/v1/compliance/certificates \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+```json
+{
+  "certificates": [
+    {
+      "id": "cert-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "subject_identifier": "user@example.com",
+      "deleted_at": "2024-01-15T10:30:00Z",
+      "deleted_by": "admin",
+      "records_deleted": 47,
+      "verification_hash": "sha256:abc123..."
+    }
+  ],
+  "total_count": 1
+}
+```
+
+**Verify Deletion Certificate:**
+
+Cryptographically verify the authenticity of a deletion certificate.
+
+```bash
+GET /api/v1/compliance/certificates/{id}/verify
+```
+
+Example:
+```bash
+curl http://localhost:9090/api/v1/compliance/certificates/cert-a1b2c3d4-e5f6-7890-abcd-ef1234567890/verify \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+```json
+{
+  "valid": true,
+  "certificate_id": "cert-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "verified_at": "2024-01-20T14:00:00Z",
+  "signature_algorithm": "Ed25519",
+  "issuer": "aegisdb-compliance-service"
+}
+```
+
+#### Consent Management
+
+**Record Consent:**
+
+Record a data subject's consent for a specific processing purpose.
+
+```bash
+POST /api/v1/compliance/consent
+Content-Type: application/json
+
+{
+  "subject_id": "user@example.com",
+  "purpose": "marketing_emails",
+  "granted": true,
+  "lawful_basis": "consent",
+  "expiry": "2025-01-15T00:00:00Z",
+  "metadata": {
+    "ip_address": "192.168.1.1",
+    "user_agent": "Mozilla/5.0...",
+    "consent_form_version": "2.1"
+  }
+}
+```
+
+Example:
+```bash
+curl -X POST http://localhost:9090/api/v1/compliance/consent \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subject_id": "user@example.com",
+    "purpose": "marketing_emails",
+    "granted": true,
+    "lawful_basis": "consent",
+    "expiry": "2025-01-15T00:00:00Z"
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "consent_id": "consent-789xyz",
+  "subject_id": "user@example.com",
+  "purpose": "marketing_emails",
+  "granted": true,
+  "recorded_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Get Consent Status:**
+
+Retrieve all consent records for a data subject.
+
+```bash
+GET /api/v1/compliance/consent/{subject_id}
+```
+
+Example:
+```bash
+curl http://localhost:9090/api/v1/compliance/consent/user@example.com \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+```json
+{
+  "subject_id": "user@example.com",
+  "consents": [
+    {
+      "consent_id": "consent-789xyz",
+      "purpose": "marketing_emails",
+      "granted": true,
+      "lawful_basis": "consent",
+      "granted_at": "2024-01-15T10:30:00Z",
+      "expiry": "2025-01-15T00:00:00Z",
+      "active": true
+    },
+    {
+      "consent_id": "consent-456abc",
+      "purpose": "analytics",
+      "granted": true,
+      "lawful_basis": "legitimate_interest",
+      "granted_at": "2024-01-10T08:00:00Z",
+      "expiry": null,
+      "active": true
+    }
+  ]
+}
+```
+
+**Withdraw Consent:**
+
+Withdraw a data subject's consent for a specific purpose.
+
+```bash
+DELETE /api/v1/compliance/consent/{subject_id}/{purpose}
+```
+
+Example:
+```bash
+curl -X DELETE http://localhost:9090/api/v1/compliance/consent/user@example.com/marketing_emails \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+```json
+{
+  "success": true,
+  "subject_id": "user@example.com",
+  "purpose": "marketing_emails",
+  "withdrawn_at": "2024-01-20T14:00:00Z",
+  "previous_consent_id": "consent-789xyz"
+}
+```
+
+**CCPA Do Not Sell List:**
+
+Retrieve the list of data subjects who have opted out of data sales (CCPA requirement).
+
+```bash
+GET /api/v1/compliance/do-not-sell
+GET /api/v1/compliance/do-not-sell?page=1&limit=100
+```
+
+Example:
+```bash
+curl http://localhost:9090/api/v1/compliance/do-not-sell \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+```json
+{
+  "do_not_sell": [
+    {
+      "subject_id": "user1@example.com",
+      "opted_out_at": "2024-01-10T12:00:00Z",
+      "verification_method": "authenticated_request"
+    },
+    {
+      "subject_id": "user2@example.com",
+      "opted_out_at": "2024-01-12T15:30:00Z",
+      "verification_method": "email_confirmation"
+    }
+  ],
+  "total_count": 2,
+  "page": 1,
+  "limit": 100
+}
+```
+
+#### Breach Detection
+
+**List Security Incidents:**
+
+Retrieve detected security incidents and potential data breaches.
+
+```bash
+GET /api/v1/compliance/breaches
+GET /api/v1/compliance/breaches?status=open&severity=high
+```
+
+Example:
+```bash
+curl http://localhost:9090/api/v1/compliance/breaches \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+```json
+{
+  "incidents": [
+    {
+      "id": "breach-001",
+      "detected_at": "2024-01-15T03:45:00Z",
+      "severity": "high",
+      "status": "open",
+      "type": "unauthorized_access",
+      "description": "Multiple failed login attempts followed by successful access from unusual IP",
+      "affected_records_estimate": 150,
+      "affected_subjects_estimate": 50,
+      "source_ip": "203.0.113.42",
+      "acknowledged": false
+    }
+  ],
+  "total_count": 1,
+  "open_count": 1,
+  "acknowledged_count": 0
+}
+```
+
+**Acknowledge Incident:**
+
+Acknowledge a security incident to indicate it has been reviewed.
+
+```bash
+POST /api/v1/compliance/breaches/{id}/acknowledge
+Content-Type: application/json
+
+{
+  "acknowledged_by": "security_admin",
+  "notes": "Investigated and confirmed as false positive - authorized penetration test",
+  "classification": "false_positive"
+}
+```
+
+Example:
+```bash
+curl -X POST http://localhost:9090/api/v1/compliance/breaches/breach-001/acknowledge \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "acknowledged_by": "security_admin",
+    "notes": "Investigated and confirmed as false positive - authorized penetration test",
+    "classification": "false_positive"
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "incident_id": "breach-001",
+  "acknowledged_at": "2024-01-15T10:00:00Z",
+  "acknowledged_by": "security_admin",
+  "classification": "false_positive",
+  "status": "acknowledged"
+}
+```
+
+**Generate Compliance Report:**
+
+Generate a detailed compliance report for a specific incident, suitable for regulatory notification.
+
+```bash
+GET /api/v1/compliance/breaches/{id}/report
+GET /api/v1/compliance/breaches/{id}/report?format=pdf
+```
+
+Example:
+```bash
+curl http://localhost:9090/api/v1/compliance/breaches/breach-001/report \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Response:
+```json
+{
+  "report_id": "report-breach-001-20240115",
+  "incident_id": "breach-001",
+  "generated_at": "2024-01-15T10:30:00Z",
+  "report_type": "breach_notification",
+  "incident_summary": {
+    "detected_at": "2024-01-15T03:45:00Z",
+    "severity": "high",
+    "type": "unauthorized_access",
+    "description": "Multiple failed login attempts followed by successful access from unusual IP"
+  },
+  "impact_assessment": {
+    "affected_records": 150,
+    "affected_subjects": 50,
+    "data_categories": ["email", "name", "purchase_history"],
+    "sensitive_data_involved": false
+  },
+  "timeline": [
+    {"timestamp": "2024-01-15T03:30:00Z", "event": "First failed login attempt detected"},
+    {"timestamp": "2024-01-15T03:45:00Z", "event": "Successful login from same IP after 15 attempts"},
+    {"timestamp": "2024-01-15T03:45:30Z", "event": "Anomaly detection triggered alert"}
+  ],
+  "remediation_actions": [
+    "Account temporarily locked",
+    "IP address blocked",
+    "Password reset required"
+  ],
+  "regulatory_requirements": {
+    "gdpr_notification_required": true,
+    "gdpr_notification_deadline": "2024-01-18T03:45:00Z",
+    "ccpa_notification_required": true,
+    "hipaa_notification_required": false
+  },
+  "download_url": "/api/v1/compliance/breaches/breach-001/report/download"
+}
 ```
 
 ---
