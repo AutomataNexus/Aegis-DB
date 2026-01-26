@@ -276,7 +276,7 @@ For privacy questions or concerns:
 **Data Protection Officer:** dpo@automatanexus.com
 
 **Address:**
-AutomataNexus Development Team
+Andrew Jewell Sr / AutomataNexus LLC
 Privacy Inquiries
 [Address]
 
@@ -311,4 +311,4 @@ export AEGIS_TELEMETRY=false
 
 ---
 
-Copyright 2024-2026 AutomataNexus Development Team. All rights reserved.
+Copyright 2024-2026 Andrew Jewell Sr / AutomataNexus LLC. All rights reserved.

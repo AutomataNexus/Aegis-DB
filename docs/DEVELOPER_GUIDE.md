@@ -2213,5 +2213,5 @@ All PRs require review before merging. Reviewers will check:
 
 <p align="center">
   <strong>Happy Coding!</strong><br>
-  AegisDB Development Team
+  Andrew Jewell Sr / AutomataNexus LLC
 </p>

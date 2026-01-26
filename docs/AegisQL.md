@@ -1319,4 +1319,4 @@ WHERE, WITH
 
 ---
 
-*Copyright 2024-2026 AutomataNexus Development Team. Licensed under Apache 2.0.*
+*Copyright 2024-2026 Andrew Jewell Sr / AutomataNexus LLC. Licensed under Apache 2.0.*

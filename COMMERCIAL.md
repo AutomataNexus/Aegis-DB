@@ -1,163 +1,126 @@
-# Aegis Database Platform - Commercial Licensing
+# Aegis-DB Commercial Offerings
 
-## Overview
-
-Aegis Database is licensed under the **Business Source License 1.1 (BSL)**.
-
-- **Source Available**: Full source code is available for inspection, learning, and modification
-- **Free for Most Uses**: Development, testing, internal business use, non-commercial projects
-- **Commercial Service License Required**: For offering Aegis as a Database-as-a-Service to third parties
-- **Future Open Source**: Converts to Apache-2.0 on January 26, 2030
+Aegis-DB is licensed under the Business Source License 1.1 (BSL). This page outlines commercial licensing options, support tiers, and consulting services for organizations that need them.
 
 ---
 
-## What's Allowed (Free)
+## Commercial License
 
-| Use Case | Allowed |
-|----------|---------|
-| Development and testing | Yes |
-| Internal business applications | Yes |
-| Non-commercial projects | Yes |
-| Educational and research use | Yes |
-| Evaluation and proof-of-concept | Yes |
-| Self-hosted production (internal) | Yes |
-| Modify source code | Yes |
+### When You Need It
 
----
+A commercial license is required if you are:
 
-## What Requires a Commercial License
+- **Offering Aegis-DB as a managed service or DBaaS** - Providing database functionality to third parties as a hosted service
+- **Embedding in commercial products** - Distributing Aegis-DB as part of a proprietary software product
+- **Removing BSL restrictions** - Operating outside the terms of the Business Source License
 
-**Offering Aegis as a "Database Service"** - a commercial offering that allows third parties (other than your employees and contractors) to access database functionality.
+If you are using Aegis-DB for internal applications, development, testing, or self-hosted production systems, no commercial license is required.
 
-Examples requiring a commercial license:
-- Managed database hosting (DBaaS)
-- Database-as-a-Service platform
-- Cloud database offering
-- Reselling database access
+### Pricing
 
----
+| License Tier | Annual Cost | Eligibility |
+|--------------|-------------|-------------|
+| **Startup License** | $5,000/year | Companies with up to $1M ARR |
+| **Business License** | $15,000/year | Companies with up to $10M ARR |
+| **Enterprise License** | Custom pricing | Unlimited revenue |
 
-## Commercial License Tiers
+All licenses are billed annually. Multi-year discounts are available upon request.
 
-### Startup
-- Up to 5 nodes
-- Email support (business hours)
-- Community Slack access
-- **$499/month**
+### What's Included
 
-### Professional
-- Up to 25 nodes
-- Priority email + chat support
-- 99.9% SLA
-- **$1,999/month**
+Every commercial license includes:
 
-### Enterprise
-- Unlimited nodes
-- 24/7 phone + dedicated support
-- 99.99% SLA
-- Custom development
-- **Contact for pricing**
+- **Production use rights** - Full rights to deploy and operate Aegis-DB in production environments
+- **Priority bug fixes** - Expedited resolution for issues affecting your deployment
+- **License to redistribute** - Permission to distribute Aegis-DB as part of your product or service
+- **Legal indemnification** - Protection against intellectual property claims related to your use of Aegis-DB
 
 ---
 
-## Enterprise Features
+## Support Tiers
 
-All commercial licenses include:
+### Community (Free)
 
-| Feature | Included |
-|---------|----------|
-| Full source code access | Yes |
-| LDAP/Active Directory integration | Yes |
-| OAuth2/OIDC SSO | Yes |
-| Advanced RBAC with row-level security | Yes |
-| Audit logging and compliance reports | Yes |
-| Encryption at rest (AES-256) | Yes |
-| Multi-region replication | Yes |
-| HashiCorp Vault integration | Yes |
-| Priority support | Yes |
-| SLA guarantees | Yes |
+- GitHub Issues for bug reports and feature requests
+- Community Discord for peer-to-peer discussion
+- Access to all public documentation
+- No SLA or guaranteed response times
 
----
+### Professional ($500/month)
 
-## Support Options
+- Email support from the Aegis-DB team
+- 48-hour response time
+- Business hours coverage (9am-5pm ET, Monday-Friday)
+- Up to 5 support tickets per month
+- Quarterly review call to discuss your deployment and roadmap
 
-### Community Support (Free)
-- GitHub Issues
-- Community Discord
-- Documentation
-- Stack Overflow tag: `aegis-db`
+### Business ($2,000/month)
 
-### Commercial Support
+- Dedicated Slack channel for your team
+- 8-hour response time
+- Extended hours coverage (8am-8pm ET, Monday-Friday)
+- Unlimited support tickets
+- Monthly review call with your support engineer
+- Named support engineer familiar with your environment
 
-| Severity | Startup | Professional | Enterprise |
-|----------|---------|--------------|------------|
-| Critical (P1) | 24 hours | 4 hours | 1 hour |
+### Enterprise ($5,000/month)
+
+- 24/7 support coverage
+- 1-hour response time for critical (P1) issues
+- Dedicated support engineer assigned to your account
+- Quarterly on-site or video review sessions
+- Custom SLA terms available
+- Architecture review included to optimize your deployment
+
+### Response Time Summary
+
+| Severity | Professional | Business | Enterprise |
+|----------|--------------|----------|------------|
+| Critical (P1) | 48 hours | 8 hours | 1 hour |
 | High (P2) | 48 hours | 8 hours | 4 hours |
-| Medium (P3) | 5 days | 24 hours | 8 hours |
-| Low (P4) | Best effort | 72 hours | 24 hours |
+| Medium (P3) | 48 hours | 8 hours | 8 hours |
+| Low (P4) | 48 hours | 8 hours | 24 hours |
 
 ---
 
-## OEM & Reseller Licensing
+## Consulting Services
 
-For embedding Aegis in your product or reselling:
+Our team offers consulting services to help you get the most out of Aegis-DB.
 
-- **OEM License** - Embed Aegis in your software product
-- **Reseller License** - Distribute Aegis to your customers
-- **MSP License** - Managed service provider hosting
+### Rates
 
-Contact sales@automatanexus.com for OEM/reseller inquiries.
+| Engagement Type | Rate |
+|-----------------|------|
+| **Standard** | $200/hour |
+| **Expedited** (24-48 hour start) | $300/hour |
+| **Retainer** | $8,000/month (includes 50 hours) |
 
----
+Retainer hours roll over for up to one month. Travel expenses billed separately for on-site engagements.
 
-## Academic & Non-Profit
+### Services
 
-Free commercial licenses available for:
-
-- Universities and research institutions
-- Non-profit organizations (501(c)(3) or equivalent)
-- Open source projects
-
-Contact academic@automatanexus.com
-
----
-
-## FAQ
-
-### Can I use Aegis for free in my company?
-Yes! Internal use, development, and testing are all free under BSL.
-
-### Do I need a license to self-host Aegis for my company?
-No. Self-hosted internal use is allowed under BSL.
-
-### When do I need a commercial license?
-Only when offering Aegis as a service to third parties (Database-as-a-Service).
-
-### Can I modify the source code?
-Yes. You can modify and create derivative works for any allowed use.
-
-### What happens on January 26, 2030?
-Version 0.1.x converts to Apache-2.0, becoming fully open source with no restrictions.
-
-### How is this different from open source?
-BSL is "source available" - you can see and modify the code, but there's one restriction: you can't offer it as a database service without a license. After the change date, it becomes true open source (Apache-2.0).
+- **Installation and setup** - Get Aegis-DB running in your environment with best practices from day one
+- **Migration from other databases** - Move your data from PostgreSQL, MySQL, MongoDB, or other systems
+- **Performance optimization** - Identify bottlenecks and tune your deployment for maximum throughput
+- **Architecture review** - Evaluate your schema, queries, and infrastructure for scalability and reliability
+- **Compliance audit assistance** - Prepare for SOC 2, HIPAA, PCI-DSS, or other compliance requirements
+- **Custom feature development** - Build features specific to your use case
+- **Training workshops** - On-site or remote training for your engineering team (half-day or full-day sessions)
 
 ---
 
 ## Contact
 
-**Sales:** sales@automatanexus.com
+Ready to discuss commercial licensing, support, or consulting services?
 
-**Support:** support@automatanexus.com
+- **Email:** Devops@automatanexus.com
+- **Phone:** (260) 930-2025
+- **Website:** https://automatanexus.com
 
-**Legal:** legal@automatanexus.com
-
-**Website:** https://automatanexus.com
-
-**GitHub:** https://github.com/AutomataNexus/Aegis-DB
+**Andrew Jewell Sr** — Founder & Lead Developer
 
 ---
 
-Copyright 2024-2026 AutomataNexus Development Team
+Copyright 2024-2026 Andrew Jewell Sr / AutomataNexus LLC
 
 Licensed under the Business Source License 1.1

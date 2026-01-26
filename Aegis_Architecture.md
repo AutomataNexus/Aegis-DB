@@ -14,14 +14,14 @@ Key Components:
 - Security and compliance framework
 
 @version 1.0.0
-@author AutomataNexus Development Team
+@author Andrew Jewell Sr / AutomataNexus LLC
 """
 
 # Aegis Database Platform
 ## System Architecture Documentation
 
 **Version:** 1.5.0
-**Author:** AutomataNexus Development Team
+**Author:** Andrew Jewell Sr / AutomataNexus LLC
 **Generated:** January 19, 2026
 **Status:** Phase 3 Complete
 
@@ -1449,6 +1449,6 @@ pub struct Migration {
 
 **Architecture Status**: v1.5.0 - Phase 3 Complete
 **Next Review**: Phase 4 Enterprise Features
-**Maintainers**: AutomataNexus Development Team  
+**Maintainers**: Andrew Jewell Sr / AutomataNexus LLC  
 
 *This document provides the comprehensive technical architecture for Aegis database platform. All implementation should follow this architectural specification and maintain consistency with the design principles outlined herein.*
