@@ -74,6 +74,13 @@ Key Components:
 - Python & JavaScript SDKs
 - Grafana Data Source Plugin
 
+### Phase 6: Security Hardening - COMPLETE
+- **TLS/HTTPS**: Native TLS support via axum-server with rustls
+- **Password Security**: Argon2id hashing with unique random salts
+- **Rate Limiting**: Token bucket algorithm for API protection
+- **Secrets Management**: HashiCorp Vault integration (AppRole, Kubernetes auth)
+- **Secure Tokens**: Cryptographically secure random token generation
+
 ---
 
 ## Installation & Operations
@@ -892,6 +899,28 @@ pub enum ConnectionState {
 
 ## Authentication System
 
+### Password Security
+
+Passwords are hashed using Argon2id, the winner of the Password Hashing Competition:
+
+```rust
+// Argon2id configuration for production security
+const ARGON2_MEMORY_COST: u32 = 19_456; // 19 MiB
+const ARGON2_TIME_COST: u32 = 2;        // 2 iterations
+const ARGON2_PARALLELISM: u32 = 1;      // 1 thread
+const ARGON2_OUTPUT_LEN: usize = 32;    // 256-bit hash
+
+pub fn hash_password(password: &str) -> Result<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::new(
+        Algorithm::Argon2id,
+        Version::V0x13,
+        Params::new(ARGON2_MEMORY_COST, ARGON2_TIME_COST, ARGON2_PARALLELISM, Some(ARGON2_OUTPUT_LEN))
+    );
+    Ok(argon2.hash_password(password.as_bytes(), &salt)?.to_string())
+}
+```
+
 ### Multi-Factor Authentication
 
 ```rust
@@ -911,6 +940,32 @@ pub struct SessionManager {
     session_store: Box<dyn SessionStore>,
     expiry_queue: BinaryHeap<SessionExpiry>,
 }
+```
+
+### Secrets Management (HashiCorp Vault)
+
+```rust
+pub trait SecretsProvider: Send + Sync {
+    fn get(&self, key: &str) -> Option<String>;
+    fn get_or(&self, key: &str, default: &str) -> String;
+    fn exists(&self, key: &str) -> bool;
+}
+
+pub struct VaultSecretsProvider {
+    config: VaultConfig,
+    client: reqwest::Client,
+    token: RwLock<Option<String>>,
+    cache: RwLock<HashMap<String, String>>,
+}
+
+pub struct SecretsManager {
+    providers: Vec<Box<dyn SecretsProvider>>, // Vault -> Env -> Default
+}
+
+// Supported Vault authentication methods:
+// - Token-based (VAULT_TOKEN)
+// - AppRole (VAULT_ROLE_ID + VAULT_SECRET_ID)
+// - Kubernetes (VAULT_KUBERNETES_ROLE)
 ```
 
 ### Authorization Framework
@@ -966,6 +1021,7 @@ pub struct NetworkSecurity {
     tls_config: TlsConfig,
     firewall_rules: Vec<FirewallRule>,
     ddos_protection: DdosProtection,
+    rate_limiter: RateLimiter,
 }
 
 pub struct TlsConfig {
@@ -974,6 +1030,30 @@ pub struct TlsConfig {
     protocol_versions: Vec<TlsVersion>,
     client_auth: ClientAuthMode,
 }
+
+// Native TLS support via axum-server with rustls
+// Supports TLSv1.2 and TLSv1.3
+// Modern cipher suites: ECDHE-RSA-AES128-GCM-SHA256, etc.
+```
+
+### Rate Limiting
+
+```rust
+pub struct RateLimiter {
+    entries: Arc<RwLock<HashMap<String, RateLimitEntry>>>,
+    max_requests: u32,
+    window_secs: u64,
+}
+
+pub struct RateLimitEntry {
+    count: u32,
+    window_start: Instant,
+}
+
+// Token bucket algorithm implementation
+// Default limits:
+// - Login endpoints: 30 requests/minute/IP
+// - General API: 1000 requests/minute/IP
 ```
 
 ---
