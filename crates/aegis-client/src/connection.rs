@@ -170,6 +170,7 @@ impl Connection {
 
         let url = format!("{}/api/v1/query", self.base_url);
         let body = serde_json::json!({
+            "database": &self.config.database,
             "sql": sql,
             "params": params.iter().map(value_to_json).collect::<Vec<_>>()
         });
@@ -264,6 +265,7 @@ impl Connection {
 
         let url = format!("{}/api/v1/query", self.base_url);
         let body = serde_json::json!({
+            "database": &self.config.database,
             "sql": sql,
             "params": params.iter().map(value_to_json).collect::<Vec<_>>()
         });
