@@ -33,6 +33,6 @@ pub use auth::{
     RowPolicyOperation, UserInfo, UserRole,
 };
 pub use backup::{BackupInfo, BackupManager, BackupStatus};
-pub use config::ServerConfig;
+pub use config::{ClusterTlsConfig, ServerConfig};
 pub use router::create_router;
 pub use state::AppState;
