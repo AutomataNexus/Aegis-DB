@@ -203,9 +203,12 @@ aegis status
 
 Open http://localhost:8000 in your browser.
 
-**Default credentials:**
-- Username: `demo`
-- Password: `demo`
+**Credentials:**
+Configure credentials via environment variables before starting:
+```bash
+export AEGIS_ADMIN_USERNAME=your_admin_username
+export AEGIS_ADMIN_PASSWORD=your_secure_password
+```
 
 ### 3. Run Your First Query
 
@@ -600,13 +603,10 @@ Options:
 ### Login & Authentication
 
 1. Navigate to http://localhost:8000
-2. Enter your credentials (default: `demo` / `demo`)
+2. Enter credentials configured via `AEGIS_ADMIN_USERNAME` and `AEGIS_ADMIN_PASSWORD` environment variables
 3. If MFA is enabled, enter the 6-digit code from your authenticator app
 
-**Admin Login (with MFA):**
-- Username: `admin`
-- Password: `admin`
-- MFA Code: Use `123456` for testing or configure a real TOTP authenticator
+**Note:** Configure credentials via environment variables before starting the server. MFA can be enabled for additional security.
 
 ### Cluster Overview
 
@@ -749,9 +749,10 @@ All API endpoints (except `/health` and `/api/v1/auth/login`) require authentica
 
 **Login:**
 ```bash
+# Use credentials from environment variables
 curl -X POST http://localhost:9090/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "demo", "password": "demo"}'
+  -d "{\"username\": \"$AEGIS_ADMIN_USERNAME\", \"password\": \"$AEGIS_ADMIN_PASSWORD\"}"
 ```
 
 Response:
@@ -759,10 +760,10 @@ Response:
 {
   "token": "abc123...",
   "user": {
-    "id": "user-002",
-    "username": "demo",
-    "email": "demo@aegisdb.io",
-    "role": "viewer",
+    "id": "user-001",
+    "username": "your_username",
+    "email": "user@example.com",
+    "role": "admin",
     "mfa_enabled": false
   }
 }
@@ -1225,12 +1226,19 @@ WHERE collection = 'users'
 
 Default authentication using username/password stored in AegisDB.
 
-**Default Users:**
-| Username | Password | Role | MFA |
-|----------|----------|------|-----|
-| admin | admin | Admin | Yes |
-| operator | operator | Operator | No |
-| demo | demo | Viewer | No |
+**Configuring Users:**
+Set initial admin credentials via environment variables:
+```bash
+export AEGIS_ADMIN_USERNAME=admin
+export AEGIS_ADMIN_PASSWORD=your_secure_password
+```
+
+**Available Roles:**
+| Role | Description |
+|------|-------------|
+| Admin | Full access, can manage users and configure system |
+| Operator | Can execute queries and manage databases |
+| Viewer | Read-only access |
 
 **Creating Users:**
 ```bash
@@ -1504,10 +1512,10 @@ aegis logs server
 
 **Authentication failures:**
 ```bash
-# Verify credentials
+# Verify credentials (use your configured credentials)
 curl -X POST http://localhost:9090/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "demo", "password": "demo"}'
+  -d "{\"username\": \"$AEGIS_ADMIN_USERNAME\", \"password\": \"$AEGIS_ADMIN_PASSWORD\"}"
 
 # Check auth configuration
 cat ~/.aegis/config.toml | grep -A10 "\[auth\]"

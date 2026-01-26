@@ -16,6 +16,7 @@
 pub mod activity;
 pub mod admin;
 pub mod auth;
+pub mod backup;
 pub mod config;
 pub mod handlers;
 pub mod middleware;
@@ -31,6 +32,7 @@ pub use auth::{
     OAuth2Authenticator, OAuth2Config, Permission, RbacManager, Role, RowLevelPolicy,
     RowPolicyOperation, UserInfo, UserRole,
 };
+pub use backup::{BackupInfo, BackupManager, BackupStatus};
 pub use config::ServerConfig;
 pub use router::create_router;
 pub use state::AppState;

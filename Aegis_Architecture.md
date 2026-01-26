@@ -134,10 +134,13 @@ aegis logs dashboard     # Follow dashboard logs
 | Dashboard   | 8000 | http://localhost:8000        |
 | Health      | 9090 | http://localhost:9090/health |
 
-### Default Credentials
+### Credentials Configuration
 
-- **Username:** `demo`
-- **Password:** `demo`
+Set credentials via environment variables before starting:
+```bash
+export AEGIS_ADMIN_USERNAME=your_admin_username
+export AEGIS_ADMIN_PASSWORD=your_secure_password
+```
 
 ### File Locations
 

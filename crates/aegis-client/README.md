@@ -52,8 +52,14 @@ use aegis_client::{AegisClient, ClientConfig};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create client
+    // Read credentials from environment variables
+    let username = std::env::var("AEGIS_ADMIN_USERNAME")
+        .expect("AEGIS_ADMIN_USERNAME must be set");
+    let password = std::env::var("AEGIS_ADMIN_PASSWORD")
+        .expect("AEGIS_ADMIN_PASSWORD must be set");
+
     let config = ClientConfig::new("localhost:9090")
-        .with_auth("demo", "demo");
+        .with_auth(&username, &password);
 
     let client = AegisClient::connect(config).await?;
 

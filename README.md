@@ -175,12 +175,14 @@ After running `aegis start`:
 | Health    | http://localhost:9090/health |
 | HTTPS API | https://localhost:9443 (with nginx) |
 
-**Default Login:** `demo` / `demo`
-
 ### Security Configuration
 
 **Environment Variables:**
 ```bash
+# Authentication (required - set before starting the server)
+export AEGIS_ADMIN_USERNAME=your_admin_username
+export AEGIS_ADMIN_PASSWORD=your_secure_password
+
 # TLS Configuration
 export AEGIS_TLS_CERT=/path/to/server.crt
 export AEGIS_TLS_KEY=/path/to/server.key
