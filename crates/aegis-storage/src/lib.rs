@@ -26,4 +26,4 @@ pub use block::{Block, BlockHeader};
 pub use buffer::BufferPool;
 pub use page::Page;
 pub use transaction::{TransactionManager, Transaction, IsolationLevel, TransactionStats, GcStats};
-pub use wal::WriteAheadLog;
+pub use wal::{WriteAheadLog, RecoveryResult, CheckpointData, LogRecord, LogRecordType};
