@@ -6,7 +6,7 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use aegis_server::{create_router, AppState, ServerConfig};
+use aegis_server::{create_router, AppState, ServerConfig, ClusterTlsConfig};
 use aegis_server::secrets::{self, SecretsProvider};
 use axum_server::tls_rustls::RustlsConfig;
 use clap::Parser;
@@ -57,6 +57,26 @@ struct Args {
     /// TLS private key file path (PEM format)
     #[arg(long)]
     tls_key: Option<String>,
+
+    /// Enable TLS for cluster communication (uses same certs as server TLS by default)
+    #[arg(long)]
+    cluster_tls: bool,
+
+    /// CA certificate for verifying cluster peer certificates (PEM format)
+    #[arg(long)]
+    cluster_ca_cert: Option<String>,
+
+    /// Client certificate for cluster mTLS (PEM format, optional)
+    #[arg(long)]
+    cluster_client_cert: Option<String>,
+
+    /// Client private key for cluster mTLS (PEM format, optional)
+    #[arg(long)]
+    cluster_client_key: Option<String>,
+
+    /// Skip certificate verification for cluster TLS (INSECURE - only for testing)
+    #[arg(long)]
+    cluster_tls_insecure: bool,
 }
 
 #[tokio::main]
@@ -71,6 +91,43 @@ async fn main() {
 
     let args = Args::parse();
 
+    // Production mode TLS requirement check
+    // In production, TLS must be enabled unless explicitly overridden
+    let is_production = std::env::var("AEGIS_PRODUCTION")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+    let allow_insecure = std::env::var("AEGIS_ALLOW_INSECURE")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
+    if is_production && !args.tls && !allow_insecure {
+        eprintln!();
+        eprintln!("╔══════════════════════════════════════════════════════════════════════╗");
+        eprintln!("║                    PRODUCTION SECURITY ERROR                         ║");
+        eprintln!("╠══════════════════════════════════════════════════════════════════════╣");
+        eprintln!("║  TLS is required in production mode but is not enabled.              ║");
+        eprintln!("║                                                                      ║");
+        eprintln!("║  To fix this, enable TLS with:                                       ║");
+        eprintln!("║    --tls --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem     ║");
+        eprintln!("║                                                                      ║");
+        eprintln!("║  Or set environment variables:                                       ║");
+        eprintln!("║    AEGIS_TLS_CERT=/path/to/cert.pem                                  ║");
+        eprintln!("║    AEGIS_TLS_KEY=/path/to/key.pem                                    ║");
+        eprintln!("║                                                                      ║");
+        eprintln!("║  To bypass this check (NOT RECOMMENDED), set:                        ║");
+        eprintln!("║    AEGIS_ALLOW_INSECURE=true                                         ║");
+        eprintln!("╚══════════════════════════════════════════════════════════════════════╝");
+        eprintln!();
+        std::process::exit(1);
+    }
+
+    if is_production && allow_insecure && !args.tls {
+        tracing::warn!("╔══════════════════════════════════════════════════════════════════════╗");
+        tracing::warn!("║  WARNING: Running production mode WITHOUT TLS (AEGIS_ALLOW_INSECURE) ║");
+        tracing::warn!("║  This is a security risk! Enable TLS for production deployments.     ║");
+        tracing::warn!("╚══════════════════════════════════════════════════════════════════════╝");
+    }
+
     // Initialize secrets manager (supports Vault or env vars)
     let secrets_manager = secrets::init_secrets_manager().await;
 
@@ -79,13 +136,29 @@ async fn main() {
         .map(|p| p.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
         .unwrap_or_default();
 
+    // Build cluster TLS configuration if enabled
+    let cluster_tls_config = if args.cluster_tls || args.tls {
+        // If cluster_tls is explicitly enabled, or if server TLS is enabled (inherit by default)
+        let enabled = args.cluster_tls || args.tls;
+        Some(ClusterTlsConfig {
+            enabled,
+            ca_cert_path: args.cluster_ca_cert.clone(),
+            client_cert_path: args.cluster_client_cert.clone().or_else(|| args.tls_cert.clone()),
+            client_key_path: args.cluster_client_key.clone().or_else(|| args.tls_key.clone()),
+            danger_accept_invalid_certs: args.cluster_tls_insecure,
+        })
+    } else {
+        None
+    };
+
     // Build server configuration
     let config = ServerConfig::new(&args.host, args.port)
         .with_data_dir(args.data_dir.clone())
         .with_node_id(args.node_id.clone())
         .with_node_name(args.node_name.clone())
         .with_cluster_name(args.cluster.clone())
-        .with_peers(peers.clone());
+        .with_peers(peers.clone())
+        .with_cluster_tls(cluster_tls_config);
 
     let addr: SocketAddr = config.socket_addr();
 
@@ -97,6 +170,22 @@ async fn main() {
 
     if !peers.is_empty() {
         tracing::info!("Cluster mode enabled, peers: {:?}", peers);
+        if config.cluster_tls_enabled() {
+            tracing::info!("Cluster TLS enabled for inter-node communication");
+            if let Some(ref cluster_tls) = config.cluster_tls {
+                if cluster_tls.danger_accept_invalid_certs {
+                    tracing::warn!("Cluster TLS certificate verification DISABLED (insecure)");
+                }
+                if cluster_tls.ca_cert_path.is_some() {
+                    tracing::info!("  Using custom CA certificate for peer verification");
+                }
+                if cluster_tls.client_cert_path.is_some() {
+                    tracing::info!("  mTLS enabled with client certificate");
+                }
+            }
+        } else {
+            tracing::warn!("Cluster TLS disabled - inter-node communication is unencrypted");
+        }
     }
 
     tracing::info!("Starting Aegis Server on {}", addr);
@@ -206,10 +295,6 @@ async fn main() {
         tracing::info!("Aegis Server listening on http://{}", addr);
         tracing::info!("Dashboard API ready at http://{}/api/v1", addr);
 
-        if std::env::var("AEGIS_PRODUCTION").is_ok() {
-            tracing::warn!("Running in production mode without TLS. Consider enabling TLS with --tls");
-        }
-
         axum::serve(listener, app)
             .with_graceful_shutdown(shutdown_signal(state_for_shutdown))
             .await
@@ -217,12 +302,84 @@ async fn main() {
     }
 }
 
+/// Build a reqwest client configured for cluster communication.
+/// Supports TLS with optional CA certificate and client certificates for mTLS.
+fn build_cluster_client(config: &ClusterTlsConfig) -> Result<reqwest::Client, reqwest::Error> {
+    let mut builder = reqwest::Client::builder();
+
+    // Handle certificate verification
+    if config.danger_accept_invalid_certs {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+
+    // Add custom CA certificate if provided
+    if let Some(ref ca_path) = config.ca_cert_path {
+        if let Ok(ca_cert_pem) = std::fs::read(ca_path) {
+            if let Ok(ca_cert) = reqwest::Certificate::from_pem(&ca_cert_pem) {
+                builder = builder.add_root_certificate(ca_cert);
+                tracing::debug!("Added custom CA certificate from {}", ca_path);
+            } else {
+                tracing::warn!("Failed to parse CA certificate from {}", ca_path);
+            }
+        } else {
+            tracing::warn!("Failed to read CA certificate file: {}", ca_path);
+        }
+    }
+
+    // Add client certificate for mTLS if provided
+    if let (Some(ref cert_path), Some(ref key_path)) = (&config.client_cert_path, &config.client_key_path) {
+        if let (Ok(cert_pem), Ok(key_pem)) = (std::fs::read(cert_path), std::fs::read(key_path)) {
+            // Combine cert and key into a single PEM for reqwest Identity
+            let mut combined_pem = cert_pem;
+            combined_pem.extend_from_slice(b"\n");
+            combined_pem.extend_from_slice(&key_pem);
+
+            if let Ok(identity) = reqwest::Identity::from_pem(&combined_pem) {
+                builder = builder.identity(identity);
+                tracing::debug!("Added client certificate for mTLS");
+            } else {
+                tracing::warn!("Failed to parse client certificate/key for mTLS");
+            }
+        } else {
+            tracing::warn!("Failed to read client certificate or key files");
+        }
+    }
+
+    builder.build()
+}
+
+/// Get the URL scheme (http or https) based on cluster TLS configuration.
+fn get_cluster_scheme(config: &aegis_server::ServerConfig) -> &'static str {
+    if config.cluster_tls_enabled() {
+        "https"
+    } else {
+        "http"
+    }
+}
+
 /// Join a peer node in the cluster.
 async fn join_peer(state: &AppState, peer_addr: &str) {
     let self_info = state.admin.get_self_info();
-    let url = format!("http://{}/api/v1/cluster/join", peer_addr);
+    let scheme = get_cluster_scheme(&state.config);
+    let url = format!("{}://{}/api/v1/cluster/join", scheme, peer_addr);
 
-    let client = reqwest::Client::new();
+    // Build the appropriate client based on TLS configuration
+    let client = if let Some(ref cluster_tls) = state.config.cluster_tls {
+        if cluster_tls.enabled {
+            match build_cluster_client(cluster_tls) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to build TLS client for cluster communication: {}", e);
+                    return;
+                }
+            }
+        } else {
+            reqwest::Client::new()
+        }
+    } else {
+        reqwest::Client::new()
+    };
+
     let body = serde_json::json!({
         "node_id": self_info.id,
         "node_name": self_info.name,
@@ -233,7 +390,7 @@ async fn join_peer(state: &AppState, peer_addr: &str) {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(data) = response.json::<serde_json::Value>().await {
-                    tracing::info!("Successfully joined peer at {}", peer_addr);
+                    tracing::info!("Successfully joined peer at {} ({})", peer_addr, scheme);
                     // Register any peers returned by the join response
                     if let Some(peers) = data.get("peers").and_then(|p| p.as_array()) {
                         for peer in peers {
@@ -271,10 +428,27 @@ async fn join_peer(state: &AppState, peer_addr: &str) {
 async fn send_heartbeats(state: &AppState) {
     let self_info = state.admin.get_self_info();
     let peers = state.admin.get_peers();
-    let client = reqwest::Client::new();
+    let scheme = get_cluster_scheme(&state.config);
+
+    // Build the appropriate client based on TLS configuration
+    let client = if let Some(ref cluster_tls) = state.config.cluster_tls {
+        if cluster_tls.enabled {
+            match build_cluster_client(cluster_tls) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to build TLS client for heartbeats: {}", e);
+                    return;
+                }
+            }
+        } else {
+            reqwest::Client::new()
+        }
+    } else {
+        reqwest::Client::new()
+    };
 
     for peer in peers {
-        let url = format!("http://{}/api/v1/cluster/heartbeat", peer.address);
+        let url = format!("{}://{}/api/v1/cluster/heartbeat", scheme, peer.address);
         let body = serde_json::json!({
             "node_id": self_info.id,
             "node_name": self_info.name,

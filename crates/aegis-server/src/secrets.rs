@@ -403,6 +403,12 @@ pub mod keys {
     pub const TLS_CERT_PATH: &str = "AEGIS_TLS_CERT";
     /// TLS private key path
     pub const TLS_KEY_PATH: &str = "AEGIS_TLS_KEY";
+    /// Cluster TLS CA certificate path
+    pub const CLUSTER_CA_CERT_PATH: &str = "AEGIS_CLUSTER_CA_CERT";
+    /// Cluster TLS client certificate path (for mTLS)
+    pub const CLUSTER_CLIENT_CERT_PATH: &str = "AEGIS_CLUSTER_CLIENT_CERT";
+    /// Cluster TLS client key path (for mTLS)
+    pub const CLUSTER_CLIENT_KEY_PATH: &str = "AEGIS_CLUSTER_CLIENT_KEY";
     /// Database encryption key
     pub const ENCRYPTION_KEY: &str = "AEGIS_ENCRYPTION_KEY";
     /// JWT signing secret

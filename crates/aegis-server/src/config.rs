@@ -24,6 +24,8 @@ pub struct ServerConfig {
     /// Allowed CORS origins (empty = same-origin only, "*" = any)
     pub cors_allowed_origins: Vec<String>,
     pub tls: Option<TlsConfig>,
+    /// TLS configuration for cluster (inter-node) communication
+    pub cluster_tls: Option<ClusterTlsConfig>,
     pub data_dir: Option<String>,
     /// Unique node ID
     pub node_id: String,
@@ -50,6 +52,7 @@ impl Default for ServerConfig {
             enable_cors: true,
             cors_allowed_origins: Vec::new(), // Empty = same-origin only (secure default)
             tls: None,
+            cluster_tls: None,
             data_dir: None,
             node_id: generate_node_id(),
             node_name: None,
@@ -145,6 +148,17 @@ impl ServerConfig {
     pub fn address(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
+
+    /// Set cluster TLS configuration.
+    pub fn with_cluster_tls(mut self, cluster_tls: Option<ClusterTlsConfig>) -> Self {
+        self.cluster_tls = cluster_tls;
+        self
+    }
+
+    /// Check if cluster TLS is enabled.
+    pub fn cluster_tls_enabled(&self) -> bool {
+        self.cluster_tls.as_ref().is_some_and(|c| c.enabled)
+    }
 }
 
 // =============================================================================
@@ -156,6 +170,24 @@ impl ServerConfig {
 pub struct TlsConfig {
     pub cert_path: String,
     pub key_path: String,
+}
+
+/// TLS configuration for cluster (inter-node) communication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterTlsConfig {
+    /// Whether cluster TLS is enabled
+    pub enabled: bool,
+    /// Path to CA certificate for verifying peer certificates (PEM format).
+    /// If not provided, system root certificates are used.
+    pub ca_cert_path: Option<String>,
+    /// Path to client certificate for mutual TLS (PEM format).
+    /// Optional - only needed for mTLS.
+    pub client_cert_path: Option<String>,
+    /// Path to client private key for mutual TLS (PEM format).
+    /// Optional - only needed for mTLS.
+    pub client_key_path: Option<String>,
+    /// Whether to skip certificate verification (INSECURE - only for testing).
+    pub danger_accept_invalid_certs: bool,
 }
 
 // =============================================================================
@@ -179,5 +211,30 @@ mod tests {
         let config = ServerConfig::new("0.0.0.0", 8080);
         let addr = config.socket_addr();
         assert_eq!(addr.port(), 8080);
+    }
+
+    #[test]
+    fn test_cluster_tls_config() {
+        let config = ServerConfig::default();
+        assert!(!config.cluster_tls_enabled());
+
+        let config_with_tls = config.with_cluster_tls(Some(ClusterTlsConfig {
+            enabled: true,
+            ca_cert_path: Some("/path/to/ca.pem".to_string()),
+            client_cert_path: Some("/path/to/cert.pem".to_string()),
+            client_key_path: Some("/path/to/key.pem".to_string()),
+            danger_accept_invalid_certs: false,
+        }));
+        assert!(config_with_tls.cluster_tls_enabled());
+
+        // Disabled TLS config should return false
+        let config_disabled = ServerConfig::default().with_cluster_tls(Some(ClusterTlsConfig {
+            enabled: false,
+            ca_cert_path: None,
+            client_cert_path: None,
+            client_key_path: None,
+            danger_accept_invalid_certs: false,
+        }));
+        assert!(!config_disabled.cluster_tls_enabled());
     }
 }
