@@ -27,19 +27,34 @@ use axum::http::{header, Method};
 
 /// Create the main application router.
 pub fn create_router(state: AppState) -> Router {
+    // Check for CORS origins from environment variable
+    let env_cors_origins: Vec<String> = std::env::var("AEGIS_CORS_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.trim().to_string())
+        .collect();
+
+    let cors_origins = if !env_cors_origins.is_empty() {
+        env_cors_origins
+    } else {
+        state.config.cors_allowed_origins.clone()
+    };
+
     // Configure CORS based on allowed origins
-    let cors = if state.config.cors_allowed_origins.is_empty() {
-        // No origins configured = restrictive (only same-origin requests)
+    let cors = if cors_origins.is_empty() {
+        // No origins configured = allow common local development origins
         CorsLayer::new()
-            .allow_origin(AllowOrigin::exact(
-                format!("http://{}:{}", state.config.host, state.config.port)
-                    .parse()
-                    .unwrap_or_else(|_| "http://localhost:3000".parse().expect("default CORS origin should be valid"))
-            ))
+            .allow_origin(AllowOrigin::list([
+                format!("http://{}:{}", state.config.host, state.config.port).parse().unwrap(),
+                "http://localhost:8000".parse().unwrap(),
+                "http://127.0.0.1:8000".parse().unwrap(),
+                "http://localhost:3000".parse().unwrap(),
+            ]))
             .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
             .allow_credentials(true)
-    } else if state.config.cors_allowed_origins.iter().any(|o| o == "*") {
+    } else if cors_origins.iter().any(|o| o == "*") {
         // Wildcard = allow any origin (not recommended for production)
         tracing::warn!("CORS configured to allow any origin - not recommended for production");
         CorsLayer::new()
@@ -48,7 +63,7 @@ pub fn create_router(state: AppState) -> Router {
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
     } else {
         // Specific origins configured
-        let origins: Vec<_> = state.config.cors_allowed_origins.iter()
+        let origins: Vec<_> = cors_origins.iter()
             .filter_map(|o| o.parse().ok())
             .collect();
         CorsLayer::new()

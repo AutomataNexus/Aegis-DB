@@ -64,10 +64,28 @@ pub struct AegisClient {
 
 impl AegisClient {
     /// Create a new client with the default base URL (same-origin or configured).
+    /// Automatically loads token from localStorage if present.
     pub fn new() -> Self {
+        // Try to get token from localStorage
+        let token = if let Some(win) = window() {
+            win.local_storage()
+                .ok()
+                .flatten()
+                .and_then(|storage| storage.get_item("aegis_token").ok().flatten())
+                .or_else(|| {
+                    // Fallback to sessionStorage
+                    win.session_storage()
+                        .ok()
+                        .flatten()
+                        .and_then(|storage| storage.get_item("aegis_token").ok().flatten())
+                })
+        } else {
+            None
+        };
+
         Self {
             base_url: get_api_base_url(),
-            token: None,
+            token,
         }
     }
 
