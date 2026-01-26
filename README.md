@@ -9,7 +9,7 @@
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status">
   <img src="https://img.shields.io/badge/tests-497%20passing-brightgreen.svg" alt="Tests">
-  <img src="https://img.shields.io/badge/version-0.1.8-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.2.1-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg" alt="Platform">
 </p>
 
@@ -18,6 +18,7 @@ A unified, multi-paradigm database platform built in Rust. Combines relational, 
 ## Highlights
 
 - **Multi-Paradigm**: SQL, Time Series, Document, Graph, and Streaming in one platform
+- **Multi-Database**: Isolated databases per application with automatic provisioning
 - **Distributed**: Raft consensus, sharding, and multi-region replication
 - **High Performance**: Vectorized execution, Gorilla compression, zero-copy serialization
 - **Production Ready**: RBAC, audit logging, TLS, OAuth2/LDAP authentication
@@ -30,6 +31,21 @@ A unified, multi-paradigm database platform built in Rust. Combines relational, 
 - **Time Series** - Gorilla compression, aggregations, retention policies
 - **Document Store** - JSON storage, full-text search, schema validation
 - **Real-time Streaming** - Pub/sub, CDC, event sourcing
+
+### Multi-Database Support
+- **Isolated databases**: Each application gets its own database namespace
+- **Auto-provisioning**: Databases created automatically on first query
+- **Separate persistence**: Each database stored in its own file
+- **Multi-tenant ready**: Run multiple apps on the same Aegis instance
+
+```bash
+# Query with database context
+POST /api/v1/query
+{
+    "database": "my_app",
+    "sql": "CREATE TABLE users (id INT, name TEXT)"
+}
+```
 
 ### Distributed Systems
 - Raft consensus for leader election and replication
