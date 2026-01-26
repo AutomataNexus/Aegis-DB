@@ -8,8 +8,8 @@
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status">
-  <img src="https://img.shields.io/badge/tests-463%20passing-brightgreen.svg" alt="Tests">
-  <img src="https://img.shields.io/badge/version-0.1.7-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/tests-497%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/version-0.1.8-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg" alt="Platform">
 </p>
 
@@ -53,6 +53,10 @@ A unified, multi-paradigm database platform built in Rust. Combines relational, 
 - Real-time activity feed
 
 ### Enterprise Security
+- **TLS/HTTPS**: Native TLS support with certificate-based encryption
+- **Secrets Management**: HashiCorp Vault integration for enterprise secrets
+- **Password Security**: Argon2id password hashing with secure random salts
+- **Rate Limiting**: Token bucket rate limiting to prevent brute force attacks
 - LDAP/Active Directory integration
 - OAuth2/OIDC authentication
 - Role-based access control (RBAC) with 25+ permissions
@@ -151,6 +155,15 @@ aegis logs server                    # Follow server logs
 aegis logs dashboard                 # Follow dashboard logs
 ```
 
+**TLS/HTTPS Mode:**
+```bash
+# Generate certificates (for development)
+openssl req -x509 -newkey rsa:4096 -keyout certs/server.key -out certs/server.crt -days 365 -nodes
+
+# Start server with TLS
+cargo run -p aegis-server -- --tls --tls-cert certs/server.crt --tls-key certs/server.key
+```
+
 ### Access
 
 After running `aegis start`:
@@ -160,8 +173,25 @@ After running `aegis start`:
 | Dashboard | http://localhost:8000      |
 | API       | http://localhost:9090      |
 | Health    | http://localhost:9090/health |
+| HTTPS API | https://localhost:9443 (with nginx) |
 
 **Default Login:** `demo` / `demo`
+
+### Security Configuration
+
+**Environment Variables:**
+```bash
+# TLS Configuration
+export AEGIS_TLS_CERT=/path/to/server.crt
+export AEGIS_TLS_KEY=/path/to/server.key
+
+# HashiCorp Vault (optional, for enterprise)
+export VAULT_ADDR=https://vault.example.com:8200
+export VAULT_TOKEN=hvs.your-token
+# Or use AppRole authentication:
+export VAULT_ROLE_ID=your-role-id
+export VAULT_SECRET_ID=your-secret-id
+```
 
 ### Uninstall
 
@@ -203,6 +233,9 @@ Copyright 2024-2026 AutomataNexus Development Team
 ## Documentation
 
 - [Architecture](Aegis_Architecture.md) - Technical design and system overview
+- [Security Guide](docs/SECURITY.md) - TLS, Vault, authentication, and security best practices
+- [User Guide](docs/USER_GUIDE.md) - Installation, configuration, and usage
+- [Developer Guide](docs/DEVELOPER_GUIDE.md) - Contributing and development
 - [AegisQL Reference](docs/AegisQL.md) - Complete query language documentation
 - [Commercial Licensing](COMMERCIAL.md) - Enterprise features and pricing
 - [API Documentation](docs/) - REST API and SDK references
