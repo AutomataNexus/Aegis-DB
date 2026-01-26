@@ -483,6 +483,53 @@ aegis-client -s http://localhost:9091 query "SELECT 1"
 | `axonml` | 7001 | AxonML node |
 | `nexusscribe` | 9091 | NexusScribe node |
 
+### Multi-Database Support
+
+AegisDB supports multiple isolated databases on a single server instance. Each database has its own tables, completely isolated from others.
+
+**Creating and Using Databases:**
+
+Databases are created automatically on first use - no explicit CREATE DATABASE needed.
+
+```bash
+# Via CLI - specify database with connection string
+aegis-client -d aegis://localhost:9090/myapp query "CREATE TABLE users (id INT, name TEXT)"
+
+# Via API - include database in request body
+curl -X POST http://localhost:9090/api/v1/query \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "database": "myapp",
+    "sql": "CREATE TABLE users (id INT, name TEXT)"
+  }'
+```
+
+**Multi-Tenant Usage:**
+
+Each application can have its own isolated database:
+
+```bash
+# NexusScribe uses its own database
+curl -X POST http://localhost:9090/api/v1/query \
+  -d '{"database": "nexusscribe", "sql": "CREATE TABLE notes (id INT, content TEXT)"}'
+
+# AxonML uses a separate database
+curl -X POST http://localhost:9090/api/v1/query \
+  -d '{"database": "axonml", "sql": "CREATE TABLE models (id INT, name TEXT)"}'
+```
+
+**Database Persistence:**
+
+Each database is persisted to its own file in `data/databases/`:
+```
+data/databases/
+├── default.json      # Default database
+├── nexusscribe.json  # NexusScribe database
+├── axonml.json       # AxonML database
+└── myapp.json        # Your app's database
+```
+
 ### Interactive Shell
 
 ```bash
