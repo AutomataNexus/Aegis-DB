@@ -256,9 +256,9 @@ trunk build --release
 - Commercial "Database Service" offerings require a license
 - Converts to Apache-2.0 on January 26, 2030
 
-See [LICENSE.md](LICENSE.md) for details. For commercial licensing: sales@automatanexus.com
+See [LICENSE.md](LICENSE.md) for details. For commercial licensing: Devops@automatanexus.com
 
-Copyright 2024-2026 AutomataNexus Development Team
+Copyright 2024-2026 Andrew Jewell Sr / AutomataNexus LLC
 
 ## Documentation
 

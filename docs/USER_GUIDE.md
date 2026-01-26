@@ -2042,11 +2042,11 @@ A: Passwords are hashed using Argon2id, the winner of the Password Hashing Compe
 - **GitHub Issues**: https://github.com/automatanexus/aegis-db/issues
 - **Discord**: Join our community chat
 - **Stack Overflow**: Tag questions with `aegis-db`
-- **Email**: support@aegisdb.io
+- **Email**: Devops@automatanexus.com
 
 ---
 
 <p align="center">
   <strong>AegisDB - The Multi-Paradigm Database Platform</strong><br>
-  Copyright 2024-2026 AutomataNexus Development Team
+  Copyright 2024-2026 Andrew Jewell Sr / AutomataNexus LLC
 </p>
