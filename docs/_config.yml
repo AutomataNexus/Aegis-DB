@@ -1,0 +1,8 @@
+title: Aegis-DB Documentation
+description: The multi-paradigm database built for regulated industries
+theme: jekyll-theme-cayman
+markdown: GFM
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
