@@ -199,11 +199,19 @@ export VAULT_TOKEN=hvs.your-token
 
 ## Authentication
 
+### Configuring Credentials
+
+Set credentials via environment variables before starting the server:
+```bash
+export AEGIS_ADMIN_USERNAME=your_admin_username
+export AEGIS_ADMIN_PASSWORD=your_secure_password
+```
+
 ### Local Authentication
 ```bash
 curl -X POST http://localhost:9090/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "demo", "password": "demo"}'
+  -d '{"username": "$AEGIS_ADMIN_USERNAME", "password": "$AEGIS_ADMIN_PASSWORD"}'
 ```
 
 ### Using the Token

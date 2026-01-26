@@ -111,6 +111,10 @@ pub enum AegisError {
     #[error("serialization error: {0}")]
     Serialization(String),
 
+    // Encryption errors
+    #[error("encryption error: {0}")]
+    Encryption(String),
+
     // Configuration errors
     #[error("configuration error: {0}")]
     Configuration(String),

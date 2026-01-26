@@ -6,6 +6,7 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
+use crate::backup;
 use crate::handlers;
 use crate::middleware;
 use crate::state::AppState;
@@ -88,6 +89,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/roles/:name", delete(handlers::delete_role))
         // Metrics timeseries
         .route("/metrics/timeseries", post(handlers::get_metrics_timeseries))
+        // Backup management
+        .route("/backup", post(backup::create_backup))
+        .route("/backups", get(backup::list_backups))
+        .route("/restore", post(backup::restore_backup))
+        .route("/backup/:id", delete(backup::delete_backup))
         // Apply authentication middleware to all admin routes
         .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
 
@@ -171,6 +177,7 @@ pub fn create_router(state: AppState) -> Router {
         .fallback(handlers::not_found)
         .layer(TraceLayer::new_for_http())
         .layer(cors)
+        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::security_headers))
         .layer(axum::middleware::from_fn(middleware::request_id))
         .with_state(state)
 }

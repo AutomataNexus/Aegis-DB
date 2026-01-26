@@ -55,8 +55,24 @@ pub struct AppState {
 impl AppState {
     /// Create new application state with the given configuration.
     pub fn new(config: ServerConfig) -> Self {
-        let activity = Arc::new(ActivityLogger::new());
         let data_dir = config.data_dir.as_ref().map(PathBuf::from);
+
+        // Create activity logger with persistence if data directory is configured
+        let activity = if let Some(ref dir) = data_dir {
+            let audit_dir = dir.join("audit_logs");
+            match ActivityLogger::with_persistence(audit_dir.clone()) {
+                Ok(logger) => {
+                    tracing::info!("Audit logging enabled with persistence to {:?}", audit_dir);
+                    Arc::new(logger)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to initialize persistent audit logging: {}. Falling back to in-memory only.", e);
+                    Arc::new(ActivityLogger::new())
+                }
+            }
+        } else {
+            Arc::new(ActivityLogger::new())
+        };
 
         // Create data directory if specified
         if let Some(ref dir) = data_dir {
@@ -202,6 +218,12 @@ impl AppState {
         // Save SQL tables (query engine handles its own persistence path)
         self.query_engine.flush();
         tracing::debug!("Flushed SQL tables to disk");
+
+        // Flush audit logs
+        if let Err(e) = self.activity.flush() {
+            tracing::error!("Failed to flush audit logs: {}", e);
+        }
+        tracing::debug!("Flushed audit logs to disk");
 
         Ok(())
     }
