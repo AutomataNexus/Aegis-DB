@@ -67,7 +67,9 @@ fn uuid() -> String {
 /// A document value that can be any JSON-compatible type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[derive(Default)]
 pub enum Value {
+    #[default]
     Null,
     Bool(bool),
     Int(i64),
@@ -214,11 +216,6 @@ impl Value {
     }
 }
 
-impl Default for Value {
-    fn default() -> Self {
-        Self::Null
-    }
-}
 
 impl From<bool> for Value {
     fn from(b: bool) -> Self {

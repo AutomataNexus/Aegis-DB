@@ -103,7 +103,7 @@ impl Connection {
                     .map_err(|e| ClientError::AuthenticationFailed(e.to_string()))?;
 
                 if let Some(token) = auth_response.get("token").and_then(|t| t.as_str()) {
-                    *self.auth_token.write().unwrap() = Some(token.to_string());
+                    *self.auth_token.write().expect("auth_token RwLock poisoned") = Some(token.to_string());
                 }
             } else {
                 return Err(ClientError::AuthenticationFailed(
@@ -133,17 +133,17 @@ impl Connection {
 
     /// Get idle time.
     pub fn idle_time(&self) -> std::time::Duration {
-        self.last_used.read().unwrap().elapsed()
+        self.last_used.read().expect("last_used RwLock poisoned").elapsed()
     }
 
     /// Mark as used.
     fn mark_used(&self) {
-        *self.last_used.write().unwrap() = Instant::now();
+        *self.last_used.write().expect("last_used RwLock poisoned") = Instant::now();
     }
 
     /// Add auth header to request if we have a token.
     fn add_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(ref token) = *self.auth_token.read().unwrap() {
+        if let Some(ref token) = *self.auth_token.read().expect("auth_token RwLock poisoned") {
             request.header("Authorization", format!("Bearer {}", token))
         } else {
             request
@@ -346,8 +346,9 @@ impl Connection {
 
     /// Close the connection.
     pub async fn close(&self) {
-        // Logout if we have an auth token
-        if let Some(ref token) = *self.auth_token.read().unwrap() {
+        // Clone token before await to avoid holding lock across await point
+        let token = self.auth_token.read().expect("auth_token RwLock poisoned").clone();
+        if let Some(ref token) = token {
             let logout_url = format!("{}/api/v1/auth/logout", self.base_url);
             let body = serde_json::json!({ "token": token });
             let _ = self.http_client.post(&logout_url).json(&body).send().await;

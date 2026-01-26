@@ -245,7 +245,7 @@ impl ExecutionContext {
 
                 // Evaluate default expression if provided
                 let default = col.default.as_ref()
-                    .map(|expr| evaluate_default_expression(expr))
+                    .map(evaluate_default_expression)
                     .transpose()?;
 
                 schema.columns.push(ColumnSchema {
@@ -303,7 +303,7 @@ impl ExecutionContext {
                 // Handle set_default: None = no change, Some(None) = drop default, Some(Some(expr)) = set new default
                 if let Some(new_default) = set_default {
                     col.default = new_default.as_ref()
-                        .map(|expr| evaluate_default_expression(expr))
+                        .map(evaluate_default_expression)
                         .transpose()?;
                 }
             }
@@ -450,7 +450,8 @@ impl ExecutionContext {
         let table_guard = table_data.read()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
 
-        let index_manager = self.table_indexes.get(&table).unwrap();
+        let index_manager = self.table_indexes.get(&table)
+            .expect("index_manager was just inserted for this table");
         for (row_id, row) in table_guard.rows.iter().enumerate() {
             let column_values: HashMap<String, Value> = table_guard.columns.iter()
                 .zip(row.values.iter())
@@ -605,7 +606,8 @@ impl ExecutionContext {
         let table_guard = table_data.read()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
 
-        let index_manager = self.table_indexes.get(table).unwrap();
+        let index_manager = self.table_indexes.get(table)
+            .expect("index_manager was just inserted for this table");
         for (row_id, row) in table_guard.rows.iter().enumerate() {
             let column_values: HashMap<String, Value> = table_guard.columns.iter()
                 .zip(row.values.iter())
@@ -931,7 +933,7 @@ impl Executor {
     fn execute_create_table(&self, node: &CreateTableNode) -> ExecutorResult<QueryResult> {
         let columns: Vec<ColumnSchema> = node.columns.iter().map(|col| {
             let default = col.default.as_ref()
-                .map(|expr| evaluate_default_expression(expr))
+                .map(evaluate_default_expression)
                 .transpose()?;
             Ok(ColumnSchema {
                 name: col.name.clone(),
@@ -1315,7 +1317,8 @@ impl Operator for ScanOperator {
             self.cached_rows = Some(table_data.rows.clone());
         }
 
-        let rows = self.cached_rows.as_ref().unwrap();
+        // Safe to use expect: we just set cached_rows to Some above if it was None
+        let rows = self.cached_rows.as_ref().expect("cached_rows was just set to Some");
 
         if self.position >= rows.len() {
             return Ok(None);
@@ -1413,12 +1416,8 @@ impl<'a> ProjectOperator<'a> {
                     // Expand to all input columns (optionally filtered by table)
                     for input_col in &input_columns {
                         // For table-qualified wildcards (table.*), filter by table prefix
-                        if let Some(tbl) = table {
-                            // Only include columns that match the table (simplified: check prefix)
-                            if !input_col.starts_with(&format!("{}.", tbl)) && input_col != input_col {
-                                // For now, include all since we don't have table prefixes in column names
-                            }
-                        }
+                        // TODO: When table prefixes are added to column names, filter here
+                        let _ = table; // Acknowledge unused variable for future implementation
                         expanded_expressions.push(crate::planner::ProjectionExpr {
                             expr: PlanExpression::Column {
                                 table: None,
@@ -1579,7 +1578,8 @@ impl<'a> JoinOperator<'a> {
 impl<'a> Operator for JoinOperator<'a> {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
         self.materialize_right()?;
-        let right_data = self.right_data.as_ref().unwrap();
+        // Safe to use expect: materialize_right() sets right_data to Some
+        let right_data = self.right_data.as_ref().expect("right_data was set by materialize_right");
 
         let mut result_rows = Vec::new();
 
@@ -1594,7 +1594,8 @@ impl<'a> Operator for JoinOperator<'a> {
                 }
             }
 
-            let left_batch = self.left_batch.as_ref().unwrap();
+            // Safe to use expect: we checked left_batch.is_some() above
+            let left_batch = self.left_batch.as_ref().expect("left_batch verified to be Some");
 
             while self.left_row_idx < left_batch.rows.len() {
                 let left_row = &left_batch.rows[self.left_row_idx];
@@ -1756,12 +1757,14 @@ impl Accumulator {
                 self.sum += value_to_f64(value)?;
             }
             AggregateFunction::Min => {
-                if self.min.is_none() || compare_values(value, self.min.as_ref().unwrap())? == std::cmp::Ordering::Less {
+                // Safe to use expect: we check is_none() first, so in the || branch it's Some
+                if self.min.is_none() || compare_values(value, self.min.as_ref().expect("min verified to be Some in || branch"))? == std::cmp::Ordering::Less {
                     self.min = Some(value.clone());
                 }
             }
             AggregateFunction::Max => {
-                if self.max.is_none() || compare_values(value, self.max.as_ref().unwrap())? == std::cmp::Ordering::Greater {
+                // Safe to use expect: we check is_none() first, so in the || branch it's Some
+                if self.max.is_none() || compare_values(value, self.max.as_ref().expect("max verified to be Some in || branch"))? == std::cmp::Ordering::Greater {
                     self.max = Some(value.clone());
                 }
             }
@@ -1844,7 +1847,8 @@ impl<'a> Operator for SortOperator<'a> {
             self.sorted_data = Some(all_rows);
         }
 
-        let data = self.sorted_data.as_ref().unwrap();
+        // Safe to use expect: sorted_data was just set to Some above if it was None
+        let data = self.sorted_data.as_ref().expect("sorted_data was just set to Some");
 
         if self.position >= data.len() {
             return Ok(None);
@@ -2161,7 +2165,7 @@ fn substitute_expr(expr: &PlanExpression, params: &[Value]) -> ExecutorResult<Pl
             // Parameters are 1-indexed ($1, $2, etc.)
             let param_idx = *idx - 1;
             params.get(param_idx)
-                .map(|v| value_to_literal(v))
+                .map(value_to_literal)
                 .ok_or_else(|| ExecutorError::Internal(format!(
                     "Missing parameter ${}: expected {} parameters but got {}",
                     idx, idx, params.len()
@@ -2169,14 +2173,14 @@ fn substitute_expr(expr: &PlanExpression, params: &[Value]) -> ExecutorResult<Pl
         }
         PlanExpression::BinaryOp { op, left, right } => {
             Ok(PlanExpression::BinaryOp {
-                op: op.clone(),
+                op: *op,
                 left: Box::new(substitute_expr(left, params)?),
                 right: Box::new(substitute_expr(right, params)?),
             })
         }
         PlanExpression::UnaryOp { op, expr: inner } => {
             Ok(PlanExpression::UnaryOp {
-                op: op.clone(),
+                op: *op,
                 expr: Box::new(substitute_expr(inner, params)?),
             })
         }

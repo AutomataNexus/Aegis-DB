@@ -66,7 +66,7 @@ impl Collection {
         let id = doc.id.clone();
 
         {
-            let mut docs = self.documents.write().unwrap();
+            let mut docs = self.documents.write().expect("documents RwLock poisoned");
             if docs.contains_key(&id) {
                 return Err(CollectionError::DuplicateId(id));
             }
@@ -92,7 +92,7 @@ impl Collection {
 
     /// Get a document by ID.
     pub fn get(&self, id: &DocumentId) -> Option<Document> {
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         docs.get(id).cloned()
     }
 
@@ -106,7 +106,7 @@ impl Collection {
         }
 
         {
-            let mut docs = self.documents.write().unwrap();
+            let mut docs = self.documents.write().expect("documents RwLock poisoned");
             if !docs.contains_key(id) {
                 return Err(CollectionError::NotFound(id.clone()));
             }
@@ -125,7 +125,7 @@ impl Collection {
 
     /// Delete a document.
     pub fn delete(&self, id: &DocumentId) -> Result<Document, CollectionError> {
-        let mut docs = self.documents.write().unwrap();
+        let mut docs = self.documents.write().expect("documents RwLock poisoned");
 
         match docs.remove(id) {
             Some(doc) => {
@@ -138,34 +138,34 @@ impl Collection {
 
     /// Check if a document exists.
     pub fn contains(&self, id: &DocumentId) -> bool {
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         docs.contains_key(id)
     }
 
     /// Get the number of documents.
     pub fn count(&self) -> usize {
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         docs.len()
     }
 
     /// Get all document IDs.
     pub fn ids(&self) -> Vec<DocumentId> {
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         docs.keys().cloned().collect()
     }
 
     /// Get all documents.
     pub fn all(&self) -> Vec<Document> {
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         docs.values().cloned().collect()
     }
 
     /// Clear all documents.
     pub fn clear(&self) {
-        let mut docs = self.documents.write().unwrap();
+        let mut docs = self.documents.write().expect("documents RwLock poisoned");
         docs.clear();
 
-        let mut indexes = self.indexes.write().unwrap();
+        let mut indexes = self.indexes.write().expect("indexes RwLock poisoned");
         for index in indexes.iter_mut() {
             index.clear();
         }
@@ -177,7 +177,7 @@ impl Collection {
 
     /// Find documents matching a query.
     pub fn find(&self, query: &Query) -> QueryResult {
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         let start = std::time::Instant::now();
 
         let matching: Vec<Document> = docs
@@ -196,13 +196,13 @@ impl Collection {
 
     /// Find one document matching a query.
     pub fn find_one(&self, query: &Query) -> Option<Document> {
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         docs.values().find(|doc| query.matches(doc)).cloned()
     }
 
     /// Count documents matching a query.
     pub fn count_matching(&self, query: &Query) -> usize {
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         docs.values().filter(|doc| query.matches(doc)).count()
     }
 
@@ -215,36 +215,36 @@ impl Collection {
         let field = field.into();
         let mut index = DocumentIndex::new(field.clone(), index_type);
 
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         for doc in docs.values() {
             index.index_document(doc);
         }
 
-        let mut indexes = self.indexes.write().unwrap();
+        let mut indexes = self.indexes.write().expect("indexes RwLock poisoned");
         indexes.push(index);
     }
 
     /// Drop an index.
     pub fn drop_index(&self, field: &str) {
-        let mut indexes = self.indexes.write().unwrap();
+        let mut indexes = self.indexes.write().expect("indexes RwLock poisoned");
         indexes.retain(|idx| idx.field() != field);
     }
 
     /// Get all index names.
     pub fn index_names(&self) -> Vec<String> {
-        let indexes = self.indexes.read().unwrap();
+        let indexes = self.indexes.read().expect("indexes RwLock poisoned");
         indexes.iter().map(|idx| idx.field().to_string()).collect()
     }
 
     fn index_document(&self, doc: &Document) {
-        let mut indexes = self.indexes.write().unwrap();
+        let mut indexes = self.indexes.write().expect("indexes RwLock poisoned");
         for index in indexes.iter_mut() {
             index.index_document(doc);
         }
     }
 
     fn unindex_document(&self, doc: &Document) {
-        let mut indexes = self.indexes.write().unwrap();
+        let mut indexes = self.indexes.write().expect("indexes RwLock poisoned");
         for index in indexes.iter_mut() {
             index.unindex_document(doc);
         }
@@ -270,7 +270,7 @@ impl Collection {
             return Vec::new();
         };
 
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("documents RwLock poisoned");
         docs.iter()
             .map(|(id, doc)| (id.clone(), schema.validate(doc)))
             .filter(|(_, result)| !result.is_valid)

@@ -279,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_commit() {
         if let Some(tx) = try_create_transaction().await {
-            tx.commit().await.unwrap();
+            tx.commit().await.expect("Transaction commit should succeed");
         } else {
             eprintln!("Skipping test, server not available");
         }
@@ -288,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_rollback() {
         if let Some(tx) = try_create_transaction().await {
-            tx.rollback().await.unwrap();
+            tx.rollback().await.expect("Transaction rollback should succeed");
         } else {
             eprintln!("Skipping test, server not available");
         }

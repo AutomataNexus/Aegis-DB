@@ -17,6 +17,7 @@ use sysinfo::{Disks, System};
 
 /// Health status of a component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum HealthStatus {
     /// Component is healthy.
     Healthy,
@@ -25,6 +26,7 @@ pub enum HealthStatus {
     /// Component is unhealthy.
     Unhealthy,
     /// Component status is unknown.
+    #[default]
     Unknown,
 }
 
@@ -50,11 +52,6 @@ impl HealthStatus {
     }
 }
 
-impl Default for HealthStatus {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
 
 // =============================================================================
 // Health Check Result
@@ -429,12 +426,12 @@ impl HealthChecker {
 
     /// Add a health check.
     pub fn add_check(&self, check: Arc<dyn HealthCheck>) {
-        self.checks.write().unwrap().push(check);
+        self.checks.write().expect("HealthChecker checks RwLock poisoned").push(check);
     }
 
     /// Run all health checks.
     pub fn run_checks(&self) -> Vec<HealthCheckResult> {
-        let checks = self.checks.read().unwrap();
+        let checks = self.checks.read().expect("HealthChecker checks RwLock poisoned");
         let mut results = Vec::with_capacity(checks.len());
 
         for check in checks.iter() {
@@ -444,18 +441,18 @@ impl HealthChecker {
             results.push(result.clone());
             self.results
                 .write()
-                .unwrap()
+                .expect("HealthChecker results RwLock poisoned")
                 .insert(check.name().to_string(), result);
         }
 
-        *self.last_run.write().unwrap() = Some(Instant::now());
+        *self.last_run.write().expect("HealthChecker last_run RwLock poisoned") = Some(Instant::now());
         results
     }
 
     /// Get the overall health status.
     pub fn overall_status(&self) -> HealthStatus {
-        let results = self.results.read().unwrap();
-        let checks = self.checks.read().unwrap();
+        let results = self.results.read().expect("HealthChecker results RwLock poisoned");
+        let checks = self.checks.read().expect("HealthChecker checks RwLock poisoned");
 
         let mut status = HealthStatus::Healthy;
 
@@ -480,12 +477,12 @@ impl HealthChecker {
 
     /// Get results for a specific check.
     pub fn get_result(&self, name: &str) -> Option<HealthCheckResult> {
-        self.results.read().unwrap().get(name).cloned()
+        self.results.read().expect("HealthChecker results RwLock poisoned").get(name).cloned()
     }
 
     /// Get all results.
     pub fn get_all_results(&self) -> HashMap<String, HealthCheckResult> {
-        self.results.read().unwrap().clone()
+        self.results.read().expect("HealthChecker results RwLock poisoned").clone()
     }
 
     /// Get the comprehensive health report.
@@ -560,17 +557,17 @@ impl ProbeChecker {
 
     /// Add a liveness check.
     pub fn add_liveness_check(&self, check: Arc<dyn HealthCheck>) {
-        self.liveness_checks.write().unwrap().push(check);
+        self.liveness_checks.write().expect("ProbeChecker liveness_checks RwLock poisoned").push(check);
     }
 
     /// Add a readiness check.
     pub fn add_readiness_check(&self, check: Arc<dyn HealthCheck>) {
-        self.readiness_checks.write().unwrap().push(check);
+        self.readiness_checks.write().expect("ProbeChecker readiness_checks RwLock poisoned").push(check);
     }
 
     /// Check liveness.
     pub fn check_liveness(&self) -> bool {
-        let checks = self.liveness_checks.read().unwrap();
+        let checks = self.liveness_checks.read().expect("ProbeChecker liveness_checks RwLock poisoned");
         for check in checks.iter() {
             let result = check.check();
             if result.status == HealthStatus::Unhealthy {
@@ -582,7 +579,7 @@ impl ProbeChecker {
 
     /// Check readiness.
     pub fn check_readiness(&self) -> bool {
-        let checks = self.readiness_checks.read().unwrap();
+        let checks = self.readiness_checks.read().expect("ProbeChecker readiness_checks RwLock poisoned");
         for check in checks.iter() {
             let result = check.check();
             if !result.status.is_operational() {

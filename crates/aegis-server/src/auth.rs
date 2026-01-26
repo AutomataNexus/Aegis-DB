@@ -385,7 +385,7 @@ impl AuthService {
             }
         }
         let users = self.users.read();
-        let user = users.get(username).unwrap();
+        let user = users.get(username).expect("user should exist after successful credential check");
 
         if user.mfa_enabled {
             // Create pending MFA session
@@ -731,7 +731,7 @@ fn verify_totp(code: &str, secret: &str) -> bool {
         Ok(bytes) => bytes,
         Err(_) => {
             // Try with padding variations
-            let padded = format!("{}{}", secret.to_uppercase(), "========"[..((8 - secret.len() % 8) % 8)].to_string());
+            let padded = format!("{}{}", secret.to_uppercase(), &"========"[..((8 - secret.len() % 8) % 8)]);
             match data_encoding::BASE32.decode(padded.as_bytes()) {
                 Ok(bytes) => bytes,
                 Err(_) => return false,
@@ -1019,7 +1019,7 @@ impl RbacManager {
         let mut user_roles = self.user_roles.write();
         user_roles
             .entry(user_id.to_string())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(role_name.to_string());
         Ok(())
     }
@@ -1807,14 +1807,14 @@ mod tests {
     /// Helper to create an auth service with a test user
     fn auth_with_test_user() -> AuthService {
         let auth = AuthService::new();
-        auth.create_user("testuser", "test@example.com", "TestPassword123!", "viewer").unwrap();
+        auth.create_user("testuser", "test@example.com", "TestPassword123!", "viewer").expect("failed to create test user");
         auth
     }
 
     /// Helper to create an auth service with an admin user (MFA enabled)
     fn auth_with_admin_user() -> (AuthService, String) {
         let auth = AuthService::new();
-        auth.create_user("testadmin", "admin@example.com", "AdminPassword123!", "admin").unwrap();
+        auth.create_user("testadmin", "admin@example.com", "AdminPassword123!", "admin").expect("failed to create admin user");
 
         // Enable MFA and get the secret
         let secret = generate_mfa_secret();
@@ -1856,7 +1856,7 @@ mod tests {
     fn test_mfa_verification() {
         let (auth, secret) = auth_with_admin_user();
         let login_response = auth.login("testadmin", "AdminPassword123!");
-        let temp_token = login_response.token.unwrap();
+        let temp_token = login_response.token.expect("login should return temp token for MFA");
 
         // Generate a valid TOTP code using the user's secret
         let totp_code = generate_test_totp(&secret);
@@ -1875,17 +1875,17 @@ mod tests {
         let secret_bytes = BASE32_NOPAD.decode(secret.to_uppercase().as_bytes())
             .unwrap_or_else(|_| {
                 let padded = format!("{}{}", secret.to_uppercase(), &"========"[..((8 - secret.len() % 8) % 8)]);
-                data_encoding::BASE32.decode(padded.as_bytes()).unwrap()
+                data_encoding::BASE32.decode(padded.as_bytes()).expect("padded BASE32 decode should succeed")
             });
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time should be after UNIX_EPOCH")
             .as_secs();
         let time_step = timestamp / 30;
         let counter_bytes = time_step.to_be_bytes();
 
-        let mut mac = Hmac::<Sha1>::new_from_slice(&secret_bytes).unwrap();
+        let mut mac = Hmac::<Sha1>::new_from_slice(&secret_bytes).expect("HMAC key should be valid");
         mac.update(&counter_bytes);
         let result = mac.finalize().into_bytes();
 
@@ -1903,18 +1903,18 @@ mod tests {
     fn test_session_validation() {
         let auth = auth_with_test_user();
         let response = auth.login("testuser", "TestPassword123!");
-        let token = response.token.unwrap();
+        let token = response.token.expect("login should return token");
 
         let user = auth.validate_session(&token);
         assert!(user.is_some());
-        assert_eq!(user.unwrap().username, "testuser");
+        assert_eq!(user.expect("user should be present").username, "testuser");
     }
 
     #[test]
     fn test_logout() {
         let auth = auth_with_test_user();
         let response = auth.login("testuser", "TestPassword123!");
-        let token = response.token.unwrap();
+        let token = response.token.expect("login should return token");
 
         assert!(auth.logout(&token));
         assert!(auth.validate_session(&token).is_none());
@@ -1965,8 +1965,8 @@ mod tests {
         let rbac = RbacManager::new();
 
         // Assign admin role to a test user
-        rbac.assign_role("test-user-1", "admin").unwrap();
-        rbac.assign_role("test-user-2", "viewer").unwrap();
+        rbac.assign_role("test-user-1", "admin").expect("failed to assign admin role");
+        rbac.assign_role("test-user-2", "viewer").expect("failed to assign viewer role");
 
         // Admin user should have all permissions
         assert!(rbac.check_permission("test-user-1", Permission::DatabaseCreate));
@@ -1990,7 +1990,7 @@ mod tests {
 
         let role = rbac.get_role("custom_role");
         assert!(role.is_some());
-        assert!(role.unwrap().has_permission(Permission::DataSelect));
+        assert!(role.expect("role should exist").has_permission(Permission::DataSelect));
     }
 
     #[test]
@@ -2100,7 +2100,7 @@ mod tests {
         let result = ldap.authenticate("testuser", "password");
         assert!(!result.success);
         assert!(result.error.is_some());
-        assert!(result.error.unwrap().contains("not configured"));
+        assert!(result.error.as_ref().expect("error should be present").contains("not configured"));
     }
 
     #[test]
@@ -2111,7 +2111,7 @@ mod tests {
         let result = ldap.authenticate("testuser", "");
         assert!(!result.success);
         assert!(result.error.is_some());
-        assert!(result.error.unwrap().contains("Password is required"));
+        assert!(result.error.as_ref().expect("error should be present").contains("Password is required"));
     }
 
     #[test]

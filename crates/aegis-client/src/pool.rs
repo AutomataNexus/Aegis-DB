@@ -262,7 +262,7 @@ mod tests {
 
         match create_test_pool(config).await {
             Ok(pool) => {
-                let conn = pool.get().await.unwrap();
+                let conn = pool.get().await.expect("Should get connection from pool");
                 assert!(conn.inner().is_connected());
             }
             Err(e) => eprintln!("Skipping test, server not available: {}", e),
@@ -306,8 +306,8 @@ mod tests {
                         return;
                     }
                 };
-                let c2 = pool.get().await.unwrap();
-                let c3 = pool.get().await.unwrap();
+                let c2 = pool.get().await.expect("Should get second connection from pool");
+                let c3 = pool.get().await.expect("Should get third connection from pool");
 
                 assert!(c1.inner().is_connected());
                 assert!(c2.inner().is_connected());

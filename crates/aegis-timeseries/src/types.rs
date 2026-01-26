@@ -112,10 +112,12 @@ impl From<HashMap<String, String>> for Tags {
 
 /// Type of metric for semantic interpretation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum MetricType {
     /// Monotonically increasing counter (e.g., request count).
     Counter,
     /// Point-in-time measurement (e.g., temperature).
+    #[default]
     Gauge,
     /// Distribution of values (e.g., latency histogram).
     Histogram,
@@ -123,11 +125,6 @@ pub enum MetricType {
     Summary,
 }
 
-impl Default for MetricType {
-    fn default() -> Self {
-        Self::Gauge
-    }
-}
 
 // =============================================================================
 // Metric

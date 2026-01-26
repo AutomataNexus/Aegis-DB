@@ -103,8 +103,10 @@ pub enum SpanStatus {
 
 /// Kind of span (client, server, internal, etc.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum SpanKind {
     /// Internal operation.
+    #[default]
     Internal,
     /// Server receiving a request.
     Server,
@@ -116,11 +118,6 @@ pub enum SpanKind {
     Consumer,
 }
 
-impl Default for SpanKind {
-    fn default() -> Self {
-        Self::Internal
-    }
-}
 
 // =============================================================================
 // Span Event
@@ -423,7 +420,7 @@ impl Tracer {
     pub fn start_trace(&self, name: &str) -> Span {
         let mut span = Span::new(TraceId::generate(), name);
         span.set_attribute("service.name", &self.service_name);
-        *self.current_span.write().unwrap() = Some(span.span_id.clone());
+        *self.current_span.write().expect("Tracer current_span RwLock poisoned") = Some(span.span_id.clone());
         span
     }
 
@@ -434,7 +431,7 @@ impl Tracer {
             .with_parent(context.span_id.clone())
             .build();
         span.set_attribute("service.name", &self.service_name);
-        *self.current_span.write().unwrap() = Some(span.span_id.clone());
+        *self.current_span.write().expect("Tracer current_span RwLock poisoned") = Some(span.span_id.clone());
         span
     }
 
@@ -447,22 +444,22 @@ impl Tracer {
 
     /// Record a completed span.
     pub fn record_span(&self, span: Span) {
-        self.spans.write().unwrap().push(span);
+        self.spans.write().expect("Tracer spans RwLock poisoned").push(span);
     }
 
     /// Get all recorded spans.
     pub fn get_spans(&self) -> Vec<Span> {
-        self.spans.read().unwrap().clone()
+        self.spans.read().expect("Tracer spans RwLock poisoned").clone()
     }
 
     /// Clear all recorded spans.
     pub fn clear_spans(&self) {
-        self.spans.write().unwrap().clear();
+        self.spans.write().expect("Tracer spans RwLock poisoned").clear();
     }
 
     /// Get the current span ID.
     pub fn current_span_id(&self) -> Option<SpanId> {
-        self.current_span.read().unwrap().clone()
+        self.current_span.read().expect("Tracer current_span RwLock poisoned").clone()
     }
 }
 
@@ -581,12 +578,12 @@ impl Logger {
 
     /// Set the trace context.
     pub fn set_context(&self, context: TraceContext) {
-        *self.context.write().unwrap() = Some(context);
+        *self.context.write().expect("Logger context RwLock poisoned") = Some(context);
     }
 
     /// Clear the trace context.
     pub fn clear_context(&self) {
-        *self.context.write().unwrap() = None;
+        *self.context.write().expect("Logger context RwLock poisoned") = None;
     }
 
     /// Log a message.
@@ -597,11 +594,11 @@ impl Logger {
 
         let mut entry = LogEntry::new(level, message, &self.target);
 
-        if let Some(ref ctx) = *self.context.read().unwrap() {
+        if let Some(ref ctx) = *self.context.read().expect("Logger context RwLock poisoned") {
             entry = entry.with_trace_context(ctx);
         }
 
-        self.entries.write().unwrap().push(entry);
+        self.entries.write().expect("Logger entries RwLock poisoned").push(entry);
     }
 
     /// Log with fields.
@@ -613,11 +610,11 @@ impl Logger {
         let mut entry = LogEntry::new(level, message, &self.target);
         entry.fields = fields;
 
-        if let Some(ref ctx) = *self.context.read().unwrap() {
+        if let Some(ref ctx) = *self.context.read().expect("Logger context RwLock poisoned") {
             entry = entry.with_trace_context(ctx);
         }
 
-        self.entries.write().unwrap().push(entry);
+        self.entries.write().expect("Logger entries RwLock poisoned").push(entry);
     }
 
     /// Log at trace level.
@@ -647,12 +644,12 @@ impl Logger {
 
     /// Get all log entries.
     pub fn get_entries(&self) -> Vec<LogEntry> {
-        self.entries.read().unwrap().clone()
+        self.entries.read().expect("Logger entries RwLock poisoned").clone()
     }
 
     /// Clear all log entries.
     pub fn clear(&self) {
-        self.entries.write().unwrap().clear();
+        self.entries.write().expect("Logger entries RwLock poisoned").clear();
     }
 }
 
@@ -746,7 +743,7 @@ mod tests {
         let traceparent = ctx.to_traceparent();
         assert!(traceparent.starts_with("00-"));
 
-        let parsed = TraceContext::from_traceparent(&traceparent).unwrap();
+        let parsed = TraceContext::from_traceparent(&traceparent).expect("Failed to parse traceparent");
         assert_eq!(parsed.trace_id, ctx.trace_id);
         assert_eq!(parsed.span_id, ctx.span_id);
     }

@@ -250,8 +250,8 @@ mod tests {
 
         assert!(block.verify_checksum());
 
-        let serialized = block.to_bytes().unwrap();
-        let deserialized = Block::from_bytes(&serialized).unwrap();
+        let serialized = block.to_bytes().expect("to_bytes should succeed");
+        let deserialized = Block::from_bytes(&serialized).expect("from_bytes should succeed");
 
         assert_eq!(deserialized.header.block_id, BlockId(1));
         assert_eq!(deserialized.data, data);
@@ -263,10 +263,10 @@ mod tests {
         let data = Bytes::from("Hello, Aegis! ".repeat(100));
         let mut block = Block::new(BlockId(1), BlockType::TableData, data.clone());
 
-        block.compress(CompressionType::Lz4).unwrap();
+        block.compress(CompressionType::Lz4).expect("LZ4 compression should succeed");
         assert!(block.header.data_size < block.header.uncompressed_size);
 
-        block.decompress().unwrap();
+        block.decompress().expect("LZ4 decompression should succeed");
         assert_eq!(block.data, data);
     }
 
@@ -275,10 +275,10 @@ mod tests {
         let data = Bytes::from("Hello, Aegis! ".repeat(100));
         let mut block = Block::new(BlockId(1), BlockType::TableData, data.clone());
 
-        block.compress(CompressionType::Zstd).unwrap();
+        block.compress(CompressionType::Zstd).expect("Zstd compression should succeed");
         assert!(block.header.data_size < block.header.uncompressed_size);
 
-        block.decompress().unwrap();
+        block.decompress().expect("Zstd decompression should succeed");
         assert_eq!(block.data, data);
     }
 }

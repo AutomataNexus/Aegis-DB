@@ -59,8 +59,10 @@ impl From<&str> for NodeId {
 
 /// Status of a node in the cluster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum NodeStatus {
     /// Node is starting up.
+    #[default]
     Starting,
     /// Node is healthy and operational.
     Healthy,
@@ -74,11 +76,6 @@ pub enum NodeStatus {
     Left,
 }
 
-impl Default for NodeStatus {
-    fn default() -> Self {
-        Self::Starting
-    }
-}
 
 // =============================================================================
 // Node Role
@@ -86,8 +83,10 @@ impl Default for NodeStatus {
 
 /// Role of a node in the Raft cluster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum NodeRole {
     /// Follower node that replicates from leader.
+    #[default]
     Follower,
     /// Candidate node during leader election.
     Candidate,
@@ -95,11 +94,6 @@ pub enum NodeRole {
     Leader,
 }
 
-impl Default for NodeRole {
-    fn default() -> Self {
-        Self::Follower
-    }
-}
 
 // =============================================================================
 // Node Info

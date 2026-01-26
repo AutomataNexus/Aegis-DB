@@ -43,6 +43,7 @@ pub enum Statement {
 
 /// A SELECT query.
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Default)]
 pub struct SelectStatement {
     pub distinct: bool,
     pub columns: Vec<SelectColumn>,
@@ -55,21 +56,6 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
 }
 
-impl Default for SelectStatement {
-    fn default() -> Self {
-        Self {
-            distinct: false,
-            columns: Vec::new(),
-            from: None,
-            where_clause: None,
-            group_by: Vec::new(),
-            having: None,
-            order_by: Vec::new(),
-            limit: None,
-            offset: None,
-        }
-    }
-}
 
 /// A column in SELECT list.
 #[derive(Debug, Clone, PartialEq)]

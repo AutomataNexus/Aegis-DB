@@ -15,6 +15,7 @@ use std::time::Duration;
 
 /// Complete client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ClientConfig {
     pub connection: ConnectionConfig,
     pub pool: PoolConfig,
@@ -22,16 +23,6 @@ pub struct ClientConfig {
     pub timeout: TimeoutConfig,
 }
 
-impl Default for ClientConfig {
-    fn default() -> Self {
-        Self {
-            connection: ConnectionConfig::default(),
-            pool: PoolConfig::default(),
-            retry: RetryConfig::default(),
-            timeout: TimeoutConfig::default(),
-        }
-    }
-}
 
 impl ClientConfig {
     /// Create a new client configuration.
@@ -186,19 +177,16 @@ impl ConnectionConfig {
 
 /// SSL connection mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum SslMode {
     Disable,
+    #[default]
     Prefer,
     Require,
     VerifyCa,
     VerifyFull,
 }
 
-impl Default for SslMode {
-    fn default() -> Self {
-        Self::Prefer
-    }
-}
 
 impl SslMode {
     pub fn as_str(&self) -> &'static str {
@@ -314,7 +302,7 @@ mod tests {
 
     #[test]
     fn test_from_url_simple() {
-        let config = ClientConfig::from_url("aegis://localhost:9090/testdb").unwrap();
+        let config = ClientConfig::from_url("aegis://localhost:9090/testdb").expect("Should parse simple URL");
         assert_eq!(config.connection.host, "localhost");
         assert_eq!(config.connection.port, 9090);
         assert_eq!(config.connection.database, "testdb");
@@ -322,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_from_url_with_auth() {
-        let config = ClientConfig::from_url("aegis://user:pass@localhost:9090/testdb").unwrap();
+        let config = ClientConfig::from_url("aegis://user:pass@localhost:9090/testdb").expect("Should parse URL with auth");
         assert_eq!(config.connection.host, "localhost");
         assert_eq!(config.connection.username, Some("user".to_string()));
         assert_eq!(config.connection.password, Some("pass".to_string()));
@@ -330,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_from_url_default_port() {
-        let config = ClientConfig::from_url("aegis://localhost/testdb").unwrap();
+        let config = ClientConfig::from_url("aegis://localhost/testdb").expect("Should parse URL with default port");
         assert_eq!(config.connection.port, 9090);
     }
 

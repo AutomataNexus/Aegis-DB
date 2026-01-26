@@ -193,10 +193,10 @@ impl ShardRouter {
     /// Update the routing table from shards.
     pub fn update_routing(&self, shards: &[Shard]) {
         let table = RoutingTable::from_shards(shards);
-        *self.routing_table.write().unwrap() = table;
+        *self.routing_table.write().expect("router routing_table lock poisoned") = table;
 
         // Update hash ring
-        let mut ring = self.hash_ring.write().unwrap();
+        let mut ring = self.hash_ring.write().expect("router hash_ring lock poisoned");
         *ring = HashRing::default();
         for shard in shards {
             ring.add_node(shard.primary_node.clone());
@@ -209,7 +209,7 @@ impl ShardRouter {
     /// Route a query with a partition key.
     pub fn route(&self, key: &PartitionKey) -> RouteDecision {
         let hash = key.hash_value();
-        let table = self.routing_table.read().unwrap();
+        let table = self.routing_table.read().expect("router routing_table lock poisoned");
 
         if let Some(entry) = table.find_shard(hash) {
             RouteDecision::Single {
@@ -218,7 +218,7 @@ impl ShardRouter {
             }
         } else {
             // Fallback to hash ring
-            let ring = self.hash_ring.read().unwrap();
+            let ring = self.hash_ring.read().expect("router hash_ring lock poisoned");
             if let Some(node) = ring.get_node(&format!("{}", hash)) {
                 RouteDecision::Single {
                     shard_id: ShardId::new(0),
@@ -235,7 +235,7 @@ impl ShardRouter {
     /// Route for a write operation (always to primary).
     pub fn route_write(&self, key: &PartitionKey) -> RouteDecision {
         let hash = key.hash_value();
-        let table = self.routing_table.read().unwrap();
+        let table = self.routing_table.read().expect("router routing_table lock poisoned");
 
         if let Some(entry) = table.find_shard(hash) {
             RouteDecision::Primary {
@@ -252,7 +252,7 @@ impl ShardRouter {
     /// Route for a read operation (can use replicas).
     pub fn route_read(&self, key: &PartitionKey) -> RouteDecision {
         let hash = key.hash_value();
-        let table = self.routing_table.read().unwrap();
+        let table = self.routing_table.read().expect("router routing_table lock poisoned");
 
         if let Some(entry) = table.find_shard(hash) {
             let mut candidates = vec![entry.primary.clone()];
@@ -263,6 +263,7 @@ impl ShardRouter {
                 candidates,
             }
         } else {
+            drop(table);
             self.route(key)
         }
     }
@@ -272,7 +273,7 @@ impl ShardRouter {
         let start_hash = start_key.hash_value();
         let end_hash = end_key.hash_value();
 
-        let table = self.routing_table.read().unwrap();
+        let table = self.routing_table.read().expect("router routing_table lock poisoned");
         let mut routes = Vec::new();
 
         for entry in table.all_entries() {
@@ -303,7 +304,7 @@ impl ShardRouter {
 
     /// Route to all shards (for queries without partition key).
     pub fn route_all(&self) -> RouteDecision {
-        let table = self.routing_table.read().unwrap();
+        let table = self.routing_table.read().expect("router routing_table lock poisoned");
 
         let routes: Vec<_> = table
             .all_entries()
@@ -341,7 +342,7 @@ impl ShardRouter {
 
     /// Get the current routing table version.
     pub fn routing_version(&self) -> u64 {
-        self.routing_table.read().unwrap().version()
+        self.routing_table.read().expect("router routing_table lock poisoned").version()
     }
 
     /// Get the partition strategy.
@@ -351,7 +352,7 @@ impl ShardRouter {
 
     /// Check if routing table is initialized.
     pub fn is_initialized(&self) -> bool {
-        !self.routing_table.read().unwrap().is_empty()
+        !self.routing_table.read().expect("router routing_table lock poisoned").is_empty()
     }
 }
 

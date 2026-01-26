@@ -242,7 +242,10 @@ impl WindowedStream {
     /// Add an event to the appropriate window.
     pub fn push(&self, event: Event) {
         let window_start = self.window_start(event.timestamp);
-        let mut windows = self.windows.write().unwrap();
+        let mut windows = self
+            .windows
+            .write()
+            .expect("windows RwLock poisoned in push");
 
         if let Some(window) = windows.iter_mut().find(|w| w.start == window_start) {
             window.events.push(event);
@@ -256,7 +259,10 @@ impl WindowedStream {
     /// Get completed windows.
     pub fn completed_windows(&self) -> Vec<Window> {
         let now = current_timestamp_millis();
-        let windows = self.windows.read().unwrap();
+        let windows = self
+            .windows
+            .read()
+            .expect("windows RwLock poisoned in completed_windows");
 
         windows
             .iter()
@@ -268,7 +274,10 @@ impl WindowedStream {
     /// Remove completed windows and return them.
     pub fn flush_completed(&self) -> Vec<Window> {
         let now = current_timestamp_millis();
-        let mut windows = self.windows.write().unwrap();
+        let mut windows = self
+            .windows
+            .write()
+            .expect("windows RwLock poisoned in flush_completed");
 
         let completed: Vec<Window> = windows
             .iter()

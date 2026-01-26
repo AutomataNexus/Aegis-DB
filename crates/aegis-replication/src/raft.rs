@@ -65,6 +65,7 @@ impl RaftConfig {
 
 /// Persistent state for Raft consensus.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct RaftState {
     pub current_term: Term,
     pub voted_for: Option<NodeId>,
@@ -72,16 +73,6 @@ pub struct RaftState {
     pub last_applied: LogIndex,
 }
 
-impl Default for RaftState {
-    fn default() -> Self {
-        Self {
-            current_term: 0,
-            voted_for: None,
-            commit_index: 0,
-            last_applied: 0,
-        }
-    }
-}
 
 // =============================================================================
 // Vote Request/Response
@@ -230,17 +221,17 @@ impl RaftNode {
 
     /// Get the current role.
     pub fn role(&self) -> NodeRole {
-        *self.role.read().unwrap()
+        *self.role.read().expect("raft role lock poisoned")
     }
 
     /// Get the current term.
     pub fn current_term(&self) -> Term {
-        self.state.read().unwrap().current_term
+        self.state.read().expect("raft state lock poisoned").current_term
     }
 
     /// Get the current leader ID.
     pub fn leader_id(&self) -> Option<NodeId> {
-        self.leader_id.read().unwrap().clone()
+        self.leader_id.read().expect("raft leader_id lock poisoned").clone()
     }
 
     /// Check if this node is the leader.
@@ -250,30 +241,30 @@ impl RaftNode {
 
     /// Add a peer to the cluster.
     pub fn add_peer(&self, peer_id: NodeId) {
-        let mut peers = self.peers.write().unwrap();
+        let mut peers = self.peers.write().expect("raft peers lock poisoned");
         peers.insert(peer_id.clone());
 
         let last_log = self.log.last_index();
-        self.next_index.write().unwrap().insert(peer_id.clone(), last_log + 1);
-        self.match_index.write().unwrap().insert(peer_id, 0);
+        self.next_index.write().expect("raft next_index lock poisoned").insert(peer_id.clone(), last_log + 1);
+        self.match_index.write().expect("raft match_index lock poisoned").insert(peer_id, 0);
     }
 
     /// Remove a peer from the cluster.
     pub fn remove_peer(&self, peer_id: &NodeId) {
-        let mut peers = self.peers.write().unwrap();
+        let mut peers = self.peers.write().expect("raft peers lock poisoned");
         peers.remove(peer_id);
-        self.next_index.write().unwrap().remove(peer_id);
-        self.match_index.write().unwrap().remove(peer_id);
+        self.next_index.write().expect("raft next_index lock poisoned").remove(peer_id);
+        self.match_index.write().expect("raft match_index lock poisoned").remove(peer_id);
     }
 
     /// Get the list of peers.
     pub fn peers(&self) -> Vec<NodeId> {
-        self.peers.read().unwrap().iter().cloned().collect()
+        self.peers.read().expect("raft peers lock poisoned").iter().cloned().collect()
     }
 
     /// Get the cluster size (including self).
     pub fn cluster_size(&self) -> usize {
-        self.peers.read().unwrap().len() + 1
+        self.peers.read().expect("raft peers lock poisoned").len() + 1
     }
 
     /// Get the quorum size.
@@ -283,12 +274,12 @@ impl RaftNode {
 
     /// Reset the heartbeat timer.
     pub fn reset_heartbeat(&self) {
-        *self.last_heartbeat.write().unwrap() = Instant::now();
+        *self.last_heartbeat.write().expect("raft last_heartbeat lock poisoned") = Instant::now();
     }
 
     /// Check if the election timeout has elapsed.
     pub fn election_timeout_elapsed(&self) -> bool {
-        let elapsed = self.last_heartbeat.read().unwrap().elapsed();
+        let elapsed = self.last_heartbeat.read().expect("raft last_heartbeat lock poisoned").elapsed();
         elapsed >= self.config.election_timeout_min
     }
 
@@ -298,14 +289,14 @@ impl RaftNode {
 
     /// Start an election as a candidate.
     pub fn start_election(&self) -> VoteRequest {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().expect("raft state lock poisoned");
         state.current_term += 1;
         state.voted_for = Some(self.id.clone());
 
-        *self.role.write().unwrap() = NodeRole::Candidate;
-        *self.leader_id.write().unwrap() = None;
+        *self.role.write().expect("raft role lock poisoned") = NodeRole::Candidate;
+        *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
 
-        let mut votes = self.votes_received.write().unwrap();
+        let mut votes = self.votes_received.write().expect("raft votes_received lock poisoned");
         votes.clear();
         votes.insert(self.id.clone());
 
@@ -321,13 +312,13 @@ impl RaftNode {
 
     /// Handle a vote request.
     pub fn handle_vote_request(&self, request: &VoteRequest) -> VoteResponse {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().expect("raft state lock poisoned");
 
         if request.term > state.current_term {
             state.current_term = request.term;
             state.voted_for = None;
-            *self.role.write().unwrap() = NodeRole::Follower;
-            *self.leader_id.write().unwrap() = None;
+            *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
+            *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
         }
 
         let vote_granted = request.term >= state.current_term
@@ -349,13 +340,13 @@ impl RaftNode {
     /// Handle a vote response.
     pub fn handle_vote_response(&self, response: &VoteResponse) -> bool {
         let current_term = {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.state.write().expect("raft state lock poisoned");
 
             if response.term > state.current_term {
                 state.current_term = response.term;
                 state.voted_for = None;
-                *self.role.write().unwrap() = NodeRole::Follower;
-                *self.leader_id.write().unwrap() = None;
+                *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
+                *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
                 return false;
             }
 
@@ -367,10 +358,10 @@ impl RaftNode {
         };
 
         if response.vote_granted {
-            self.votes_received.write().unwrap().insert(response.voter_id.clone());
+            self.votes_received.write().expect("raft votes_received lock poisoned").insert(response.voter_id.clone());
         }
 
-        let votes = self.votes_received.read().unwrap().len();
+        let votes = self.votes_received.read().expect("raft votes_received lock poisoned").len();
         if votes >= self.quorum_size() {
             self.become_leader_with_term(current_term);
             return true;
@@ -388,14 +379,14 @@ impl RaftNode {
 
     /// Become the leader with a specific term (avoids deadlock when called with state lock held).
     fn become_leader_with_term(&self, term: Term) {
-        *self.role.write().unwrap() = NodeRole::Leader;
-        *self.leader_id.write().unwrap() = Some(self.id.clone());
+        *self.role.write().expect("raft role lock poisoned") = NodeRole::Leader;
+        *self.leader_id.write().expect("raft leader_id lock poisoned") = Some(self.id.clone());
 
         let last_log = self.log.last_index();
-        let peers: Vec<_> = self.peers.read().unwrap().iter().cloned().collect();
+        let peers: Vec<_> = self.peers.read().expect("raft peers lock poisoned").iter().cloned().collect();
 
-        let mut next_index = self.next_index.write().unwrap();
-        let mut match_index = self.match_index.write().unwrap();
+        let mut next_index = self.next_index.write().expect("raft next_index lock poisoned");
+        let mut match_index = self.match_index.write().expect("raft match_index lock poisoned");
 
         for peer in peers {
             next_index.insert(peer.clone(), last_log + 1);
@@ -433,7 +424,7 @@ impl RaftNode {
             return None;
         }
 
-        let next_index = *self.next_index.read().unwrap().get(peer_id)?;
+        let next_index = *self.next_index.read().expect("raft next_index lock poisoned").get(peer_id)?;
         let prev_log_index = next_index.saturating_sub(1);
         let prev_log_term = self.log.term_at(prev_log_index).unwrap_or(0);
 
@@ -443,7 +434,7 @@ impl RaftNode {
             .take(self.config.max_entries_per_request)
             .collect();
 
-        let state = self.state.read().unwrap();
+        let state = self.state.read().expect("raft state lock poisoned");
 
         Some(AppendEntriesRequest {
             term: state.current_term,
@@ -457,7 +448,7 @@ impl RaftNode {
 
     /// Handle an append entries request.
     pub fn handle_append_entries(&self, request: &AppendEntriesRequest) -> AppendEntriesResponse {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().expect("raft state lock poisoned");
 
         if request.term < state.current_term {
             return AppendEntriesResponse {
@@ -474,8 +465,8 @@ impl RaftNode {
             state.voted_for = None;
         }
 
-        *self.role.write().unwrap() = NodeRole::Follower;
-        *self.leader_id.write().unwrap() = Some(request.leader_id.clone());
+        *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
+        *self.leader_id.write().expect("raft leader_id lock poisoned") = Some(request.leader_id.clone());
         self.reset_heartbeat();
 
         if request.prev_log_index > 0 {
@@ -525,7 +516,7 @@ impl RaftNode {
             let last_new_index = if request.entries.is_empty() {
                 request.prev_log_index
             } else {
-                request.entries.last().unwrap().index
+                request.entries.last().expect("entries confirmed non-empty").index
             };
             state.commit_index = std::cmp::min(request.leader_commit, last_new_index);
             self.log.set_commit_index(state.commit_index);
@@ -546,13 +537,13 @@ impl RaftNode {
         peer_id: &NodeId,
         response: &AppendEntriesResponse,
     ) {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().expect("raft state lock poisoned");
 
         if response.term > state.current_term {
             state.current_term = response.term;
             state.voted_for = None;
-            *self.role.write().unwrap() = NodeRole::Follower;
-            *self.leader_id.write().unwrap() = None;
+            *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
+            *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
             return;
         }
 
@@ -560,8 +551,8 @@ impl RaftNode {
             return;
         }
 
-        let mut next_index = self.next_index.write().unwrap();
-        let mut match_index = self.match_index.write().unwrap();
+        let mut next_index = self.next_index.write().expect("raft next_index lock poisoned");
+        let mut match_index = self.match_index.write().expect("raft match_index lock poisoned");
 
         if response.success {
             match_index.insert(peer_id.clone(), response.match_index);
@@ -570,20 +561,18 @@ impl RaftNode {
             drop(match_index);
             drop(state);
             self.try_advance_commit_index();
+        } else if let Some(conflict_index) = response.conflict_index {
+            next_index.insert(peer_id.clone(), conflict_index);
         } else {
-            if let Some(conflict_index) = response.conflict_index {
-                next_index.insert(peer_id.clone(), conflict_index);
-            } else {
-                let current = *next_index.get(peer_id).unwrap_or(&1);
-                next_index.insert(peer_id.clone(), current.saturating_sub(1).max(1));
-            }
+            let current = *next_index.get(peer_id).unwrap_or(&1);
+            next_index.insert(peer_id.clone(), current.saturating_sub(1).max(1));
         }
     }
 
     /// Try to advance the commit index based on match indices.
     fn try_advance_commit_index(&self) {
         let match_indices: Vec<_> = {
-            let match_index = self.match_index.read().unwrap();
+            let match_index = self.match_index.read().expect("raft match_index lock poisoned");
             let mut indices: Vec<_> = match_index.values().copied().collect();
             indices.push(self.log.last_index());
             indices.sort_unstable();
@@ -593,7 +582,7 @@ impl RaftNode {
         let quorum_index = match_indices.len() / 2;
         let new_commit = match_indices[quorum_index];
 
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().expect("raft state lock poisoned");
         if new_commit > state.commit_index {
             if let Some(term) = self.log.term_at(new_commit) {
                 if term == state.current_term {
@@ -633,7 +622,7 @@ impl RaftNode {
                 }
                 self.log.set_last_applied(entry.index);
 
-                let mut state = self.state.write().unwrap();
+                let mut state = self.state.write().expect("raft state lock poisoned");
                 state.last_applied = entry.index;
             }
         }
@@ -669,7 +658,7 @@ impl RaftNode {
     /// Take a snapshot of the current state and compact the log.
     /// Returns the snapshot metadata if successful.
     pub fn take_snapshot(&self) -> Option<SnapshotMetadata> {
-        let state = self.state.read().unwrap();
+        let state = self.state.read().expect("raft state lock poisoned");
         let last_applied = state.last_applied;
 
         if last_applied == 0 {
@@ -693,13 +682,13 @@ impl RaftNode {
             size,
         };
 
-        *self.snapshot_metadata.write().unwrap() = Some(metadata.clone());
+        *self.snapshot_metadata.write().expect("raft snapshot_metadata lock poisoned") = Some(metadata.clone());
         Some(metadata)
     }
 
     /// Get the current snapshot data (for sending to followers).
     pub fn get_snapshot_data(&self) -> Option<(SnapshotMetadata, Vec<u8>)> {
-        let metadata = self.snapshot_metadata.read().unwrap().clone()?;
+        let metadata = self.snapshot_metadata.read().expect("raft snapshot_metadata lock poisoned").clone()?;
         let snapshot = self.state_machine.snapshot();
         let data = snapshot.to_bytes();
         Some((metadata, data))
@@ -716,7 +705,7 @@ impl RaftNode {
             return None;
         }
 
-        let next_index = *self.next_index.read().unwrap().get(peer_id)?;
+        let next_index = *self.next_index.read().expect("raft next_index lock poisoned").get(peer_id)?;
         let (metadata, data) = self.get_snapshot_data()?;
 
         // Only send snapshot if peer needs entries before our snapshot
@@ -748,7 +737,7 @@ impl RaftNode {
         &self,
         request: &InstallSnapshotRequest,
     ) -> InstallSnapshotResponse {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().expect("raft state lock poisoned");
 
         // Reply immediately if term < currentTerm
         if request.term < state.current_term {
@@ -761,14 +750,14 @@ impl RaftNode {
         if request.term > state.current_term {
             state.current_term = request.term;
             state.voted_for = None;
-            *self.role.write().unwrap() = NodeRole::Follower;
+            *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
         }
 
         // Update leader and reset heartbeat
-        *self.leader_id.write().unwrap() = Some(request.leader_id.clone());
+        *self.leader_id.write().expect("raft leader_id lock poisoned") = Some(request.leader_id.clone());
         self.reset_heartbeat();
 
-        let mut pending = self.pending_snapshot.write().unwrap();
+        let mut pending = self.pending_snapshot.write().expect("raft pending_snapshot lock poisoned");
 
         // If offset is 0, create a new pending snapshot
         if request.offset == 0 {
@@ -817,7 +806,7 @@ impl RaftNode {
                     self.log.set_last_applied(state.last_applied);
 
                     // Store snapshot metadata
-                    *self.snapshot_metadata.write().unwrap() = Some(SnapshotMetadata {
+                    *self.snapshot_metadata.write().expect("raft snapshot_metadata lock poisoned") = Some(SnapshotMetadata {
                         last_included_index: metadata.last_included_index,
                         last_included_term: metadata.last_included_term,
                         size: snapshot_data.len() as u64,
@@ -825,7 +814,7 @@ impl RaftNode {
                 }
 
                 // Clear pending snapshot
-                *self.pending_snapshot.write().unwrap() = None;
+                *self.pending_snapshot.write().expect("raft pending_snapshot lock poisoned") = None;
             }
         }
 
@@ -842,14 +831,14 @@ impl RaftNode {
         _last_chunk_offset: u64,
         was_last_chunk: bool,
     ) {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().expect("raft state lock poisoned");
 
         // Step down if we see a higher term
         if response.term > state.current_term {
             state.current_term = response.term;
             state.voted_for = None;
-            *self.role.write().unwrap() = NodeRole::Follower;
-            *self.leader_id.write().unwrap() = None;
+            *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
+            *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
             return;
         }
 
@@ -859,14 +848,14 @@ impl RaftNode {
 
         // If the snapshot was fully received, update next_index and match_index
         if was_last_chunk {
-            if let Some(ref metadata) = *self.snapshot_metadata.read().unwrap() {
+            if let Some(ref metadata) = *self.snapshot_metadata.read().expect("raft snapshot_metadata lock poisoned") {
                 self.next_index
                     .write()
-                    .unwrap()
+                    .expect("raft next_index lock poisoned")
                     .insert(peer_id.clone(), metadata.last_included_index + 1);
                 self.match_index
                     .write()
-                    .unwrap()
+                    .expect("raft match_index lock poisoned")
                     .insert(peer_id.clone(), metadata.last_included_index);
             }
         }
@@ -874,13 +863,13 @@ impl RaftNode {
 
     /// Check if a peer needs a snapshot (their next_index is before our first log entry).
     pub fn peer_needs_snapshot(&self, peer_id: &NodeId) -> bool {
-        let next_index = match self.next_index.read().unwrap().get(peer_id) {
+        let next_index = match self.next_index.read().expect("raft next_index lock poisoned").get(peer_id) {
             Some(&idx) => idx,
             None => return false,
         };
 
         // If we have a snapshot and peer needs entries before the snapshot
-        if let Some(ref metadata) = *self.snapshot_metadata.read().unwrap() {
+        if let Some(ref metadata) = *self.snapshot_metadata.read().expect("raft snapshot_metadata lock poisoned") {
             return next_index <= metadata.last_included_index;
         }
 
@@ -889,7 +878,7 @@ impl RaftNode {
 
     /// Get current snapshot metadata.
     pub fn snapshot_metadata(&self) -> Option<SnapshotMetadata> {
-        self.snapshot_metadata.read().unwrap().clone()
+        self.snapshot_metadata.read().expect("raft snapshot_metadata lock poisoned").clone()
     }
 }
 

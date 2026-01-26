@@ -322,8 +322,7 @@ impl QueryBuilder {
             .map(|row| {
                 let placeholders: Vec<String> = row
                     .iter()
-                    .enumerate()
-                    .map(|(_i, v)| {
+                    .map(|v| {
                         params.push(v.clone());
                         format!("${}", params.len())
                     })

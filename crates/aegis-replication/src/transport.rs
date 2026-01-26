@@ -281,7 +281,7 @@ impl InMemoryTransport {
         let inboxes = Arc::new(RwLock::new(HashMap::new()));
 
         for node in nodes {
-            inboxes.write().unwrap().insert(node.clone(), Vec::new());
+            inboxes.write().expect("transport inboxes lock poisoned").insert(node.clone(), Vec::new());
         }
 
         nodes
@@ -301,14 +301,14 @@ impl InMemoryTransport {
     /// Create a single transport (for testing).
     pub fn new(node_id: NodeId) -> Self {
         let inboxes = Arc::new(RwLock::new(HashMap::new()));
-        inboxes.write().unwrap().insert(node_id.clone(), Vec::new());
+        inboxes.write().expect("transport inboxes lock poisoned").insert(node_id.clone(), Vec::new());
         Self { node_id, inboxes }
     }
 }
 
 impl Transport for InMemoryTransport {
     fn send(&self, message: Message) -> Result<(), TransportError> {
-        let mut inboxes = self.inboxes.write().unwrap();
+        let mut inboxes = self.inboxes.write().expect("transport inboxes lock poisoned");
         if let Some(inbox) = inboxes.get_mut(&message.to) {
             inbox.push(message);
             Ok(())
@@ -327,7 +327,7 @@ impl Transport for InMemoryTransport {
     }
 
     fn try_recv(&self) -> Option<Message> {
-        let mut inboxes = self.inboxes.write().unwrap();
+        let mut inboxes = self.inboxes.write().expect("transport inboxes lock poisoned");
         if let Some(inbox) = inboxes.get_mut(&self.node_id) {
             if !inbox.is_empty() {
                 return Some(inbox.remove(0));
@@ -379,7 +379,7 @@ impl ConnectionPool {
 
     /// Add a connection.
     pub fn add(&self, node_id: NodeId, address: String) {
-        let mut conns = self.connections.write().unwrap();
+        let mut conns = self.connections.write().expect("connection pool lock poisoned");
         if conns.len() < self.max_connections {
             conns.insert(
                 node_id.clone(),
@@ -396,17 +396,17 @@ impl ConnectionPool {
 
     /// Remove a connection.
     pub fn remove(&self, node_id: &NodeId) {
-        self.connections.write().unwrap().remove(node_id);
+        self.connections.write().expect("connection pool lock poisoned").remove(node_id);
     }
 
     /// Get a connection.
     pub fn get(&self, node_id: &NodeId) -> Option<ConnectionState> {
-        self.connections.read().unwrap().get(node_id).cloned()
+        self.connections.read().expect("connection pool lock poisoned").get(node_id).cloned()
     }
 
     /// Mark a connection as connected.
     pub fn mark_connected(&self, node_id: &NodeId) {
-        if let Some(conn) = self.connections.write().unwrap().get_mut(node_id) {
+        if let Some(conn) = self.connections.write().expect("connection pool lock poisoned").get_mut(node_id) {
             conn.connected = true;
             conn.last_activity = current_timestamp();
             conn.retry_count = 0;
@@ -415,7 +415,7 @@ impl ConnectionPool {
 
     /// Mark a connection as disconnected.
     pub fn mark_disconnected(&self, node_id: &NodeId) {
-        if let Some(conn) = self.connections.write().unwrap().get_mut(node_id) {
+        if let Some(conn) = self.connections.write().expect("connection pool lock poisoned").get_mut(node_id) {
             conn.connected = false;
             conn.retry_count += 1;
         }
@@ -425,7 +425,7 @@ impl ConnectionPool {
     pub fn connected_nodes(&self) -> Vec<NodeId> {
         self.connections
             .read()
-            .unwrap()
+            .expect("connection pool lock poisoned")
             .values()
             .filter(|c| c.connected)
             .map(|c| c.node_id.clone())
@@ -434,7 +434,7 @@ impl ConnectionPool {
 
     /// Get connection count.
     pub fn len(&self) -> usize {
-        self.connections.read().unwrap().len()
+        self.connections.read().expect("connection pool lock poisoned").len()
     }
 
     /// Check if pool is empty.

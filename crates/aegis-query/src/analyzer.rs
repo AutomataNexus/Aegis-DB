@@ -174,7 +174,7 @@ impl Analyzer {
         for col in &select.columns {
             match col {
                 SelectColumn::AllColumns => {
-                    for (_, resolved) in &scope.columns {
+                    for resolved in scope.columns.values() {
                         output_columns.push(OutputColumn {
                             name: resolved.column.clone(),
                             data_type: resolved.data_type.clone(),
@@ -182,7 +182,7 @@ impl Analyzer {
                     }
                 }
                 SelectColumn::TableAllColumns(table) => {
-                    for (_, resolved) in &scope.columns {
+                    for resolved in scope.columns.values() {
                         if resolved.table == *table {
                             output_columns.push(OutputColumn {
                                 name: resolved.column.clone(),
@@ -351,7 +351,7 @@ impl Analyzer {
                     .columns
                     .get(&key)
                     .map(|r| r.data_type.clone())
-                    .ok_or_else(|| AegisError::ColumnNotFound(key))
+                    .ok_or(AegisError::ColumnNotFound(key))
             }
             Expression::BinaryOp { left, op, right } => {
                 let left_type = self.infer_type(left, scope)?;

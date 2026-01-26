@@ -532,12 +532,12 @@ impl AdminService {
 
     /// Get configured peer addresses.
     pub fn peer_addresses(&self) -> Vec<String> {
-        self.peer_addresses.read().unwrap().clone()
+        self.peer_addresses.read().expect("peer_addresses lock poisoned").clone()
     }
 
     /// Add a peer address.
     pub fn add_peer_address(&self, address: String) {
-        let mut addrs = self.peer_addresses.write().unwrap();
+        let mut addrs = self.peer_addresses.write().expect("peer_addresses lock poisoned");
         if !addrs.contains(&address) && address != self.bind_address {
             addrs.push(address);
         }
@@ -545,7 +545,7 @@ impl AdminService {
 
     /// Register or update a peer node.
     pub fn register_peer(&self, peer: PeerNode) {
-        let mut peers = self.peers.write().unwrap();
+        let mut peers = self.peers.write().expect("peers lock poisoned");
         // Update if exists, otherwise add
         if let Some(existing) = peers.iter_mut().find(|p| p.id == peer.id || p.address == peer.address) {
             *existing = peer;
@@ -556,18 +556,18 @@ impl AdminService {
 
     /// Remove a peer node.
     pub fn remove_peer(&self, node_id: &str) {
-        let mut peers = self.peers.write().unwrap();
+        let mut peers = self.peers.write().expect("peers lock poisoned");
         peers.retain(|p| p.id != node_id);
     }
 
     /// Get all known peer nodes.
     pub fn get_peers(&self) -> Vec<PeerNode> {
-        self.peers.read().unwrap().clone()
+        self.peers.read().expect("peers lock poisoned").clone()
     }
 
     /// Mark a peer as offline.
     pub fn mark_peer_offline(&self, node_id: &str) {
-        let mut peers = self.peers.write().unwrap();
+        let mut peers = self.peers.write().expect("peers lock poisoned");
         if let Some(peer) = peers.iter_mut().find(|p| p.id == node_id) {
             peer.status = NodeStatus::Offline;
         }
@@ -676,7 +676,7 @@ impl AdminService {
 
     /// Get cluster information.
     pub fn get_cluster_info(&self) -> ClusterInfo {
-        let peers = self.peers.read().unwrap();
+        let peers = self.peers.read().expect("peers lock poisoned");
         let online_peers = peers.iter().filter(|p| p.status == NodeStatus::Online).count();
         let total_nodes = 1 + peers.len(); // self + peers
         let healthy_nodes = 1 + online_peers; // self is always healthy if running
@@ -797,7 +797,7 @@ impl AdminService {
         ];
 
         // Add peer nodes
-        let peers = self.peers.read().unwrap();
+        let peers = self.peers.read().expect("peers lock poisoned");
         for peer in peers.iter() {
             nodes.push(NodeInfo {
                 id: format!("{}{}", peer.id, peer.name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default()),

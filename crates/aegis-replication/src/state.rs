@@ -374,9 +374,9 @@ impl StateMachine {
 
 impl StateMachineBackend for StateMachine {
     fn apply(&self, command: &Command, index: u64) -> CommandResult {
-        let mut data = self.data.write().unwrap();
-        let mut last_applied = self.last_applied.write().unwrap();
-        let mut version = self.version.write().unwrap();
+        let mut data = self.data.write().expect("state machine data lock poisoned");
+        let mut last_applied = self.last_applied.write().expect("state machine last_applied lock poisoned");
+        let mut version = self.version.write().expect("state machine version lock poisoned");
 
         if index <= *last_applied {
             return CommandResult::error("Already applied", *last_applied);
@@ -388,27 +388,27 @@ impl StateMachineBackend for StateMachine {
     }
 
     fn get(&self, key: &str) -> Option<Vec<u8>> {
-        let data = self.data.read().unwrap();
+        let data = self.data.read().expect("state machine data lock poisoned");
         data.get(key).cloned()
     }
 
     fn last_applied(&self) -> u64 {
-        *self.last_applied.read().unwrap()
+        *self.last_applied.read().expect("state machine last_applied lock poisoned")
     }
 
     fn version(&self) -> u64 {
-        *self.version.read().unwrap()
+        *self.version.read().expect("state machine version lock poisoned")
     }
 
     fn len(&self) -> usize {
-        let data = self.data.read().unwrap();
+        let data = self.data.read().expect("state machine data lock poisoned");
         data.len()
     }
 
     fn snapshot(&self) -> Snapshot {
-        let data = self.data.read().unwrap();
-        let last_applied = *self.last_applied.read().unwrap();
-        let version = *self.version.read().unwrap();
+        let data = self.data.read().expect("state machine data lock poisoned");
+        let last_applied = *self.last_applied.read().expect("state machine last_applied lock poisoned");
+        let version = *self.version.read().expect("state machine version lock poisoned");
 
         Snapshot {
             data: data.clone(),
@@ -418,9 +418,9 @@ impl StateMachineBackend for StateMachine {
     }
 
     fn restore(&self, snapshot: Snapshot) {
-        let mut data = self.data.write().unwrap();
-        let mut last_applied = self.last_applied.write().unwrap();
-        let mut version = self.version.write().unwrap();
+        let mut data = self.data.write().expect("state machine data lock poisoned");
+        let mut last_applied = self.last_applied.write().expect("state machine last_applied lock poisoned");
+        let mut version = self.version.write().expect("state machine version lock poisoned");
 
         *data = snapshot.data;
         *last_applied = snapshot.last_applied;
@@ -506,13 +506,13 @@ impl<F: DatabaseOperationHandler> DatabaseStateMachine<F> {
         match command.command_type {
             // Key-value operations use the cache
             CommandType::Get => {
-                let cache = self.kv_cache.read().unwrap();
+                let cache = self.kv_cache.read().expect("database state machine kv_cache lock poisoned");
                 let value = cache.get(&command.key).cloned();
                 CommandResult::success(value, index)
             }
             CommandType::Set => {
                 if let Some(ref value) = command.value {
-                    let mut cache = self.kv_cache.write().unwrap();
+                    let mut cache = self.kv_cache.write().expect("database state machine kv_cache lock poisoned");
                     cache.insert(command.key.clone(), value.clone());
                     CommandResult::success(None, index)
                 } else {
@@ -520,7 +520,7 @@ impl<F: DatabaseOperationHandler> DatabaseStateMachine<F> {
                 }
             }
             CommandType::Delete => {
-                let mut cache = self.kv_cache.write().unwrap();
+                let mut cache = self.kv_cache.write().expect("database state machine kv_cache lock poisoned");
                 let old = cache.remove(&command.key);
                 CommandResult::success(old, index)
             }
@@ -652,8 +652,8 @@ impl<F: DatabaseOperationHandler> DatabaseStateMachine<F> {
 
 impl<F: DatabaseOperationHandler> StateMachineBackend for DatabaseStateMachine<F> {
     fn apply(&self, command: &Command, index: u64) -> CommandResult {
-        let mut last_applied = self.last_applied.write().unwrap();
-        let mut version = self.version.write().unwrap();
+        let mut last_applied = self.last_applied.write().expect("database state machine last_applied lock poisoned");
+        let mut version = self.version.write().expect("database state machine version lock poisoned");
 
         if index <= *last_applied {
             return CommandResult::error("Already applied", *last_applied);
@@ -670,28 +670,28 @@ impl<F: DatabaseOperationHandler> StateMachineBackend for DatabaseStateMachine<F
     }
 
     fn get(&self, key: &str) -> Option<Vec<u8>> {
-        let cache = self.kv_cache.read().unwrap();
+        let cache = self.kv_cache.read().expect("database state machine kv_cache lock poisoned");
         cache.get(key).cloned()
     }
 
     fn last_applied(&self) -> u64 {
-        *self.last_applied.read().unwrap()
+        *self.last_applied.read().expect("database state machine last_applied lock poisoned")
     }
 
     fn version(&self) -> u64 {
-        *self.version.read().unwrap()
+        *self.version.read().expect("database state machine version lock poisoned")
     }
 
     fn len(&self) -> usize {
-        let cache = self.kv_cache.read().unwrap();
+        let cache = self.kv_cache.read().expect("database state machine kv_cache lock poisoned");
         cache.len()
     }
 
     fn snapshot(&self) -> Snapshot {
         // For database state machine, snapshot includes both KV cache and database state
-        let cache = self.kv_cache.read().unwrap();
-        let last_applied = *self.last_applied.read().unwrap();
-        let version = *self.version.read().unwrap();
+        let cache = self.kv_cache.read().expect("database state machine kv_cache lock poisoned");
+        let last_applied = *self.last_applied.read().expect("database state machine last_applied lock poisoned");
+        let version = *self.version.read().expect("database state machine version lock poisoned");
 
         // Try to include database snapshot in the data
         let mut data = cache.clone();
@@ -707,9 +707,9 @@ impl<F: DatabaseOperationHandler> StateMachineBackend for DatabaseStateMachine<F
     }
 
     fn restore(&self, snapshot: Snapshot) {
-        let mut cache = self.kv_cache.write().unwrap();
-        let mut last_applied = self.last_applied.write().unwrap();
-        let mut version = self.version.write().unwrap();
+        let mut cache = self.kv_cache.write().expect("database state machine kv_cache lock poisoned");
+        let mut last_applied = self.last_applied.write().expect("database state machine last_applied lock poisoned");
+        let mut version = self.version.write().expect("database state machine version lock poisoned");
 
         // Restore database state if present
         if let Some(db_snapshot) = snapshot.data.get("__db_snapshot__") {

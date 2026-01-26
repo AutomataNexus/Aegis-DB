@@ -568,12 +568,11 @@ impl WriteAheadLog {
                     if let Some(num_str) = name.strip_prefix("wal_").and_then(|s| s.strip_suffix(".log")) {
                         if let Ok(num) = num_str.parse::<u64>() {
                             // Keep at least the current segment and one before
-                            if num + 2 < current_segment {
-                                if std::fs::remove_file(&path).is_ok() {
+                            if num + 2 < current_segment
+                                && std::fs::remove_file(&path).is_ok() {
                                     removed += 1;
                                     tracing::debug!("Removed old WAL segment: {}", name);
                                 }
-                            }
                         }
                     }
                 }
@@ -636,9 +635,7 @@ impl WriteAheadLog {
                         // Parse checkpoint data to find active transactions
                         if let Ok(checkpoint) = serde_json::from_slice::<CheckpointData>(&record.data) {
                             for tx_id in checkpoint.active_transactions {
-                                if !tx_status.contains_key(&tx_id) {
-                                    tx_status.insert(tx_id, false);
-                                }
+                                tx_status.entry(tx_id).or_insert(false);
                             }
                         }
                     }
@@ -755,7 +752,7 @@ mod tests {
     fn test_log_record_roundtrip() {
         let record = LogRecord::begin(Lsn(1), TransactionId(100));
         let bytes = record.to_bytes();
-        let restored = LogRecord::from_bytes(&bytes).unwrap();
+        let restored = LogRecord::from_bytes(&bytes).expect("failed to deserialize log record");
 
         assert_eq!(restored.lsn, Lsn(1));
         assert_eq!(restored.tx_id, TransactionId(100));
@@ -775,7 +772,7 @@ mod tests {
         );
 
         let bytes = record.to_bytes();
-        let restored = LogRecord::from_bytes(&bytes).unwrap();
+        let restored = LogRecord::from_bytes(&bytes).expect("failed to deserialize log record with data");
 
         assert_eq!(restored.lsn, Lsn(5));
         assert_eq!(restored.prev_lsn, Some(Lsn(4)));
@@ -785,41 +782,41 @@ mod tests {
 
     #[test]
     fn test_wal_operations() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let wal = WriteAheadLog::new(temp_dir.path().to_path_buf(), false).unwrap();
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let wal = WriteAheadLog::new(temp_dir.path().to_path_buf(), false).expect("failed to create WAL");
 
         let tx_id = TransactionId(1);
-        let begin_lsn = wal.log_begin(tx_id).unwrap();
+        let begin_lsn = wal.log_begin(tx_id).expect("failed to log begin");
         assert_eq!(begin_lsn, Lsn(1));
 
         let insert_lsn = wal
             .log_insert(tx_id, Some(begin_lsn), PageId(1), Bytes::from("data"))
-            .unwrap();
+            .expect("failed to log insert");
         assert_eq!(insert_lsn, Lsn(2));
 
-        let commit_lsn = wal.log_commit(tx_id, insert_lsn).unwrap();
+        let commit_lsn = wal.log_commit(tx_id, insert_lsn).expect("failed to log commit");
         assert_eq!(commit_lsn, Lsn(3));
     }
 
     #[test]
     fn test_wal_recovery_committed_transaction() {
-        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let wal_dir = temp_dir.path().to_path_buf();
 
         // Create WAL and write a committed transaction
         {
-            let wal = WriteAheadLog::new(wal_dir.clone(), true).unwrap();
+            let wal = WriteAheadLog::new(wal_dir.clone(), true).expect("failed to create WAL");
             let tx_id = TransactionId(1);
 
-            let begin_lsn = wal.log_begin(tx_id).unwrap();
+            let begin_lsn = wal.log_begin(tx_id).expect("failed to log begin");
             let insert_lsn = wal
                 .log_insert(tx_id, Some(begin_lsn), PageId(1), Bytes::from("test data"))
-                .unwrap();
-            wal.log_commit(tx_id, insert_lsn).unwrap();
+                .expect("failed to log insert");
+            wal.log_commit(tx_id, insert_lsn).expect("failed to log commit");
         }
 
         // Recover and verify
-        let (wal, recovery) = WriteAheadLog::open_and_recover(wal_dir, true).unwrap();
+        let (wal, recovery) = WriteAheadLog::open_and_recover(wal_dir, true).expect("failed to recover WAL");
         assert_eq!(recovery.records_processed, 3);
         assert_eq!(recovery.redo_records.len(), 1); // One insert record
         assert!(recovery.incomplete_transactions.is_empty());
@@ -832,22 +829,22 @@ mod tests {
 
     #[test]
     fn test_wal_recovery_incomplete_transaction() {
-        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let wal_dir = temp_dir.path().to_path_buf();
 
         // Create WAL with an incomplete transaction
         {
-            let wal = WriteAheadLog::new(wal_dir.clone(), true).unwrap();
+            let wal = WriteAheadLog::new(wal_dir.clone(), true).expect("failed to create WAL");
             let tx_id = TransactionId(1);
 
-            wal.log_begin(tx_id).unwrap();
-            wal.log_insert(tx_id, None, PageId(1), Bytes::from("uncommitted")).unwrap();
-            wal.flush().unwrap();
+            wal.log_begin(tx_id).expect("failed to log begin");
+            wal.log_insert(tx_id, None, PageId(1), Bytes::from("uncommitted")).expect("failed to log insert");
+            wal.flush().expect("failed to flush WAL");
             // No commit - transaction is incomplete
         }
 
         // Recover and verify
-        let (_wal, recovery) = WriteAheadLog::open_and_recover(wal_dir, true).unwrap();
+        let (_wal, recovery) = WriteAheadLog::open_and_recover(wal_dir, true).expect("failed to recover WAL");
         assert_eq!(recovery.records_processed, 2);
         assert!(recovery.redo_records.is_empty()); // No redo for uncommitted
         assert!(recovery.incomplete_transactions.contains(&TransactionId(1)));
@@ -855,18 +852,18 @@ mod tests {
 
     #[test]
     fn test_wal_checkpoint() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let wal = WriteAheadLog::new(temp_dir.path().to_path_buf(), true).unwrap();
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let wal = WriteAheadLog::new(temp_dir.path().to_path_buf(), true).expect("failed to create WAL");
 
         // Write some transactions
         let tx1 = TransactionId(1);
-        let begin1 = wal.log_begin(tx1).unwrap();
-        wal.log_insert(tx1, Some(begin1), PageId(1), Bytes::from("data1")).unwrap();
+        let begin1 = wal.log_begin(tx1).expect("failed to log begin");
+        wal.log_insert(tx1, Some(begin1), PageId(1), Bytes::from("data1")).expect("failed to log insert");
 
         // Create checkpoint
         let checkpoint_lsn = wal
             .log_checkpoint(vec![tx1], vec![PageId(1)])
-            .unwrap();
+            .expect("failed to log checkpoint");
 
         assert!(checkpoint_lsn.0 > 0);
         assert_eq!(wal.checkpoint_lsn(), checkpoint_lsn);
@@ -874,31 +871,31 @@ mod tests {
 
     #[test]
     fn test_wal_recovery_with_checkpoint() {
-        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let wal_dir = temp_dir.path().to_path_buf();
 
         // Create WAL with checkpoint
         {
-            let wal = WriteAheadLog::new(wal_dir.clone(), true).unwrap();
+            let wal = WriteAheadLog::new(wal_dir.clone(), true).expect("failed to create WAL");
 
             // Transaction 1 - committed before checkpoint
             let tx1 = TransactionId(1);
-            let begin1 = wal.log_begin(tx1).unwrap();
-            let insert1 = wal.log_insert(tx1, Some(begin1), PageId(1), Bytes::from("data1")).unwrap();
-            wal.log_commit(tx1, insert1).unwrap();
+            let begin1 = wal.log_begin(tx1).expect("failed to log begin for tx1");
+            let insert1 = wal.log_insert(tx1, Some(begin1), PageId(1), Bytes::from("data1")).expect("failed to log insert for tx1");
+            wal.log_commit(tx1, insert1).expect("failed to log commit for tx1");
 
             // Checkpoint
-            wal.log_checkpoint(vec![], vec![]).unwrap();
+            wal.log_checkpoint(vec![], vec![]).expect("failed to log checkpoint");
 
             // Transaction 2 - committed after checkpoint
             let tx2 = TransactionId(2);
-            let begin2 = wal.log_begin(tx2).unwrap();
-            let insert2 = wal.log_insert(tx2, Some(begin2), PageId(2), Bytes::from("data2")).unwrap();
-            wal.log_commit(tx2, insert2).unwrap();
+            let begin2 = wal.log_begin(tx2).expect("failed to log begin for tx2");
+            let insert2 = wal.log_insert(tx2, Some(begin2), PageId(2), Bytes::from("data2")).expect("failed to log insert for tx2");
+            wal.log_commit(tx2, insert2).expect("failed to log commit for tx2");
         }
 
         // Recover
-        let (_wal, recovery) = WriteAheadLog::open_and_recover(wal_dir, true).unwrap();
+        let (_wal, recovery) = WriteAheadLog::open_and_recover(wal_dir, true).expect("failed to recover WAL");
 
         // Both transactions should have redo records
         assert_eq!(recovery.redo_records.len(), 2);
@@ -907,34 +904,34 @@ mod tests {
 
     #[test]
     fn test_wal_multiple_transactions() {
-        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let wal_dir = temp_dir.path().to_path_buf();
 
         {
-            let wal = WriteAheadLog::new(wal_dir.clone(), true).unwrap();
+            let wal = WriteAheadLog::new(wal_dir.clone(), true).expect("failed to create WAL");
 
             // Transaction 1 - committed
             let tx1 = TransactionId(1);
-            let begin1 = wal.log_begin(tx1).unwrap();
-            let insert1 = wal.log_insert(tx1, Some(begin1), PageId(1), Bytes::from("tx1")).unwrap();
-            wal.log_commit(tx1, insert1).unwrap();
+            let begin1 = wal.log_begin(tx1).expect("failed to log begin for tx1");
+            let insert1 = wal.log_insert(tx1, Some(begin1), PageId(1), Bytes::from("tx1")).expect("failed to log insert for tx1");
+            wal.log_commit(tx1, insert1).expect("failed to log commit for tx1");
 
             // Transaction 2 - aborted
             let tx2 = TransactionId(2);
-            let begin2 = wal.log_begin(tx2).unwrap();
-            let insert2 = wal.log_insert(tx2, Some(begin2), PageId(2), Bytes::from("tx2")).unwrap();
-            wal.log_abort(tx2, insert2).unwrap();
+            let begin2 = wal.log_begin(tx2).expect("failed to log begin for tx2");
+            let insert2 = wal.log_insert(tx2, Some(begin2), PageId(2), Bytes::from("tx2")).expect("failed to log insert for tx2");
+            wal.log_abort(tx2, insert2).expect("failed to log abort for tx2");
 
             // Transaction 3 - committed
             let tx3 = TransactionId(3);
-            let begin3 = wal.log_begin(tx3).unwrap();
-            let insert3 = wal.log_insert(tx3, Some(begin3), PageId(3), Bytes::from("tx3")).unwrap();
-            wal.log_commit(tx3, insert3).unwrap();
+            let begin3 = wal.log_begin(tx3).expect("failed to log begin for tx3");
+            let insert3 = wal.log_insert(tx3, Some(begin3), PageId(3), Bytes::from("tx3")).expect("failed to log insert for tx3");
+            wal.log_commit(tx3, insert3).expect("failed to log commit for tx3");
 
-            wal.flush().unwrap();
+            wal.flush().expect("failed to flush WAL");
         }
 
-        let (_wal, recovery) = WriteAheadLog::open_and_recover(wal_dir, true).unwrap();
+        let (_wal, recovery) = WriteAheadLog::open_and_recover(wal_dir, true).expect("failed to recover WAL");
 
         // Only tx1 and tx3 should be in redo (tx2 was aborted)
         assert_eq!(recovery.redo_records.len(), 2);
