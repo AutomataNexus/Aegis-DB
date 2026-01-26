@@ -249,11 +249,11 @@ mod tests {
 
         let tier = config.tier_for_age(Duration::hours(12));
         assert!(tier.is_some());
-        assert_eq!(tier.unwrap().name, "raw");
+        assert_eq!(tier.expect("tier should exist for 12 hours").name, "raw");
 
         let tier = config.tier_for_age(Duration::days(3));
         assert!(tier.is_some());
-        assert_eq!(tier.unwrap().name, "5min");
+        assert_eq!(tier.expect("tier should exist for 3 days").name, "5min");
     }
 
     #[test]

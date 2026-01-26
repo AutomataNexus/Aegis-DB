@@ -72,8 +72,10 @@ impl ClusterConfig {
 
 /// State of the cluster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ClusterState {
     /// Cluster is initializing.
+    #[default]
     Initializing,
     /// Cluster is forming (waiting for quorum).
     Forming,
@@ -87,11 +89,6 @@ pub enum ClusterState {
     ShuttingDown,
 }
 
-impl Default for ClusterState {
-    fn default() -> Self {
-        Self::Initializing
-    }
-}
 
 // =============================================================================
 // Membership Change
@@ -156,12 +153,12 @@ impl Cluster {
 
     /// Get the current cluster state.
     pub fn state(&self) -> ClusterState {
-        *self.state.read().unwrap()
+        *self.state.read().expect("cluster state lock poisoned")
     }
 
     /// Set the cluster state.
     pub fn set_state(&self, state: ClusterState) {
-        *self.state.write().unwrap() = state;
+        *self.state.write().expect("cluster state lock poisoned") = state;
     }
 
     /// Get the local node ID.
@@ -171,12 +168,12 @@ impl Cluster {
 
     /// Get the current leader ID.
     pub fn leader_id(&self) -> Option<NodeId> {
-        self.leader_id.read().unwrap().clone()
+        self.leader_id.read().expect("cluster leader_id lock poisoned").clone()
     }
 
     /// Set the leader ID.
     pub fn set_leader(&self, leader_id: Option<NodeId>) {
-        *self.leader_id.write().unwrap() = leader_id;
+        *self.leader_id.write().expect("cluster leader_id lock poisoned") = leader_id;
     }
 
     /// Check if this node is the leader.
@@ -192,7 +189,7 @@ impl Cluster {
 
     /// Add a node to the cluster.
     pub fn add_node(&self, node: NodeInfo) -> Result<(), ClusterError> {
-        let mut nodes = self.nodes.write().unwrap();
+        let mut nodes = self.nodes.write().expect("cluster nodes lock poisoned");
 
         if nodes.len() >= self.config.max_nodes {
             return Err(ClusterError::MaxNodesReached);
@@ -215,7 +212,7 @@ impl Cluster {
             return Err(ClusterError::CannotRemoveLocalNode);
         }
 
-        let mut nodes = self.nodes.write().unwrap();
+        let mut nodes = self.nodes.write().expect("cluster nodes lock poisoned");
         let node = nodes
             .remove(node_id)
             .ok_or_else(|| ClusterError::NodeNotFound(node_id.clone()))?;
@@ -227,29 +224,29 @@ impl Cluster {
 
     /// Get a node by ID.
     pub fn get_node(&self, node_id: &NodeId) -> Option<NodeInfo> {
-        self.nodes.read().unwrap().get(node_id).cloned()
+        self.nodes.read().expect("cluster nodes lock poisoned").get(node_id).cloned()
     }
 
     /// Get all nodes in the cluster.
     pub fn nodes(&self) -> Vec<NodeInfo> {
-        self.nodes.read().unwrap().values().cloned().collect()
+        self.nodes.read().expect("cluster nodes lock poisoned").values().cloned().collect()
     }
 
     /// Get all node IDs.
     pub fn node_ids(&self) -> Vec<NodeId> {
-        self.nodes.read().unwrap().keys().cloned().collect()
+        self.nodes.read().expect("cluster nodes lock poisoned").keys().cloned().collect()
     }
 
     /// Get the number of nodes.
     pub fn node_count(&self) -> usize {
-        self.nodes.read().unwrap().len()
+        self.nodes.read().expect("cluster nodes lock poisoned").len()
     }
 
     /// Get peer nodes (excluding local).
     pub fn peers(&self) -> Vec<NodeInfo> {
         self.nodes
             .read()
-            .unwrap()
+            .expect("cluster nodes lock poisoned")
             .values()
             .filter(|n| n.id != self.local_node_id)
             .cloned()
@@ -260,7 +257,7 @@ impl Cluster {
     pub fn peer_ids(&self) -> Vec<NodeId> {
         self.nodes
             .read()
-            .unwrap()
+            .expect("cluster nodes lock poisoned")
             .keys()
             .filter(|id| *id != &self.local_node_id)
             .cloned()
@@ -274,11 +271,11 @@ impl Cluster {
     /// Update node health.
     pub fn update_health(&self, health: NodeHealth) {
         let node_id = health.node_id.clone();
-        let mut checks = self.health_checks.write().unwrap();
+        let mut checks = self.health_checks.write().expect("cluster health_checks lock poisoned");
         checks.insert(node_id.clone(), health.clone());
         drop(checks);
 
-        let mut nodes = self.nodes.write().unwrap();
+        let mut nodes = self.nodes.write().expect("cluster nodes lock poisoned");
         if let Some(node) = nodes.get_mut(&node_id) {
             if health.healthy {
                 node.mark_healthy();
@@ -293,12 +290,12 @@ impl Cluster {
 
     /// Get health for a node.
     pub fn get_health(&self, node_id: &NodeId) -> Option<NodeHealth> {
-        self.health_checks.read().unwrap().get(node_id).cloned()
+        self.health_checks.read().expect("cluster health_checks lock poisoned").get(node_id).cloned()
     }
 
     /// Process heartbeat from a node.
     pub fn heartbeat(&self, node_id: &NodeId) {
-        let mut nodes = self.nodes.write().unwrap();
+        let mut nodes = self.nodes.write().expect("cluster nodes lock poisoned");
         if let Some(node) = nodes.get_mut(node_id) {
             node.heartbeat();
         }
@@ -309,7 +306,7 @@ impl Cluster {
         let timeout_ms = self.config.failure_timeout.as_millis() as u64;
         let mut failed = Vec::new();
 
-        let mut nodes = self.nodes.write().unwrap();
+        let mut nodes = self.nodes.write().expect("cluster nodes lock poisoned");
         for node in nodes.values_mut() {
             if node.id == self.local_node_id {
                 continue;
@@ -340,7 +337,7 @@ impl Cluster {
 
     /// Update the cluster state based on node health.
     fn update_cluster_state(&self) {
-        let nodes = self.nodes.read().unwrap();
+        let nodes = self.nodes.read().expect("cluster nodes lock poisoned");
         let total = nodes.len();
         let healthy = nodes
             .values()
@@ -366,7 +363,7 @@ impl Cluster {
 
     /// Check if cluster has quorum.
     pub fn has_quorum(&self) -> bool {
-        let nodes = self.nodes.read().unwrap();
+        let nodes = self.nodes.read().expect("cluster nodes lock poisoned");
         let healthy = nodes
             .values()
             .filter(|n| n.status == NodeStatus::Healthy)
@@ -376,7 +373,7 @@ impl Cluster {
 
     /// Get cluster statistics.
     pub fn stats(&self) -> ClusterStats {
-        let nodes = self.nodes.read().unwrap();
+        let nodes = self.nodes.read().expect("cluster nodes lock poisoned");
         let total = nodes.len();
         let healthy = nodes
             .values()
@@ -411,7 +408,7 @@ impl Cluster {
     pub fn voting_members(&self) -> Vec<NodeId> {
         self.nodes
             .read()
-            .unwrap()
+            .expect("cluster nodes lock poisoned")
             .values()
             .filter(|n| n.is_available())
             .map(|n| n.id.clone())
@@ -420,7 +417,7 @@ impl Cluster {
 
     /// Update node role.
     pub fn set_node_role(&self, node_id: &NodeId, role: NodeRole) {
-        let mut nodes = self.nodes.write().unwrap();
+        let mut nodes = self.nodes.write().expect("cluster nodes lock poisoned");
         if let Some(node) = nodes.get_mut(node_id) {
             node.role = role;
         }

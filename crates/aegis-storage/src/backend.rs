@@ -158,7 +158,7 @@ impl StorageBackend for MemoryBackend {
         let block = blocks
             .get(&id)
             .cloned()
-            .ok_or_else(|| AegisError::BlockNotFound(id.0))?;
+            .ok_or(AegisError::BlockNotFound(id.0))?;
 
         self.stats.write().read_ops += 1;
         Ok(block)
@@ -428,7 +428,7 @@ impl LocalBackend {
 
         // Add to pending operations
         let mut pending = self.pending_ops.write();
-        let ops = pending.entry(tx_id).or_insert_with(Vec::new);
+        let ops = pending.entry(tx_id).or_default();
         ops.push(PendingOperation::Write {
             block_id,
             data: data.to_vec(),
@@ -455,7 +455,7 @@ impl LocalBackend {
 
         // Add to pending operations
         let mut pending = self.pending_ops.write();
-        let ops = pending.entry(tx_id).or_insert_with(Vec::new);
+        let ops = pending.entry(tx_id).or_default();
         ops.push(PendingOperation::Delete { block_id: id });
 
         Ok(())
@@ -775,8 +775,8 @@ mod tests {
         let data = Bytes::from("test data");
         let block = Block::new(BlockId(0), BlockType::TableData, data.clone());
 
-        let id = backend.write_block(block).await.unwrap();
-        let read_block = backend.read_block(id).await.unwrap();
+        let id = backend.write_block(block).await.expect("write_block should succeed");
+        let read_block = backend.read_block(id).await.expect("read_block should succeed");
 
         assert_eq!(read_block.data, data);
     }
@@ -786,70 +786,70 @@ mod tests {
         let backend = MemoryBackend::new();
         let block = Block::new(BlockId(0), BlockType::TableData, Bytes::from("test"));
 
-        let id = backend.write_block(block).await.unwrap();
-        assert!(backend.block_exists(id).await.unwrap());
+        let id = backend.write_block(block).await.expect("write_block should succeed");
+        assert!(backend.block_exists(id).await.expect("block_exists should succeed"));
 
-        backend.delete_block(id).await.unwrap();
-        assert!(!backend.block_exists(id).await.unwrap());
+        backend.delete_block(id).await.expect("delete_block should succeed");
+        assert!(!backend.block_exists(id).await.expect("block_exists should succeed after delete"));
     }
 
     #[tokio::test]
     async fn test_local_backend_write_read() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), false).unwrap();
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), false).expect("LocalBackend::new should succeed");
 
         let data = Bytes::from("test data");
         let block = Block::new(BlockId(0), BlockType::TableData, data.clone());
 
-        let id = backend.write_block(block).await.unwrap();
-        let read_block = backend.read_block(id).await.unwrap();
+        let id = backend.write_block(block).await.expect("write_block should succeed");
+        let read_block = backend.read_block(id).await.expect("read_block should succeed");
 
         assert_eq!(read_block.data, data);
     }
 
     #[tokio::test]
     async fn test_local_backend_transaction_commit() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), true).unwrap();
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), true).expect("LocalBackend::new should succeed");
 
         // Begin transaction
-        let tx_id = backend.begin_transaction().await.unwrap();
+        let tx_id = backend.begin_transaction().await.expect("begin_transaction should succeed");
 
         // Write block within transaction
         let data = Bytes::from("transactional data");
         let block = Block::new(BlockId(0), BlockType::TableData, data.clone());
-        let block_id = backend.write_block_in_tx(tx_id, block).await.unwrap();
+        let block_id = backend.write_block_in_tx(tx_id, block).await.expect("write_block_in_tx should succeed");
 
         // Block should not be on disk yet (only in pending)
         let path = backend.block_path(block_id);
         assert!(!path.exists());
 
         // Commit transaction
-        backend.commit_transaction(tx_id).await.unwrap();
+        backend.commit_transaction(tx_id).await.expect("commit_transaction should succeed");
 
         // Now block should be on disk
         assert!(path.exists());
 
         // Should be readable
-        let read_block = backend.read_block(block_id).await.unwrap();
+        let read_block = backend.read_block(block_id).await.expect("read_block should succeed");
         assert_eq!(read_block.data, data);
     }
 
     #[tokio::test]
     async fn test_local_backend_transaction_rollback() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), false).unwrap();
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), false).expect("LocalBackend::new should succeed");
 
         // Begin transaction
-        let tx_id = backend.begin_transaction().await.unwrap();
+        let tx_id = backend.begin_transaction().await.expect("begin_transaction should succeed");
 
         // Write block within transaction
         let data = Bytes::from("data to be rolled back");
         let block = Block::new(BlockId(0), BlockType::TableData, data);
-        let block_id = backend.write_block_in_tx(tx_id, block).await.unwrap();
+        let block_id = backend.write_block_in_tx(tx_id, block).await.expect("write_block_in_tx should succeed");
 
         // Rollback
-        backend.rollback_transaction(tx_id).await.unwrap();
+        backend.rollback_transaction(tx_id).await.expect("rollback_transaction should succeed");
 
         // Block should not exist
         let path = backend.block_path(block_id);
@@ -862,11 +862,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_backend_transaction_double_commit() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), false).unwrap();
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), false).expect("LocalBackend::new should succeed");
 
-        let tx_id = backend.begin_transaction().await.unwrap();
-        backend.commit_transaction(tx_id).await.unwrap();
+        let tx_id = backend.begin_transaction().await.expect("begin_transaction should succeed");
+        backend.commit_transaction(tx_id).await.expect("first commit_transaction should succeed");
 
         // Second commit should fail
         let result = backend.commit_transaction(tx_id).await;
@@ -875,11 +875,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_backend_transaction_commit_after_rollback() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), false).unwrap();
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), false).expect("LocalBackend::new should succeed");
 
-        let tx_id = backend.begin_transaction().await.unwrap();
-        backend.rollback_transaction(tx_id).await.unwrap();
+        let tx_id = backend.begin_transaction().await.expect("begin_transaction should succeed");
+        backend.rollback_transaction(tx_id).await.expect("rollback_transaction should succeed");
 
         // Commit after rollback should fail
         let result = backend.commit_transaction(tx_id).await;
@@ -888,19 +888,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_backend_multiple_blocks_in_tx() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), true).unwrap();
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let backend = LocalBackend::new(temp_dir.path().to_path_buf(), true).expect("LocalBackend::new should succeed");
 
-        let tx_id = backend.begin_transaction().await.unwrap();
+        let tx_id = backend.begin_transaction().await.expect("begin_transaction should succeed");
 
         // Write multiple blocks
         let block1 = Block::new(BlockId(0), BlockType::TableData, Bytes::from("block1"));
         let block2 = Block::new(BlockId(0), BlockType::TableData, Bytes::from("block2"));
         let block3 = Block::new(BlockId(0), BlockType::TableData, Bytes::from("block3"));
 
-        let id1 = backend.write_block_in_tx(tx_id, block1).await.unwrap();
-        let id2 = backend.write_block_in_tx(tx_id, block2).await.unwrap();
-        let id3 = backend.write_block_in_tx(tx_id, block3).await.unwrap();
+        let id1 = backend.write_block_in_tx(tx_id, block1).await.expect("write_block_in_tx block1 should succeed");
+        let id2 = backend.write_block_in_tx(tx_id, block2).await.expect("write_block_in_tx block2 should succeed");
+        let id3 = backend.write_block_in_tx(tx_id, block3).await.expect("write_block_in_tx block3 should succeed");
 
         // None should exist on disk yet
         assert!(!backend.block_path(id1).exists());
@@ -908,7 +908,7 @@ mod tests {
         assert!(!backend.block_path(id3).exists());
 
         // Commit
-        backend.commit_transaction(tx_id).await.unwrap();
+        backend.commit_transaction(tx_id).await.expect("commit_transaction should succeed");
 
         // All should exist now
         assert!(backend.block_path(id1).exists());
@@ -916,9 +916,9 @@ mod tests {
         assert!(backend.block_path(id3).exists());
 
         // Verify data
-        let read1 = backend.read_block(id1).await.unwrap();
-        let read2 = backend.read_block(id2).await.unwrap();
-        let read3 = backend.read_block(id3).await.unwrap();
+        let read1 = backend.read_block(id1).await.expect("read_block id1 should succeed");
+        let read2 = backend.read_block(id2).await.expect("read_block id2 should succeed");
+        let read3 = backend.read_block(id3).await.expect("read_block id3 should succeed");
 
         assert_eq!(read1.data, Bytes::from("block1"));
         assert_eq!(read2.data, Bytes::from("block2"));
@@ -927,30 +927,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_backend_recovery() {
-        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
         let data_path = temp_dir.path().to_path_buf();
 
         // Create backend and write some blocks
         {
-            let backend = LocalBackend::new(data_path.clone(), true).unwrap();
+            let backend = LocalBackend::new(data_path.clone(), true).expect("LocalBackend::new should succeed");
             let block1 = Block::new(BlockId(0), BlockType::TableData, Bytes::from("persistent1"));
             let block2 = Block::new(BlockId(0), BlockType::TableData, Bytes::from("persistent2"));
 
-            backend.write_block(block1).await.unwrap();
-            backend.write_block(block2).await.unwrap();
+            backend.write_block(block1).await.expect("write_block block1 should succeed");
+            backend.write_block(block2).await.expect("write_block block2 should succeed");
         }
 
         // Create new backend - should recover existing blocks
         {
-            let backend = LocalBackend::new(data_path, true).unwrap();
+            let backend = LocalBackend::new(data_path, true).expect("LocalBackend::new should succeed on recovery");
 
             // Next block ID should be 3 (after 1 and 2)
             let next_id = backend.next_block_id.load(Ordering::SeqCst);
             assert_eq!(next_id, 3);
 
             // Should be able to read existing blocks
-            let read1 = backend.read_block(BlockId(1)).await.unwrap();
-            let read2 = backend.read_block(BlockId(2)).await.unwrap();
+            let read1 = backend.read_block(BlockId(1)).await.expect("read_block BlockId(1) should succeed");
+            let read2 = backend.read_block(BlockId(2)).await.expect("read_block BlockId(2) should succeed");
 
             assert_eq!(read1.data, Bytes::from("persistent1"));
             assert_eq!(read2.data, Bytes::from("persistent2"));
@@ -962,10 +962,10 @@ mod tests {
         let backend = MemoryBackend::new();
 
         // Begin transaction
-        let tx_id = backend.begin_transaction().await.unwrap();
+        let tx_id = backend.begin_transaction().await.expect("begin_transaction should succeed");
 
         // Commit should succeed
-        backend.commit_transaction(tx_id).await.unwrap();
+        backend.commit_transaction(tx_id).await.expect("commit_transaction should succeed");
 
         // Second commit should fail (already committed)
         let result = backend.commit_transaction(tx_id).await;
@@ -981,13 +981,13 @@ mod tests {
         let backend = MemoryBackend::new();
 
         // Begin transaction
-        let tx_id = backend.begin_transaction().await.unwrap();
+        let tx_id = backend.begin_transaction().await.expect("begin_transaction should succeed");
 
         // Rollback should succeed
-        backend.rollback_transaction(tx_id).await.unwrap();
+        backend.rollback_transaction(tx_id).await.expect("first rollback_transaction should succeed");
 
         // Second rollback should be idempotent (succeed)
-        backend.rollback_transaction(tx_id).await.unwrap();
+        backend.rollback_transaction(tx_id).await.expect("second rollback_transaction should be idempotent");
 
         // Commit should fail (already rolled back)
         let result = backend.commit_transaction(tx_id).await;

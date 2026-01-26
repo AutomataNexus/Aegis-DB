@@ -71,7 +71,10 @@ impl StreamingEngine {
     /// Create a new channel.
     pub fn create_channel(&self, id: impl Into<ChannelId>) -> Result<(), EngineError> {
         let id = id.into();
-        let mut channels = self.channels.write().unwrap();
+        let mut channels = self
+            .channels
+            .write()
+            .expect("channels RwLock poisoned in create_channel");
 
         if channels.len() >= self.config.max_channels {
             return Err(EngineError::TooManyChannels);
@@ -94,7 +97,10 @@ impl StreamingEngine {
         config: ChannelConfig,
     ) -> Result<(), EngineError> {
         let id = id.into();
-        let mut channels = self.channels.write().unwrap();
+        let mut channels = self
+            .channels
+            .write()
+            .expect("channels RwLock poisoned in create_channel_with_config");
 
         if channels.len() >= self.config.max_channels {
             return Err(EngineError::TooManyChannels);
@@ -112,7 +118,10 @@ impl StreamingEngine {
 
     /// Delete a channel.
     pub fn delete_channel(&self, id: &ChannelId) -> Result<(), EngineError> {
-        let mut channels = self.channels.write().unwrap();
+        let mut channels = self
+            .channels
+            .write()
+            .expect("channels RwLock poisoned in delete_channel");
 
         if channels.remove(id).is_none() {
             return Err(EngineError::ChannelNotFound(id.clone()));
@@ -123,13 +132,19 @@ impl StreamingEngine {
 
     /// List all channels.
     pub fn list_channels(&self) -> Vec<ChannelId> {
-        let channels = self.channels.read().unwrap();
+        let channels = self
+            .channels
+            .read()
+            .expect("channels RwLock poisoned in list_channels");
         channels.keys().cloned().collect()
     }
 
     /// Check if a channel exists.
     pub fn channel_exists(&self, id: &ChannelId) -> bool {
-        let channels = self.channels.read().unwrap();
+        let channels = self
+            .channels
+            .read()
+            .expect("channels RwLock poisoned in channel_exists");
         channels.contains_key(id)
     }
 
@@ -139,7 +154,10 @@ impl StreamingEngine {
 
     /// Publish an event to a channel.
     pub fn publish(&self, channel_id: &ChannelId, event: Event) -> Result<usize, EngineError> {
-        let channels = self.channels.read().unwrap();
+        let channels = self
+            .channels
+            .read()
+            .expect("channels RwLock poisoned in publish");
         let channel = channels
             .get(channel_id)
             .ok_or_else(|| EngineError::ChannelNotFound(channel_id.clone()))?;
@@ -149,7 +167,10 @@ impl StreamingEngine {
         drop(channels);
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self
+                .stats
+                .write()
+                .expect("stats RwLock poisoned in publish");
             stats.events_published += 1;
         }
 
@@ -188,7 +209,10 @@ impl StreamingEngine {
         subscriber_id: impl Into<SubscriberId>,
     ) -> Result<ChannelReceiver, EngineError> {
         let subscriber_id = subscriber_id.into();
-        let channels = self.channels.read().unwrap();
+        let channels = self
+            .channels
+            .read()
+            .expect("channels RwLock poisoned in subscribe");
         let channel = channels
             .get(channel_id)
             .ok_or_else(|| EngineError::ChannelNotFound(channel_id.clone()))?;
@@ -202,7 +226,10 @@ impl StreamingEngine {
         self.ensure_subscriber(&subscriber_id, channel_id);
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self
+                .stats
+                .write()
+                .expect("stats RwLock poisoned in subscribe");
             stats.active_subscriptions += 1;
         }
 
@@ -217,7 +244,10 @@ impl StreamingEngine {
         filter: EventFilter,
     ) -> Result<ChannelReceiver, EngineError> {
         let subscriber_id = subscriber_id.into();
-        let channels = self.channels.read().unwrap();
+        let channels = self
+            .channels
+            .read()
+            .expect("channels RwLock poisoned in subscribe_with_filter");
         let channel = channels
             .get(channel_id)
             .ok_or_else(|| EngineError::ChannelNotFound(channel_id.clone()))?;
@@ -231,7 +261,10 @@ impl StreamingEngine {
         self.ensure_subscriber(&subscriber_id, channel_id);
 
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self
+                .stats
+                .write()
+                .expect("stats RwLock poisoned in subscribe_with_filter");
             stats.active_subscriptions += 1;
         }
 
@@ -240,17 +273,26 @@ impl StreamingEngine {
 
     /// Unsubscribe from a channel.
     pub fn unsubscribe(&self, channel_id: &ChannelId, subscriber_id: &SubscriberId) {
-        let channels = self.channels.read().unwrap();
+        let channels = self
+            .channels
+            .read()
+            .expect("channels RwLock poisoned in unsubscribe");
         if let Some(channel) = channels.get(channel_id) {
             channel.unsubscribe(subscriber_id);
         }
 
-        let mut stats = self.stats.write().unwrap();
+        let mut stats = self
+            .stats
+            .write()
+            .expect("stats RwLock poisoned in unsubscribe");
         stats.active_subscriptions = stats.active_subscriptions.saturating_sub(1);
     }
 
     fn ensure_subscriber(&self, subscriber_id: &SubscriberId, channel_id: &ChannelId) {
-        let mut subscribers = self.subscribers.write().unwrap();
+        let mut subscribers = self
+            .subscribers
+            .write()
+            .expect("subscribers RwLock poisoned in ensure_subscriber");
 
         let subscriber = subscribers
             .entry(subscriber_id.clone())
@@ -267,19 +309,28 @@ impl StreamingEngine {
 
     /// Get a subscriber.
     pub fn get_subscriber(&self, id: &SubscriberId) -> Option<Subscriber> {
-        let subscribers = self.subscribers.read().unwrap();
+        let subscribers = self
+            .subscribers
+            .read()
+            .expect("subscribers RwLock poisoned in get_subscriber");
         subscribers.get(id).cloned()
     }
 
     /// List all subscribers.
     pub fn list_subscribers(&self) -> Vec<SubscriberId> {
-        let subscribers = self.subscribers.read().unwrap();
+        let subscribers = self
+            .subscribers
+            .read()
+            .expect("subscribers RwLock poisoned in list_subscribers");
         subscribers.keys().cloned().collect()
     }
 
     /// Remove a subscriber.
     pub fn remove_subscriber(&self, id: &SubscriberId) {
-        let mut subscribers = self.subscribers.write().unwrap();
+        let mut subscribers = self
+            .subscribers
+            .write()
+            .expect("subscribers RwLock poisoned in remove_subscriber");
         subscribers.remove(id);
     }
 
@@ -289,7 +340,10 @@ impl StreamingEngine {
 
     /// Get recent events from a channel.
     pub fn get_history(&self, channel_id: &ChannelId, count: usize) -> Result<Vec<Event>, EngineError> {
-        let channels = self.channels.read().unwrap();
+        let channels = self
+            .channels
+            .read()
+            .expect("channels RwLock poisoned in get_history");
         let channel = channels
             .get(channel_id)
             .ok_or_else(|| EngineError::ChannelNotFound(channel_id.clone()))?;
@@ -303,7 +357,10 @@ impl StreamingEngine {
         channel_id: &ChannelId,
         timestamp: u64,
     ) -> Result<Vec<Event>, EngineError> {
-        let channels = self.channels.read().unwrap();
+        let channels = self
+            .channels
+            .read()
+            .expect("channels RwLock poisoned in get_history_after");
         let channel = channels
             .get(channel_id)
             .ok_or_else(|| EngineError::ChannelNotFound(channel_id.clone()))?;
@@ -317,19 +374,28 @@ impl StreamingEngine {
 
     /// Get engine statistics.
     pub fn stats(&self) -> EngineStats {
-        let stats = self.stats.read().unwrap();
+        let stats = self
+            .stats
+            .read()
+            .expect("stats RwLock poisoned in stats");
         stats.clone()
     }
 
     /// Reset statistics.
     pub fn reset_stats(&self) {
-        let mut stats = self.stats.write().unwrap();
+        let mut stats = self
+            .stats
+            .write()
+            .expect("stats RwLock poisoned in reset_stats");
         *stats = EngineStats::default();
     }
 
     /// Get channel statistics.
     pub fn channel_stats(&self, id: &ChannelId) -> Option<crate::channel::ChannelStats> {
-        let channels = self.channels.read().unwrap();
+        let channels = self
+            .channels
+            .read()
+            .expect("channels RwLock poisoned in channel_stats");
         channels.get(id).map(|c| c.stats())
     }
 }

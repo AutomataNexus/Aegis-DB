@@ -218,13 +218,13 @@ impl PartitionManager {
         let key = self.config.interval.partition_key(timestamp);
 
         {
-            let partitions = self.partitions.read().unwrap();
+            let partitions = self.partitions.read().expect("partitions lock poisoned");
             if let Some(partition) = partitions.get(&key) {
                 return Arc::clone(partition);
             }
         }
 
-        let mut partitions = self.partitions.write().unwrap();
+        let mut partitions = self.partitions.write().expect("partitions lock poisoned");
 
         if let Some(partition) = partitions.get(&key) {
             return Arc::clone(partition);
@@ -235,7 +235,7 @@ impl PartitionManager {
         let partition = Arc::new(RwLock::new(partition));
         partitions.insert(key.clone(), Arc::clone(&partition));
 
-        let mut current = self.current_partition.write().unwrap();
+        let mut current = self.current_partition.write().expect("current_partition lock poisoned");
         *current = Some(key);
 
         partition
@@ -247,11 +247,11 @@ impl PartitionManager {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Vec<Arc<RwLock<Partition>>> {
-        let partitions = self.partitions.read().unwrap();
+        let partitions = self.partitions.read().expect("partitions lock poisoned");
         partitions
             .values()
             .filter(|p| {
-                let partition = p.read().unwrap();
+                let partition = p.read().expect("partition lock poisoned");
                 partition.start_time < end && partition.end_time > start
             })
             .cloned()
@@ -260,9 +260,9 @@ impl PartitionManager {
 
     /// Seal old partitions.
     pub fn seal_old_partitions(&self, before: DateTime<Utc>) {
-        let partitions = self.partitions.read().unwrap();
+        let partitions = self.partitions.read().expect("partitions lock poisoned");
         for partition in partitions.values() {
-            let mut p = partition.write().unwrap();
+            let mut p = partition.write().expect("partition lock poisoned");
             if p.end_time <= before && !p.is_sealed {
                 p.seal();
             }
@@ -271,10 +271,10 @@ impl PartitionManager {
 
     /// Remove partitions older than a timestamp.
     pub fn remove_partitions_before(&self, before: DateTime<Utc>) -> usize {
-        let mut partitions = self.partitions.write().unwrap();
+        let mut partitions = self.partitions.write().expect("partitions lock poisoned");
         let to_remove: Vec<_> = partitions
             .iter()
-            .filter(|(_, p)| p.read().unwrap().end_time <= before)
+            .filter(|(_, p)| p.read().expect("partition lock poisoned").end_time <= before)
             .map(|(k, _)| k.clone())
             .collect();
 
@@ -287,13 +287,13 @@ impl PartitionManager {
 
     /// Get partition statistics.
     pub fn stats(&self) -> PartitionStats {
-        let partitions = self.partitions.read().unwrap();
+        let partitions = self.partitions.read().expect("partitions lock poisoned");
         let mut total_points = 0;
         let mut total_series = 0;
         let mut total_bytes = 0;
 
         for partition in partitions.values() {
-            let p = partition.read().unwrap();
+            let p = partition.read().expect("partition lock poisoned");
             total_points += p.point_count;
             total_series += p.series.len();
             total_bytes += p.size_bytes();
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn test_partition_interval_key() {
         let timestamp = DateTime::parse_from_rfc3339("2026-01-19T15:30:45Z")
-            .unwrap()
+            .expect("failed to parse test timestamp")
             .with_timezone(&Utc);
 
         assert_eq!(
@@ -368,7 +368,7 @@ mod tests {
         let partition = manager.get_partition(now);
 
         {
-            let mut p = partition.write().unwrap();
+            let mut p = partition.write().expect("partition lock poisoned");
             p.insert("test:host=a", DataPoint::now(1.0));
         }
 

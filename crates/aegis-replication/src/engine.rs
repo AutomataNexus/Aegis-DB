@@ -167,7 +167,7 @@ impl ReplicationEngine {
         let index = self
             .raft
             .propose(command.clone())
-            .map_err(|e| ReplicationError::ProposalFailed(e))?;
+            .map_err(ReplicationError::ProposalFailed)?;
 
         self.pending_proposals.push(PendingProposal {
             index,

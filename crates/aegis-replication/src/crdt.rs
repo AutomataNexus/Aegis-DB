@@ -467,7 +467,7 @@ impl<T: Clone + Eq + std::hash::Hash + Serialize + for<'de> Deserialize<'de>> OR
         let tag = UniqueTag::new(node_id, *counter);
         self.elements
             .entry(element)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(tag);
     }
 
@@ -510,7 +510,7 @@ impl<T: Clone + Eq + std::hash::Hash + Serialize + for<'de> Deserialize<'de>> OR
 impl<T: Clone + Eq + std::hash::Hash + Serialize + for<'de> Deserialize<'de>> CRDT for ORSet<T> {
     fn merge(&mut self, other: &Self) {
         for (element, tags) in &other.elements {
-            let our_tags = self.elements.entry(element.clone()).or_insert_with(HashSet::new);
+            let our_tags = self.elements.entry(element.clone()).or_default();
             for tag in tags {
                 our_tags.insert(tag.clone());
             }
@@ -549,7 +549,7 @@ impl<
     pub fn set(&mut self, key: K, value: V, node_id: &NodeId) {
         self.entries
             .entry(key)
-            .or_insert_with(LWWRegister::new)
+            .or_default()
             .set(value, node_id);
     }
 
@@ -602,7 +602,7 @@ impl<
         for (key, register) in &other.entries {
             self.entries
                 .entry(key.clone())
-                .or_insert_with(LWWRegister::new)
+                .or_default()
                 .merge(register);
         }
     }
