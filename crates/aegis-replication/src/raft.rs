@@ -7,7 +7,7 @@
 
 use crate::log::{LogEntry, LogIndex, ReplicatedLog, Term};
 use crate::node::{NodeId, NodeRole};
-use crate::state::{Command, CommandResult, Snapshot, StateMachine};
+use crate::state::{Command, CommandResult, Snapshot, StateMachine, StateMachineBackend};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -171,13 +171,15 @@ struct PendingSnapshot {
 }
 
 /// A node in the Raft cluster.
+/// Supports pluggable state machine backends for flexible storage integration.
 pub struct RaftNode {
     id: NodeId,
     config: RaftConfig,
     state: RwLock<RaftState>,
     role: RwLock<NodeRole>,
     log: Arc<ReplicatedLog>,
-    state_machine: Arc<StateMachine>,
+    /// The replicated state machine - can be any implementation of StateMachineBackend.
+    state_machine: Arc<dyn StateMachineBackend>,
     peers: RwLock<HashSet<NodeId>>,
     leader_id: RwLock<Option<NodeId>>,
     next_index: RwLock<HashMap<NodeId, LogIndex>>,
@@ -191,15 +193,25 @@ pub struct RaftNode {
 }
 
 impl RaftNode {
-    /// Create a new Raft node.
+    /// Create a new Raft node with the default in-memory state machine.
     pub fn new(id: impl Into<NodeId>, config: RaftConfig) -> Self {
+        Self::with_state_machine(id, config, Arc::new(StateMachine::new()))
+    }
+
+    /// Create a new Raft node with a custom state machine backend.
+    /// Use this to integrate Raft with your storage layer.
+    pub fn with_state_machine(
+        id: impl Into<NodeId>,
+        config: RaftConfig,
+        state_machine: Arc<dyn StateMachineBackend>,
+    ) -> Self {
         Self {
             id: id.into(),
             config,
             state: RwLock::new(RaftState::default()),
             role: RwLock::new(NodeRole::Follower),
             log: Arc::new(ReplicatedLog::new()),
-            state_machine: Arc::new(StateMachine::new()),
+            state_machine,
             peers: RwLock::new(HashSet::new()),
             leader_id: RwLock::new(None),
             next_index: RwLock::new(HashMap::new()),
@@ -640,8 +652,8 @@ impl RaftNode {
     }
 
     /// Get the state machine.
-    pub fn state_machine(&self) -> &StateMachine {
-        &self.state_machine
+    pub fn state_machine(&self) -> &dyn StateMachineBackend {
+        self.state_machine.as_ref()
     }
 
     // =========================================================================
