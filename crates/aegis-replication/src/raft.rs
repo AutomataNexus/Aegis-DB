@@ -7,11 +7,14 @@
 
 use crate::log::{LogEntry, LogIndex, ReplicatedLog, Term};
 use crate::node::{NodeId, NodeRole};
-use crate::state::{Command, CommandResult, StateMachine};
+use crate::state::{Command, CommandResult, Snapshot, StateMachine};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+
+/// Default chunk size for snapshot transfers (64KB).
+const SNAPSHOT_CHUNK_SIZE: usize = 64 * 1024;
 
 // =============================================================================
 // Raft Configuration
@@ -152,6 +155,21 @@ pub struct InstallSnapshotResponse {
 // Raft Node
 // =============================================================================
 
+/// Snapshot metadata for tracking snapshot state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotMetadata {
+    pub last_included_index: LogIndex,
+    pub last_included_term: Term,
+    pub size: u64,
+}
+
+/// In-progress snapshot being received from leader.
+struct PendingSnapshot {
+    metadata: SnapshotMetadata,
+    data: Vec<u8>,
+    offset: u64,
+}
+
 /// A node in the Raft cluster.
 pub struct RaftNode {
     id: NodeId,
@@ -166,6 +184,10 @@ pub struct RaftNode {
     match_index: RwLock<HashMap<NodeId, LogIndex>>,
     last_heartbeat: RwLock<Instant>,
     votes_received: RwLock<HashSet<NodeId>>,
+    /// Current snapshot metadata (if a snapshot exists)
+    snapshot_metadata: RwLock<Option<SnapshotMetadata>>,
+    /// In-progress snapshot being received
+    pending_snapshot: RwLock<Option<PendingSnapshot>>,
 }
 
 impl RaftNode {
@@ -184,6 +206,8 @@ impl RaftNode {
             match_index: RwLock::new(HashMap::new()),
             last_heartbeat: RwLock::new(Instant::now()),
             votes_received: RwLock::new(HashSet::new()),
+            snapshot_metadata: RwLock::new(None),
+            pending_snapshot: RwLock::new(None),
         }
     }
 
@@ -619,6 +643,242 @@ impl RaftNode {
     pub fn state_machine(&self) -> &StateMachine {
         &self.state_machine
     }
+
+    // =========================================================================
+    // Snapshot Operations
+    // =========================================================================
+
+    /// Check if a snapshot should be taken based on log size.
+    pub fn should_snapshot(&self) -> bool {
+        let log_size = self.log.len() as u64;
+        log_size >= self.config.snapshot_threshold
+    }
+
+    /// Take a snapshot of the current state and compact the log.
+    /// Returns the snapshot metadata if successful.
+    pub fn take_snapshot(&self) -> Option<SnapshotMetadata> {
+        let state = self.state.read().unwrap();
+        let last_applied = state.last_applied;
+
+        if last_applied == 0 {
+            return None;
+        }
+
+        // Get the term of the last applied entry
+        let last_applied_term = self.log.term_at(last_applied)?;
+
+        // Take snapshot of state machine
+        let snapshot = self.state_machine.snapshot();
+        let snapshot_bytes = snapshot.to_bytes();
+        let size = snapshot_bytes.len() as u64;
+
+        // Compact the log up to last_applied
+        self.log.compact(last_applied, last_applied_term);
+
+        let metadata = SnapshotMetadata {
+            last_included_index: last_applied,
+            last_included_term: last_applied_term,
+            size,
+        };
+
+        *self.snapshot_metadata.write().unwrap() = Some(metadata.clone());
+        Some(metadata)
+    }
+
+    /// Get the current snapshot data (for sending to followers).
+    pub fn get_snapshot_data(&self) -> Option<(SnapshotMetadata, Vec<u8>)> {
+        let metadata = self.snapshot_metadata.read().unwrap().clone()?;
+        let snapshot = self.state_machine.snapshot();
+        let data = snapshot.to_bytes();
+        Some((metadata, data))
+    }
+
+    /// Create an InstallSnapshot request for a lagging peer.
+    /// Returns None if no snapshot is available or peer doesn't need it.
+    pub fn create_install_snapshot(
+        &self,
+        peer_id: &NodeId,
+        offset: u64,
+    ) -> Option<InstallSnapshotRequest> {
+        if !self.is_leader() {
+            return None;
+        }
+
+        let next_index = *self.next_index.read().unwrap().get(peer_id)?;
+        let (metadata, data) = self.get_snapshot_data()?;
+
+        // Only send snapshot if peer needs entries before our snapshot
+        if next_index > metadata.last_included_index {
+            return None;
+        }
+
+        let term = self.current_term();
+
+        // Calculate chunk boundaries
+        let start = offset as usize;
+        let end = std::cmp::min(start + SNAPSHOT_CHUNK_SIZE, data.len());
+        let chunk = data[start..end].to_vec();
+        let done = end >= data.len();
+
+        Some(InstallSnapshotRequest {
+            term,
+            leader_id: self.id.clone(),
+            last_included_index: metadata.last_included_index,
+            last_included_term: metadata.last_included_term,
+            offset,
+            data: chunk,
+            done,
+        })
+    }
+
+    /// Handle an InstallSnapshot request from the leader.
+    pub fn handle_install_snapshot(
+        &self,
+        request: &InstallSnapshotRequest,
+    ) -> InstallSnapshotResponse {
+        let mut state = self.state.write().unwrap();
+
+        // Reply immediately if term < currentTerm
+        if request.term < state.current_term {
+            return InstallSnapshotResponse {
+                term: state.current_term,
+            };
+        }
+
+        // Update term if necessary
+        if request.term > state.current_term {
+            state.current_term = request.term;
+            state.voted_for = None;
+            *self.role.write().unwrap() = NodeRole::Follower;
+        }
+
+        // Update leader and reset heartbeat
+        *self.leader_id.write().unwrap() = Some(request.leader_id.clone());
+        self.reset_heartbeat();
+
+        let mut pending = self.pending_snapshot.write().unwrap();
+
+        // If offset is 0, create a new pending snapshot
+        if request.offset == 0 {
+            *pending = Some(PendingSnapshot {
+                metadata: SnapshotMetadata {
+                    last_included_index: request.last_included_index,
+                    last_included_term: request.last_included_term,
+                    size: 0, // Will be updated when done
+                },
+                data: Vec::new(),
+                offset: 0,
+            });
+        }
+
+        // Validate we have a pending snapshot and offset matches
+        if let Some(ref mut snapshot) = *pending {
+            if request.offset != snapshot.offset {
+                // Offset mismatch - reset and wait for offset 0
+                *pending = None;
+                return InstallSnapshotResponse {
+                    term: state.current_term,
+                };
+            }
+
+            // Append data chunk
+            snapshot.data.extend_from_slice(&request.data);
+            snapshot.offset += request.data.len() as u64;
+
+            // If this is the last chunk, apply the snapshot
+            if request.done {
+                let snapshot_data = std::mem::take(&mut snapshot.data);
+                let metadata = snapshot.metadata.clone();
+                drop(pending);
+
+                // Deserialize and apply the snapshot
+                if let Some(restored_snapshot) = Snapshot::from_bytes(&snapshot_data) {
+                    self.state_machine.restore(restored_snapshot);
+
+                    // Update log state
+                    self.log.compact(metadata.last_included_index, metadata.last_included_term);
+
+                    // Update commit and applied indices
+                    state.commit_index = std::cmp::max(state.commit_index, metadata.last_included_index);
+                    state.last_applied = metadata.last_included_index;
+                    self.log.set_commit_index(state.commit_index);
+                    self.log.set_last_applied(state.last_applied);
+
+                    // Store snapshot metadata
+                    *self.snapshot_metadata.write().unwrap() = Some(SnapshotMetadata {
+                        last_included_index: metadata.last_included_index,
+                        last_included_term: metadata.last_included_term,
+                        size: snapshot_data.len() as u64,
+                    });
+                }
+
+                // Clear pending snapshot
+                *self.pending_snapshot.write().unwrap() = None;
+            }
+        }
+
+        InstallSnapshotResponse {
+            term: state.current_term,
+        }
+    }
+
+    /// Handle an InstallSnapshot response from a follower.
+    pub fn handle_install_snapshot_response(
+        &self,
+        peer_id: &NodeId,
+        response: &InstallSnapshotResponse,
+        _last_chunk_offset: u64,
+        was_last_chunk: bool,
+    ) {
+        let mut state = self.state.write().unwrap();
+
+        // Step down if we see a higher term
+        if response.term > state.current_term {
+            state.current_term = response.term;
+            state.voted_for = None;
+            *self.role.write().unwrap() = NodeRole::Follower;
+            *self.leader_id.write().unwrap() = None;
+            return;
+        }
+
+        if !self.is_leader() {
+            return;
+        }
+
+        // If the snapshot was fully received, update next_index and match_index
+        if was_last_chunk {
+            if let Some(ref metadata) = *self.snapshot_metadata.read().unwrap() {
+                self.next_index
+                    .write()
+                    .unwrap()
+                    .insert(peer_id.clone(), metadata.last_included_index + 1);
+                self.match_index
+                    .write()
+                    .unwrap()
+                    .insert(peer_id.clone(), metadata.last_included_index);
+            }
+        }
+    }
+
+    /// Check if a peer needs a snapshot (their next_index is before our first log entry).
+    pub fn peer_needs_snapshot(&self, peer_id: &NodeId) -> bool {
+        let next_index = match self.next_index.read().unwrap().get(peer_id) {
+            Some(&idx) => idx,
+            None => return false,
+        };
+
+        // If we have a snapshot and peer needs entries before the snapshot
+        if let Some(ref metadata) = *self.snapshot_metadata.read().unwrap() {
+            return next_index <= metadata.last_included_index;
+        }
+
+        false
+    }
+
+    /// Get current snapshot metadata.
+    pub fn snapshot_metadata(&self) -> Option<SnapshotMetadata> {
+        self.snapshot_metadata.read().unwrap().clone()
+    }
 }
 
 // =============================================================================
@@ -760,5 +1020,266 @@ mod tests {
         let response = follower.handle_append_entries(&request);
         assert!(!response.success);
         assert_eq!(response.term, 5);
+    }
+
+    #[test]
+    fn test_should_snapshot() {
+        let config = RaftConfig {
+            snapshot_threshold: 3,
+            ..RaftConfig::default()
+        };
+        let node = RaftNode::new("node1", config);
+
+        // Initially should not need snapshot
+        assert!(!node.should_snapshot());
+
+        // Add some entries
+        use crate::log::LogEntry;
+        node.log.append(LogEntry::command(1, 1, vec![1]));
+        node.log.append(LogEntry::command(2, 1, vec![2]));
+        assert!(!node.should_snapshot());
+
+        // Add one more to exceed threshold
+        node.log.append(LogEntry::command(3, 1, vec![3]));
+        assert!(node.should_snapshot());
+    }
+
+    #[test]
+    fn test_take_snapshot() {
+        let node = RaftNode::new("node1", RaftConfig::default());
+
+        // Apply some commands to state machine
+        let cmd1 = Command::set("key1", b"value1".to_vec());
+        let cmd2 = Command::set("key2", b"value2".to_vec());
+
+        // Add entries to log
+        use crate::log::LogEntry;
+        node.log.append(LogEntry::command(1, 1, cmd1.to_bytes()));
+        node.log.append(LogEntry::command(2, 1, cmd2.to_bytes()));
+        node.log.set_commit_index(2);
+
+        // Apply entries
+        node.state_machine.apply(&cmd1, 1);
+        node.state_machine.apply(&cmd2, 2);
+
+        {
+            let mut state = node.state.write().unwrap();
+            state.last_applied = 2;
+            state.commit_index = 2;
+        }
+
+        // Take snapshot
+        let metadata = node.take_snapshot();
+        assert!(metadata.is_some());
+
+        let metadata = metadata.unwrap();
+        assert_eq!(metadata.last_included_index, 2);
+        assert_eq!(metadata.last_included_term, 1);
+        assert!(metadata.size > 0);
+
+        // Verify snapshot metadata is stored
+        assert!(node.snapshot_metadata().is_some());
+    }
+
+    #[test]
+    fn test_install_snapshot_single_chunk() {
+        let leader = RaftNode::new("leader", RaftConfig::default());
+        let follower = RaftNode::new("follower", RaftConfig::default());
+
+        // Set up leader state
+        {
+            let mut state = leader.state.write().unwrap();
+            state.current_term = 2;
+        }
+        *leader.role.write().unwrap() = NodeRole::Leader;
+
+        // Apply commands to leader
+        let cmd1 = Command::set("key1", b"value1".to_vec());
+        let cmd2 = Command::set("key2", b"value2".to_vec());
+        leader.state_machine.apply(&cmd1, 1);
+        leader.state_machine.apply(&cmd2, 2);
+
+        // Create snapshot data
+        let snapshot = leader.state_machine.snapshot();
+        let snapshot_bytes = snapshot.to_bytes();
+
+        // Send install snapshot to follower (single chunk)
+        let request = InstallSnapshotRequest {
+            term: 2,
+            leader_id: NodeId::new("leader"),
+            last_included_index: 2,
+            last_included_term: 1,
+            offset: 0,
+            data: snapshot_bytes,
+            done: true,
+        };
+
+        let response = follower.handle_install_snapshot(&request);
+        assert_eq!(response.term, 2);
+
+        // Verify follower state was restored
+        assert_eq!(follower.state_machine.get("key1").unwrap(), b"value1");
+        assert_eq!(follower.state_machine.get("key2").unwrap(), b"value2");
+
+        // Verify follower indices were updated
+        let state = follower.state.read().unwrap();
+        assert_eq!(state.last_applied, 2);
+        assert!(state.commit_index >= 2);
+    }
+
+    #[test]
+    fn test_install_snapshot_multiple_chunks() {
+        let follower = RaftNode::new("follower", RaftConfig::default());
+
+        // Create a snapshot to install
+        let mut data = std::collections::HashMap::new();
+        data.insert("key1".to_string(), b"value1".to_vec());
+        data.insert("key2".to_string(), b"value2".to_vec());
+
+        let snapshot = crate::state::Snapshot {
+            data,
+            last_applied: 5,
+            version: 2,
+        };
+        let snapshot_bytes = snapshot.to_bytes();
+
+        // Split into chunks (simulate chunked transfer)
+        let chunk_size = snapshot_bytes.len() / 2;
+        let chunk1 = &snapshot_bytes[..chunk_size];
+        let chunk2 = &snapshot_bytes[chunk_size..];
+
+        // Send first chunk
+        let request1 = InstallSnapshotRequest {
+            term: 1,
+            leader_id: NodeId::new("leader"),
+            last_included_index: 5,
+            last_included_term: 1,
+            offset: 0,
+            data: chunk1.to_vec(),
+            done: false,
+        };
+        let response1 = follower.handle_install_snapshot(&request1);
+        assert_eq!(response1.term, 1);
+
+        // Send second chunk
+        let request2 = InstallSnapshotRequest {
+            term: 1,
+            leader_id: NodeId::new("leader"),
+            last_included_index: 5,
+            last_included_term: 1,
+            offset: chunk_size as u64,
+            data: chunk2.to_vec(),
+            done: true,
+        };
+        let response2 = follower.handle_install_snapshot(&request2);
+        assert_eq!(response2.term, 1);
+
+        // Verify state was restored
+        assert_eq!(follower.state_machine.get("key1").unwrap(), b"value1");
+        assert_eq!(follower.state_machine.get("key2").unwrap(), b"value2");
+        assert_eq!(follower.state_machine.last_applied(), 5);
+    }
+
+    #[test]
+    fn test_install_snapshot_rejects_old_term() {
+        let follower = RaftNode::new("follower", RaftConfig::default());
+
+        // Set follower to higher term
+        {
+            let mut state = follower.state.write().unwrap();
+            state.current_term = 5;
+        }
+
+        let request = InstallSnapshotRequest {
+            term: 3,
+            leader_id: NodeId::new("old_leader"),
+            last_included_index: 10,
+            last_included_term: 2,
+            offset: 0,
+            data: vec![1, 2, 3],
+            done: true,
+        };
+
+        let response = follower.handle_install_snapshot(&request);
+        assert_eq!(response.term, 5);
+
+        // State machine should not have been modified
+        assert!(follower.state_machine.is_empty());
+    }
+
+    #[test]
+    fn test_peer_needs_snapshot() {
+        let leader = RaftNode::new("leader", RaftConfig::default());
+        leader.add_peer(NodeId::new("follower"));
+
+        // Initially peer doesn't need snapshot (no snapshot exists)
+        assert!(!leader.peer_needs_snapshot(&NodeId::new("follower")));
+
+        // Set up a snapshot
+        *leader.snapshot_metadata.write().unwrap() = Some(SnapshotMetadata {
+            last_included_index: 100,
+            last_included_term: 5,
+            size: 1000,
+        });
+
+        // Peer's next_index is 1, which is before snapshot - needs snapshot
+        assert!(leader.peer_needs_snapshot(&NodeId::new("follower")));
+
+        // Update peer's next_index to after snapshot
+        leader
+            .next_index
+            .write()
+            .unwrap()
+            .insert(NodeId::new("follower"), 101);
+        assert!(!leader.peer_needs_snapshot(&NodeId::new("follower")));
+    }
+
+    #[test]
+    fn test_create_install_snapshot() {
+        let leader = RaftNode::new("leader", RaftConfig::default());
+        leader.add_peer(NodeId::new("follower"));
+
+        // Set up as leader
+        {
+            let mut state = leader.state.write().unwrap();
+            state.current_term = 2;
+        }
+        *leader.role.write().unwrap() = NodeRole::Leader;
+
+        // Apply some data to state machine
+        let cmd = Command::set("test_key", b"test_value".to_vec());
+        leader.state_machine.apply(&cmd, 1);
+
+        // Add log entry and set applied
+        use crate::log::LogEntry;
+        leader.log.append(LogEntry::command(1, 2, cmd.to_bytes()));
+        leader.log.set_commit_index(1);
+        {
+            let mut state = leader.state.write().unwrap();
+            state.last_applied = 1;
+            state.commit_index = 1;
+        }
+
+        // Take snapshot
+        leader.take_snapshot();
+
+        // Set peer's next_index to 0 to trigger snapshot need
+        leader
+            .next_index
+            .write()
+            .unwrap()
+            .insert(NodeId::new("follower"), 0);
+
+        // Create install snapshot request
+        let request = leader.create_install_snapshot(&NodeId::new("follower"), 0);
+        assert!(request.is_some());
+
+        let request = request.unwrap();
+        assert_eq!(request.term, 2);
+        assert_eq!(request.leader_id.as_str(), "leader");
+        assert_eq!(request.last_included_index, 1);
+        assert_eq!(request.last_included_term, 2);
+        assert_eq!(request.offset, 0);
+        assert!(!request.data.is_empty());
     }
 }

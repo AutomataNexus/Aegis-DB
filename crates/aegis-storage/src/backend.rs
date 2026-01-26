@@ -74,12 +74,29 @@ pub struct StorageStats {
 // Memory Backend
 // =============================================================================
 
+/// Transaction state tracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    Active,
+    Committed,
+    RolledBack,
+}
+
 /// In-memory storage backend for testing and development.
+///
+/// NOTE: Current transaction implementation is simplified.
+/// Full ACID transactions require MVCC or WAL integration which is planned for v0.2.
 pub struct MemoryBackend {
     blocks: RwLock<HashMap<BlockId, Block>>,
     next_block_id: AtomicU64,
     next_tx_id: AtomicU64,
     stats: RwLock<StorageStats>,
+    /// Track active transactions and their state
+    transactions: RwLock<HashMap<TransactionId, TransactionState>>,
+    /// Pending writes per transaction (block_id -> block data)
+    pending_writes: RwLock<HashMap<TransactionId, HashMap<BlockId, Block>>>,
+    /// Pending deletes per transaction
+    pending_deletes: RwLock<HashMap<TransactionId, Vec<BlockId>>>,
 }
 
 impl MemoryBackend {
@@ -89,6 +106,9 @@ impl MemoryBackend {
             next_block_id: AtomicU64::new(1),
             next_tx_id: AtomicU64::new(1),
             stats: RwLock::new(StorageStats::default()),
+            transactions: RwLock::new(HashMap::new()),
+            pending_writes: RwLock::new(HashMap::new()),
+            pending_deletes: RwLock::new(HashMap::new()),
         }
     }
 
@@ -162,14 +182,89 @@ impl StorageBackend for MemoryBackend {
     }
 
     async fn begin_transaction(&self) -> Result<TransactionId> {
-        Ok(self.allocate_tx_id())
+        let tx_id = self.allocate_tx_id();
+        self.transactions.write().insert(tx_id, TransactionState::Active);
+        self.pending_writes.write().insert(tx_id, HashMap::new());
+        self.pending_deletes.write().insert(tx_id, Vec::new());
+        Ok(tx_id)
     }
 
-    async fn commit_transaction(&self, _tx_id: TransactionId) -> Result<()> {
+    async fn commit_transaction(&self, tx_id: TransactionId) -> Result<()> {
+        // Verify transaction is active
+        {
+            let transactions = self.transactions.read();
+            match transactions.get(&tx_id) {
+                Some(TransactionState::Active) => {}
+                Some(TransactionState::Committed) => {
+                    return Err(AegisError::Transaction("Transaction already committed".to_string()));
+                }
+                Some(TransactionState::RolledBack) => {
+                    return Err(AegisError::Transaction("Transaction was rolled back".to_string()));
+                }
+                None => {
+                    return Err(AegisError::Transaction("Transaction not found".to_string()));
+                }
+            }
+        }
+
+        // Apply pending writes
+        let pending = self.pending_writes.write().remove(&tx_id).unwrap_or_default();
+        {
+            let mut blocks = self.blocks.write();
+            let mut stats = self.stats.write();
+            for (block_id, block) in pending {
+                let size = block.data.len() as u64;
+                let is_new = !blocks.contains_key(&block_id);
+                blocks.insert(block_id, block);
+                if is_new {
+                    stats.total_blocks += 1;
+                    stats.total_bytes += size;
+                }
+            }
+        }
+
+        // Apply pending deletes
+        let deletes = self.pending_deletes.write().remove(&tx_id).unwrap_or_default();
+        {
+            let mut blocks = self.blocks.write();
+            let mut stats = self.stats.write();
+            for block_id in deletes {
+                if let Some(block) = blocks.remove(&block_id) {
+                    stats.total_blocks -= 1;
+                    stats.total_bytes -= block.data.len() as u64;
+                }
+            }
+        }
+
+        // Mark transaction as committed
+        self.transactions.write().insert(tx_id, TransactionState::Committed);
         Ok(())
     }
 
-    async fn rollback_transaction(&self, _tx_id: TransactionId) -> Result<()> {
+    async fn rollback_transaction(&self, tx_id: TransactionId) -> Result<()> {
+        // Verify transaction exists
+        {
+            let transactions = self.transactions.read();
+            match transactions.get(&tx_id) {
+                Some(TransactionState::Active) => {}
+                Some(TransactionState::Committed) => {
+                    return Err(AegisError::Transaction("Cannot rollback committed transaction".to_string()));
+                }
+                Some(TransactionState::RolledBack) => {
+                    return Ok(()); // Already rolled back, idempotent
+                }
+                None => {
+                    return Err(AegisError::Transaction("Transaction not found".to_string()));
+                }
+            }
+        }
+
+        // Discard pending writes and deletes
+        self.pending_writes.write().remove(&tx_id);
+        self.pending_deletes.write().remove(&tx_id);
+
+        // Mark transaction as rolled back
+        self.transactions.write().insert(tx_id, TransactionState::RolledBack);
         Ok(())
     }
 
@@ -363,5 +458,56 @@ mod tests {
         let read_block = backend.read_block(id).await.unwrap();
 
         assert_eq!(read_block.data, data);
+    }
+
+    #[tokio::test]
+    async fn test_transaction_commit_rollback_state() {
+        let backend = MemoryBackend::new();
+
+        // Begin transaction
+        let tx_id = backend.begin_transaction().await.unwrap();
+
+        // Commit should succeed
+        backend.commit_transaction(tx_id).await.unwrap();
+
+        // Second commit should fail (already committed)
+        let result = backend.commit_transaction(tx_id).await;
+        assert!(result.is_err());
+
+        // Rollback should fail (already committed)
+        let result = backend.rollback_transaction(tx_id).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_transaction_rollback() {
+        let backend = MemoryBackend::new();
+
+        // Begin transaction
+        let tx_id = backend.begin_transaction().await.unwrap();
+
+        // Rollback should succeed
+        backend.rollback_transaction(tx_id).await.unwrap();
+
+        // Second rollback should be idempotent (succeed)
+        backend.rollback_transaction(tx_id).await.unwrap();
+
+        // Commit should fail (already rolled back)
+        let result = backend.commit_transaction(tx_id).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_transaction_not_found() {
+        let backend = MemoryBackend::new();
+
+        // Try to commit a non-existent transaction
+        let fake_tx_id = TransactionId(999);
+        let result = backend.commit_transaction(fake_tx_id).await;
+        assert!(result.is_err());
+
+        // Try to rollback a non-existent transaction
+        let result = backend.rollback_transaction(fake_tx_id).await;
+        assert!(result.is_err());
     }
 }
