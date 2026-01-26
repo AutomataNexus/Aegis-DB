@@ -64,7 +64,7 @@ pub struct ExecutionContext {
 }
 
 /// In-memory table data for execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TableData {
     pub name: String,
     pub columns: Vec<String>,
@@ -72,14 +72,14 @@ pub struct TableData {
 }
 
 /// Stored table constraint.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StoredConstraint {
     pub name: String,
     pub constraint_type: StoredConstraintType,
 }
 
 /// Stored constraint type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum StoredConstraintType {
     PrimaryKey { columns: Vec<String> },
     Unique { columns: Vec<String> },
@@ -92,7 +92,7 @@ pub enum StoredConstraintType {
 }
 
 /// Table schema information.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TableSchema {
     pub name: String,
     pub columns: Vec<ColumnSchema>,
@@ -101,7 +101,7 @@ pub struct TableSchema {
 }
 
 /// Column schema information.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ColumnSchema {
     pub name: String,
     pub data_type: DataType,
@@ -110,12 +110,20 @@ pub struct ColumnSchema {
 }
 
 /// Index schema information.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IndexSchema {
     pub name: String,
     pub table: String,
     pub columns: Vec<String>,
     pub unique: bool,
+}
+
+/// Serializable snapshot of the execution context for persistence.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ExecutionContextSnapshot {
+    pub tables: Vec<TableData>,
+    pub schemas: Vec<TableSchema>,
+    pub indexes: HashMap<String, Vec<IndexSchema>>,
 }
 
 impl ExecutionContext {
@@ -446,6 +454,83 @@ impl ExecutionContext {
     /// List all table names.
     pub fn list_tables(&self) -> Vec<String> {
         self.tables.keys().cloned().collect()
+    }
+
+    // ==========================================================================
+    // Persistence Operations
+    // ==========================================================================
+
+    /// Create a serializable snapshot of the execution context.
+    pub fn to_snapshot(&self) -> ExecutionContextSnapshot {
+        let tables: Vec<TableData> = self.tables.values()
+            .filter_map(|t| t.read().ok().map(|t| t.clone()))
+            .collect();
+
+        ExecutionContextSnapshot {
+            tables,
+            schemas: self.table_schemas.values().cloned().collect(),
+            indexes: self.indexes.clone(),
+        }
+    }
+
+    /// Restore execution context from a snapshot.
+    pub fn from_snapshot(snapshot: ExecutionContextSnapshot) -> Self {
+        let mut ctx = Self::new();
+
+        // Restore schemas first
+        for schema in snapshot.schemas {
+            ctx.table_schemas.insert(schema.name.clone(), schema);
+        }
+
+        // Restore tables
+        for table in snapshot.tables {
+            ctx.tables.insert(table.name.clone(), Arc::new(RwLock::new(table)));
+        }
+
+        // Restore indexes
+        ctx.indexes = snapshot.indexes;
+
+        ctx
+    }
+
+    /// Save the execution context to a file.
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let snapshot = self.to_snapshot();
+        let json = serde_json::to_string_pretty(&snapshot)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(path, json)
+    }
+
+    /// Load the execution context from a file.
+    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
+        let json = std::fs::read_to_string(path)?;
+        let snapshot: ExecutionContextSnapshot = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(Self::from_snapshot(snapshot))
+    }
+
+    /// Merge data from a file into the current context (for loading on startup).
+    pub fn merge_from_file(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+        let json = std::fs::read_to_string(path)?;
+        let snapshot: ExecutionContextSnapshot = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        // Merge schemas
+        for schema in snapshot.schemas {
+            self.table_schemas.insert(schema.name.clone(), schema);
+        }
+
+        // Merge tables
+        for table in snapshot.tables {
+            self.tables.insert(table.name.clone(), Arc::new(RwLock::new(table)));
+        }
+
+        // Merge indexes
+        for (table, idxs) in snapshot.indexes {
+            self.indexes.insert(table, idxs);
+        }
+
+        Ok(())
     }
 
     // ==========================================================================

@@ -17,6 +17,7 @@ aegis-common = { workspace = true }
 aegis-storage = { workspace = true }
 aegis-memory = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 sqlparser = "0.53"
 

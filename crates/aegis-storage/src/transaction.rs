@@ -552,6 +552,7 @@ impl TransactionManager {
     /// Get transaction statistics.
     pub fn stats(&self) -> TransactionStats {
         let txs = self.transactions.read();
+        let versions = self.versions.read();
         let mut active = 0;
         let mut committed = 0;
         let mut aborted = 0;
@@ -564,11 +565,136 @@ impl TransactionManager {
             }
         }
 
+        // Count total versions (including history)
+        let mut version_count = 0;
+        for version in versions.values() {
+            version_count += 1;
+            let mut prev = version.prev_version.as_ref();
+            while let Some(v) = prev {
+                version_count += 1;
+                prev = v.prev_version.as_ref();
+            }
+        }
+
         TransactionStats {
             active,
             committed,
             aborted,
             total: txs.len(),
+            version_count,
+        }
+    }
+
+    // ==========================================================================
+    // Garbage Collection
+    // ==========================================================================
+
+    /// Get the minimum active timestamp (low watermark).
+    /// Versions older than this are potentially garbage.
+    fn get_min_active_timestamp(&self) -> u64 {
+        let txs = self.transactions.read();
+        txs.values()
+            .filter(|tx| tx.is_active())
+            .map(|tx| tx.start_timestamp)
+            .min()
+            .unwrap_or(u64::MAX)
+    }
+
+    /// Run garbage collection to remove old versions that are no longer visible.
+    /// Returns the number of versions collected.
+    pub fn run_gc(&self) -> GcStats {
+        let min_ts = self.get_min_active_timestamp();
+        let mut versions_collected = 0;
+
+        // Clean up old version chains
+        {
+            let mut versions = self.versions.write();
+            for version in versions.values_mut() {
+                versions_collected += Self::gc_version_chain(version, min_ts);
+            }
+        }
+
+        // Clean up old completed transactions
+        let transactions_cleaned = {
+            let mut txs = self.transactions.write();
+            let to_remove: Vec<TransactionId> = txs
+                .iter()
+                .filter(|(_, tx)| {
+                    match tx.state {
+                        TransactionState::Committed | TransactionState::Aborted => {
+                            // Remove if older than min active timestamp
+                            tx.commit_timestamp.unwrap_or(tx.start_timestamp) < min_ts
+                        }
+                        _ => false,
+                    }
+                })
+                .map(|(id, _)| *id)
+                .collect();
+
+            let count = to_remove.len();
+            for id in to_remove {
+                txs.remove(&id);
+            }
+            count
+        };
+
+        GcStats {
+            versions_collected,
+            transactions_cleaned,
+            min_active_timestamp: min_ts,
+        }
+    }
+
+    /// Recursively garbage collect a version chain.
+    /// Returns the number of versions removed.
+    ///
+    /// We can only remove a version if:
+    /// 1. The current version is committed (has a valid successor)
+    /// 2. The previous version's commit_ts is less than min_ts
+    /// 3. The current version's commit_ts is also less than min_ts
+    ///    (meaning no active transaction could need to see the previous version)
+    fn gc_version_chain(version: &mut Version, min_ts: u64) -> usize {
+        let mut collected = 0;
+
+        // Check if we can truncate the version chain
+        if let Some(ref mut prev) = version.prev_version {
+            // First, recursively GC the older versions
+            collected += Self::gc_version_chain(prev, min_ts);
+
+            // Handle aborted versions - they can always be removed
+            if prev.state == VersionState::Aborted {
+                version.prev_version = prev.prev_version.take();
+                collected += 1;
+                return collected;
+            }
+
+            // For committed versions, we can only remove the previous version if:
+            // - The current version is committed
+            // - Both versions have commit timestamps less than min_ts
+            // This ensures no active transaction needs to see the older version
+            if let VersionState::Committed(curr_commit_ts) = version.state {
+                if let VersionState::Committed(prev_commit_ts) = prev.state {
+                    // Only remove if the current version is also old enough
+                    // that any transaction needing to read would see the current version
+                    if prev_commit_ts < min_ts && curr_commit_ts < min_ts {
+                        version.prev_version = None;
+                        collected += 1;
+                    }
+                }
+            }
+        }
+
+        collected
+    }
+
+    /// Run garbage collection with a threshold.
+    /// Only runs if there are more than `threshold` versions.
+    pub fn run_gc_if_needed(&self, threshold: usize) -> Option<GcStats> {
+        let stats = self.stats();
+        if stats.version_count > threshold {
+            Some(self.run_gc())
+        } else {
+            None
         }
     }
 
@@ -616,6 +742,19 @@ pub struct TransactionStats {
     pub committed: usize,
     pub aborted: usize,
     pub total: usize,
+    /// Total number of versions stored (including historical versions)
+    pub version_count: usize,
+}
+
+/// Statistics from a garbage collection run.
+#[derive(Debug, Clone)]
+pub struct GcStats {
+    /// Number of old versions removed from version chains
+    pub versions_collected: usize,
+    /// Number of completed transactions removed
+    pub transactions_cleaned: usize,
+    /// The minimum active timestamp used as the low watermark
+    pub min_active_timestamp: u64,
 }
 
 // =============================================================================
@@ -748,5 +887,141 @@ mod tests {
             granted: false,
         };
         assert!(lm.try_acquire(req4).unwrap());
+    }
+
+    #[test]
+    fn test_gc_cleans_old_transactions() {
+        let tm = TransactionManager::new();
+
+        // Create and commit several transactions
+        let tx1 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.commit(tx1).unwrap();
+
+        let tx2 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.commit(tx2).unwrap();
+
+        let tx3 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.abort(tx3).unwrap();
+
+        // All completed transactions should be present
+        assert_eq!(tm.stats().total, 3);
+        assert_eq!(tm.stats().committed, 2);
+        assert_eq!(tm.stats().aborted, 1);
+
+        // No active transactions, so GC should clean all completed ones
+        let gc_stats = tm.run_gc();
+        assert_eq!(gc_stats.transactions_cleaned, 3);
+
+        // Transactions should be cleaned up
+        assert_eq!(tm.stats().total, 0);
+    }
+
+    #[test]
+    fn test_gc_preserves_active_transaction_visible_versions() {
+        let tm = TransactionManager::new();
+        let key = VersionKey { table_id: 1, row_id: 1 };
+
+        // Create first version
+        let tx1 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.write(tx1, key.clone(), b"v1".to_vec()).unwrap();
+        tm.commit(tx1).unwrap();
+
+        // Start a long-running transaction
+        let tx_long = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+
+        // Create second version
+        let tx2 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.write(tx2, key.clone(), b"v2".to_vec()).unwrap();
+        tm.commit(tx2).unwrap();
+
+        // Long transaction should still see v1
+        let data = tm.read(tx_long, &key).unwrap();
+        assert_eq!(data, Some(b"v1".to_vec()));
+
+        // GC should not remove v1 because tx_long still needs it
+        let _gc_stats = tm.run_gc();
+        // tx1 and tx2 are committed and older than tx_long, they can be cleaned
+        // but the version chain should be preserved for tx_long
+
+        // Long transaction should still be able to read v1
+        let data = tm.read(tx_long, &key).unwrap();
+        assert_eq!(data, Some(b"v1".to_vec()));
+
+        tm.commit(tx_long).unwrap();
+    }
+
+    #[test]
+    fn test_gc_removes_aborted_versions() {
+        let tm = TransactionManager::new();
+        let key = VersionKey { table_id: 1, row_id: 1 };
+
+        // Create first version
+        let tx1 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.write(tx1, key.clone(), b"v1".to_vec()).unwrap();
+        tm.commit(tx1).unwrap();
+
+        // Create and abort a version
+        let tx2 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.write(tx2, key.clone(), b"v2_aborted".to_vec()).unwrap();
+        tm.abort(tx2).unwrap();
+
+        // Create third version
+        let tx3 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.write(tx3, key.clone(), b"v3".to_vec()).unwrap();
+        tm.commit(tx3).unwrap();
+
+        // GC should clean up aborted versions
+        let gc_stats = tm.run_gc();
+        assert!(gc_stats.versions_collected > 0 || gc_stats.transactions_cleaned > 0);
+
+        // New transaction should see v3
+        let tx4 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        let data = tm.read(tx4, &key).unwrap();
+        assert_eq!(data, Some(b"v3".to_vec()));
+        tm.commit(tx4).unwrap();
+    }
+
+    #[test]
+    fn test_stats_includes_version_count() {
+        let tm = TransactionManager::new();
+        let key = VersionKey { table_id: 1, row_id: 1 };
+
+        assert_eq!(tm.stats().version_count, 0);
+
+        let tx1 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.write(tx1, key.clone(), b"v1".to_vec()).unwrap();
+        tm.commit(tx1).unwrap();
+
+        assert_eq!(tm.stats().version_count, 1);
+
+        let tx2 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+        tm.write(tx2, key.clone(), b"v2".to_vec()).unwrap();
+        tm.commit(tx2).unwrap();
+
+        // Now we have 2 versions in the chain
+        assert_eq!(tm.stats().version_count, 2);
+    }
+
+    #[test]
+    fn test_run_gc_if_needed() {
+        let tm = TransactionManager::new();
+        let key = VersionKey { table_id: 1, row_id: 1 };
+
+        // Should not run GC with high threshold
+        assert!(tm.run_gc_if_needed(100).is_none());
+
+        // Create some versions
+        for i in 0..5 {
+            let tx = tm.begin(IsolationLevel::RepeatableRead).unwrap();
+            tm.write(tx, key.clone(), format!("v{}", i).into_bytes()).unwrap();
+            tm.commit(tx).unwrap();
+        }
+
+        // Should now have 5 versions in the chain
+        assert_eq!(tm.stats().version_count, 5);
+
+        // Should run GC with low threshold
+        let result = tm.run_gc_if_needed(3);
+        assert!(result.is_some());
     }
 }

@@ -141,9 +141,15 @@ impl AppState {
         let rate_limiter = Arc::new(RateLimiter::new(config.rate_limit_per_minute));
         let login_rate_limiter = Arc::new(RateLimiter::new(config.login_rate_limit_per_minute));
 
+        // Create query engine with persistence if data_dir is configured
+        let query_engine = match &data_dir {
+            Some(dir) => Arc::new(QueryEngine::with_persistence(dir)),
+            None => Arc::new(QueryEngine::new()),
+        };
+
         Self {
             config: Arc::new(config),
-            query_engine: Arc::new(QueryEngine::new()),
+            query_engine,
             document_engine,
             timeseries_engine: Arc::new(TimeSeriesEngine::new()),
             streaming_engine: Arc::new(StreamingEngine::new()),
@@ -192,6 +198,10 @@ impl AppState {
                 tracing::debug!("Saved {} documents to collection '{}'", docs.len(), collection_name);
             }
         }
+
+        // Save SQL tables (query engine handles its own persistence path)
+        self.query_engine.flush();
+        tracing::debug!("Flushed SQL tables to disk");
 
         Ok(())
     }
@@ -572,10 +582,13 @@ impl Default for GraphStore {
 
 /// Query engine for executing SQL statements.
 /// Maintains a persistent ExecutionContext so DDL operations persist across queries.
+/// Now with disk persistence support for crash recovery.
 pub struct QueryEngine {
     parser: Parser,
     planner: Planner,
     context: Arc<std::sync::RwLock<ExecutionContext>>,
+    /// Path to persist SQL tables (if set, enables persistence)
+    data_path: Option<PathBuf>,
 }
 
 impl QueryEngine {
@@ -585,7 +598,60 @@ impl QueryEngine {
             parser: Parser::new(),
             planner: Planner::new(schema),
             context: Arc::new(std::sync::RwLock::new(ExecutionContext::new())),
+            data_path: None,
         }
+    }
+
+    /// Create a QueryEngine with persistence to the specified directory.
+    pub fn with_persistence(data_dir: &std::path::Path) -> Self {
+        let schema = Arc::new(PlannerSchema::new());
+        let db_path = data_dir.join("sql_tables.json");
+
+        // Try to load existing data
+        let context = if db_path.exists() {
+            match ExecutionContext::load_from_file(&db_path) {
+                Ok(ctx) => {
+                    tracing::info!("Loaded SQL tables from {:?}", db_path);
+                    ctx
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load SQL tables from {:?}: {}", db_path, e);
+                    ExecutionContext::new()
+                }
+            }
+        } else {
+            ExecutionContext::new()
+        };
+
+        Self {
+            parser: Parser::new(),
+            planner: Planner::new(schema),
+            context: Arc::new(std::sync::RwLock::new(context)),
+            data_path: Some(db_path),
+        }
+    }
+
+    /// Persist current state to disk.
+    fn persist(&self) {
+        if let Some(ref path) = self.data_path {
+            if let Ok(ctx) = self.context.read() {
+                if let Err(e) = ctx.save_to_file(path) {
+                    tracing::error!("Failed to persist SQL tables to {:?}: {}", path, e);
+                }
+            }
+        }
+    }
+
+    /// Check if a SQL statement is a mutation (DDL/DML that modifies data).
+    fn is_mutation(sql: &str) -> bool {
+        let sql_upper = sql.trim().to_uppercase();
+        sql_upper.starts_with("CREATE") ||
+        sql_upper.starts_with("DROP") ||
+        sql_upper.starts_with("ALTER") ||
+        sql_upper.starts_with("INSERT") ||
+        sql_upper.starts_with("UPDATE") ||
+        sql_upper.starts_with("DELETE") ||
+        sql_upper.starts_with("TRUNCATE")
     }
 
     /// Execute a SQL query.
@@ -609,6 +675,11 @@ impl QueryEngine {
         let executor = Executor::with_shared_context(self.context.clone());
         let result = executor.execute(&plan)
             .map_err(|e| QueryError::Execute(e.to_string()))?;
+
+        // Persist to disk if this was a mutation
+        if Self::is_mutation(sql) {
+            self.persist();
+        }
 
         Ok(QueryResult {
             columns: result.columns,
@@ -642,6 +713,11 @@ impl QueryEngine {
             }).collect(),
             row_count,
         })
+    }
+
+    /// Force persist all data to disk (for graceful shutdown).
+    pub fn flush(&self) {
+        self.persist();
     }
 }
 
