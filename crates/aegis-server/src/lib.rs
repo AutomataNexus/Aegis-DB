@@ -17,7 +17,10 @@ pub mod activity;
 pub mod admin;
 pub mod auth;
 pub mod backup;
+pub mod breach;
 pub mod config;
+pub mod consent;
+pub mod gdpr;
 pub mod handlers;
 pub mod middleware;
 pub mod router;
@@ -33,6 +36,18 @@ pub use auth::{
     RowPolicyOperation, UserInfo, UserRole,
 };
 pub use backup::{BackupInfo, BackupManager, BackupStatus};
+pub use breach::{
+    BreachDetector, BreachIncident, BreachNotifier, BreachSeverity, BreachStats, DetectionConfig,
+    IncidentReport, IncidentStatus, LogNotifier, SecurityEvent, SecurityEventType, WebhookNotifier,
+};
 pub use config::{ClusterTlsConfig, ServerConfig};
+pub use consent::{
+    check_consent, check_all_consents, check_any_consent, ConsentAction, ConsentHistoryEntry,
+    ConsentManager, ConsentRecord, ConsentSource, ConsentStats, Purpose, SubjectConsentExport,
+};
+pub use gdpr::{
+    DeletionAuditEntry, DeletionAuditLog, DeletionCertificate, DeletionEventType, DeletionRequest,
+    DeletionResponse, DeletionScope, DeletedItem, GdprService,
+};
 pub use router::create_router;
 pub use state::AppState;
