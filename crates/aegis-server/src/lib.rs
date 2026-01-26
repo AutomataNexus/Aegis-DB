@@ -20,6 +20,7 @@ pub mod config;
 pub mod handlers;
 pub mod middleware;
 pub mod router;
+pub mod secrets;
 pub mod state;
 
 pub use activity::{Activity, ActivityLogger, ActivityType};

@@ -1,13 +1,17 @@
 //! Aegis Server Binary
 //!
 //! API server for Aegis database with REST endpoints for the dashboard.
+//! Supports both HTTP and HTTPS (TLS) connections.
 //!
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
 use aegis_server::{create_router, AppState, ServerConfig};
+use aegis_server::secrets::{self, SecretsProvider};
+use axum_server::tls_rustls::RustlsConfig;
 use clap::Parser;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tokio::signal;
 
 #[derive(Parser)]
@@ -41,6 +45,18 @@ struct Args {
     /// Cluster name
     #[arg(long, default_value = "aegis-cluster")]
     cluster: String,
+
+    /// Enable TLS/HTTPS
+    #[arg(long)]
+    tls: bool,
+
+    /// TLS certificate file path (PEM format)
+    #[arg(long)]
+    tls_cert: Option<String>,
+
+    /// TLS private key file path (PEM format)
+    #[arg(long)]
+    tls_key: Option<String>,
 }
 
 #[tokio::main]
@@ -55,17 +71,22 @@ async fn main() {
 
     let args = Args::parse();
 
+    // Initialize secrets manager (supports Vault or env vars)
+    let secrets_manager = secrets::init_secrets_manager().await;
+
     // Parse peer addresses
     let peers: Vec<String> = args.peers
         .map(|p| p.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
         .unwrap_or_default();
 
+    // Build server configuration
     let config = ServerConfig::new(&args.host, args.port)
         .with_data_dir(args.data_dir.clone())
         .with_node_id(args.node_id.clone())
         .with_node_name(args.node_name.clone())
         .with_cluster_name(args.cluster.clone())
         .with_peers(peers.clone());
+
     let addr: SocketAddr = config.socket_addr();
 
     if let Some(ref data_dir) = args.data_dir {
@@ -86,14 +107,7 @@ async fn main() {
 
     let state = AppState::new(config);
     let state_for_shutdown = state.clone();
-    let app = create_router(state);
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("Failed to bind to address");
-
-    tracing::info!("Aegis Server listening on http://{}", addr);
-    tracing::info!("Dashboard API ready at http://{}/api/v1", addr);
+    let app = create_router(state.clone());
 
     // Start periodic save task if persistence is enabled
     let state_for_save = state_for_shutdown.clone();
@@ -131,11 +145,76 @@ async fn main() {
         });
     }
 
-    // Run server with graceful shutdown
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(state_for_shutdown))
-        .await
-        .expect("Server error");
+    // Determine TLS configuration
+    let tls_config = if args.tls {
+        // Try command line args first, then environment/Vault
+        let cert_path = args.tls_cert
+            .or_else(|| secrets_manager.get(secrets::keys::TLS_CERT_PATH))
+            .expect("TLS enabled but no certificate path provided. Use --tls-cert or set AEGIS_TLS_CERT");
+
+        let key_path = args.tls_key
+            .or_else(|| secrets_manager.get(secrets::keys::TLS_KEY_PATH))
+            .expect("TLS enabled but no key path provided. Use --tls-key or set AEGIS_TLS_KEY");
+
+        // Verify files exist
+        if !PathBuf::from(&cert_path).exists() {
+            panic!("TLS certificate file not found: {}", cert_path);
+        }
+        if !PathBuf::from(&key_path).exists() {
+            panic!("TLS key file not found: {}", key_path);
+        }
+
+        Some((cert_path, key_path))
+    } else {
+        None
+    };
+
+    // Run server with or without TLS
+    if let Some((cert_path, key_path)) = tls_config {
+        // TLS/HTTPS mode
+        tracing::info!("TLS enabled, loading certificates...");
+        tracing::info!("  Certificate: {}", cert_path);
+        tracing::info!("  Private key: {}", key_path);
+
+        let rustls_config = RustlsConfig::from_pem_file(&cert_path, &key_path)
+            .await
+            .expect("Failed to load TLS configuration");
+
+        tracing::info!("Aegis Server listening on https://{}", addr);
+        tracing::info!("Dashboard API ready at https://{}/api/v1", addr);
+
+        let handle = axum_server::Handle::new();
+        let handle_for_shutdown = handle.clone();
+
+        // Spawn shutdown handler
+        tokio::spawn(async move {
+            shutdown_signal(state_for_shutdown).await;
+            handle_for_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+        });
+
+        axum_server::bind_rustls(addr, rustls_config)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await
+            .expect("Server error");
+    } else {
+        // HTTP mode
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("Failed to bind to address");
+
+        tracing::info!("Aegis Server listening on http://{}", addr);
+        tracing::info!("Dashboard API ready at http://{}/api/v1", addr);
+
+        if std::env::var("AEGIS_PRODUCTION").is_ok() {
+            tracing::warn!("Running in production mode without TLS. Consider enabling TLS with --tls");
+        }
+
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal(state_for_shutdown))
+            .await
+            .expect("Server error");
+    }
 }
 
 /// Join a peer node in the cluster.

@@ -1,6 +1,9 @@
 //! End-to-end integration tests for Aegis Server
 //!
 //! Tests the full API flow including authentication, admin endpoints, and activity logging.
+//!
+//! Note: Since default users are no longer hardcoded for security, tests must create
+//! their own test users before performing authentication operations.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -20,6 +23,26 @@ async fn get_json(app: &mut axum::Router, uri: &str) -> (StatusCode, Value) {
             Request::builder()
                 .method("GET")
                 .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    (status, json)
+}
+
+/// Helper to make a GET request with auth token and return JSON response.
+async fn get_json_auth(app: &mut axum::Router, uri: &str, token: &str) -> (StatusCode, Value) {
+    let response = app
+        .call(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .header("Authorization", format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -53,15 +76,40 @@ async fn post_json(app: &mut axum::Router, uri: &str, body: Value) -> (StatusCod
 }
 
 /// Create a shared app state for tests that need state persistence.
+/// Creates test users: testadmin (admin), testdemo (viewer), testoperator (operator)
 fn shared_state() -> Arc<AppState> {
-    Arc::new(AppState::new(ServerConfig::default()))
+    let state = Arc::new(AppState::new(ServerConfig::default()));
+
+    // Create test users for integration tests
+    // These replace the previously hardcoded users
+    let _ = state.auth.create_user("testadmin", "admin@test.local", "TestAdmin123!", "admin");
+    let _ = state.auth.create_user("testdemo", "demo@test.local", "TestDemo123!", "viewer");
+    let _ = state.auth.create_user("testoperator", "operator@test.local", "TestOperator123!", "operator");
+
+    state
 }
 
-/// Generate a valid TOTP code for the admin user's secret.
-fn generate_admin_totp() -> String {
-    // Admin user's secret from auth.rs
-    let secret = "JBSWY3DPEHPK3PXP";
+/// Helper to login and get an auth token for a test user.
+async fn login_test_user(app: &mut axum::Router, username: &str, password: &str) -> Option<String> {
+    let (status, json) = post_json(
+        app,
+        "/api/v1/auth/login",
+        json!({
+            "username": username,
+            "password": password
+        }),
+    )
+    .await;
 
+    if status == StatusCode::OK {
+        json["token"].as_str().map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
+/// Generate a valid TOTP code for a given secret.
+fn generate_totp(secret: &str) -> String {
     let secret_bytes = BASE32_NOPAD.decode(secret.as_bytes())
         .unwrap_or_else(|_| {
             let padded = format!("{}{}", secret, &"========"[..((8 - secret.len() % 8) % 8)]);
@@ -114,16 +162,17 @@ async fn test_health_endpoint() {
 // =============================================================================
 
 #[tokio::test]
-async fn test_login_demo_user_e2e() {
+async fn test_login_viewer_user_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
+    // Login with test viewer user created in shared_state()
     let (status, json) = post_json(
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "demo",
-            "password": "demo"
+            "username": "testdemo",
+            "password": "TestDemo123!"
         }),
     )
     .await;
@@ -131,30 +180,32 @@ async fn test_login_demo_user_e2e() {
     assert_eq!(status, StatusCode::OK);
     assert!(json["token"].is_string());
     assert!(json["user"].is_object());
-    assert_eq!(json["user"]["username"], "demo");
+    assert_eq!(json["user"]["username"], "testdemo");
     assert_eq!(json["user"]["role"], "viewer");
     assert_eq!(json["user"]["mfa_enabled"], false);
 }
 
 #[tokio::test]
-async fn test_login_admin_requires_mfa_e2e() {
+async fn test_login_admin_user_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
+    // Login with test admin user
     let (status, json) = post_json(
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "admin",
-            "password": "admin"
+            "username": "testadmin",
+            "password": "TestAdmin123!"
         }),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(json["token"].is_string());
-    assert_eq!(json["requires_mfa"], true);
-    assert!(json["user"].is_null());
+    assert!(json["user"].is_object());
+    assert_eq!(json["user"]["username"], "testadmin");
+    assert_eq!(json["user"]["role"], "admin");
 }
 
 #[tokio::test]
@@ -166,7 +217,7 @@ async fn test_login_invalid_credentials_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "admin",
+            "username": "testadmin",
             "password": "wrongpassword"
         }),
     )
@@ -177,17 +228,42 @@ async fn test_login_invalid_credentials_e2e() {
 }
 
 #[tokio::test]
-async fn test_full_mfa_flow_e2e() {
+async fn test_login_nonexistent_user_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
-    // Step 1: Login as admin
     let (status, json) = post_json(
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "admin",
-            "password": "admin"
+            "username": "nonexistent",
+            "password": "password"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(json["error"].is_string());
+}
+
+#[tokio::test]
+async fn test_mfa_flow_e2e() {
+    let state = shared_state();
+
+    // Create a user with MFA enabled
+    let mfa_result = state.auth.enable_mfa("testadmin");
+    assert!(mfa_result.is_ok());
+    let mfa_secret = mfa_result.unwrap();
+
+    let mut app = app_with_state(state);
+
+    // Step 1: Login as admin (now requires MFA)
+    let (status, json) = post_json(
+        &mut app,
+        "/api/v1/auth/login",
+        json!({
+            "username": "testadmin",
+            "password": "TestAdmin123!"
         }),
     )
     .await;
@@ -196,8 +272,8 @@ async fn test_full_mfa_flow_e2e() {
     assert_eq!(json["requires_mfa"], true);
     let temp_token = json["token"].as_str().unwrap().to_string();
 
-    // Step 2: Verify MFA with correct code (same app instance for session persistence)
-    let totp_code = generate_admin_totp();
+    // Step 2: Verify MFA with correct code
+    let totp_code = generate_totp(&mfa_secret);
     let (status, json) = post_json(
         &mut app,
         "/api/v1/auth/mfa/verify",
@@ -211,7 +287,7 @@ async fn test_full_mfa_flow_e2e() {
     assert_eq!(status, StatusCode::OK);
     assert!(json["token"].is_string());
     assert!(json["user"].is_object());
-    assert_eq!(json["user"]["username"], "admin");
+    assert_eq!(json["user"]["username"], "testadmin");
     assert_eq!(json["user"]["role"], "admin");
     assert_eq!(json["user"]["mfa_enabled"], true);
 }
@@ -219,6 +295,10 @@ async fn test_full_mfa_flow_e2e() {
 #[tokio::test]
 async fn test_mfa_invalid_code_e2e() {
     let state = shared_state();
+
+    // Create a user with MFA enabled
+    let _ = state.auth.enable_mfa("testadmin");
+
     let mut app = app_with_state(state);
 
     // Step 1: Login as admin
@@ -226,8 +306,8 @@ async fn test_mfa_invalid_code_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "admin",
-            "password": "admin"
+            "username": "testadmin",
+            "password": "TestAdmin123!"
         }),
     )
     .await;
@@ -260,8 +340,8 @@ async fn test_logout_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "demo",
-            "password": "demo"
+            "username": "testdemo",
+            "password": "TestDemo123!"
         }),
     )
     .await;
@@ -283,14 +363,29 @@ async fn test_logout_e2e() {
 }
 
 // =============================================================================
-// Admin API E2E Tests
+// Admin API E2E Tests (require authentication)
 // =============================================================================
+
+#[tokio::test]
+async fn test_admin_requires_auth_e2e() {
+    let state = shared_state();
+    let mut app = app_with_state(state);
+
+    // Admin endpoints should return 401 without auth token
+    let (status, json) = get_json(&mut app, "/api/v1/admin/cluster").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(json["error"].is_string());
+}
 
 #[tokio::test]
 async fn test_get_cluster_info_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
-    let (status, json) = get_json(&mut app, "/api/v1/admin/cluster").await;
+
+    // Login to get auth token
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/cluster", &token).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["name"], "aegis-cluster");
@@ -303,7 +398,11 @@ async fn test_get_cluster_info_e2e() {
 async fn test_get_dashboard_summary_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
-    let (status, json) = get_json(&mut app, "/api/v1/admin/dashboard").await;
+
+    // Login to get auth token
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/dashboard", &token).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(json["cluster"].is_object());
@@ -325,7 +424,11 @@ async fn test_get_dashboard_summary_e2e() {
 async fn test_get_nodes_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
-    let (status, json) = get_json(&mut app, "/api/v1/admin/nodes").await;
+
+    // Login to get auth token
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/nodes", &token).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(json.is_array());
@@ -355,7 +458,11 @@ async fn test_get_nodes_e2e() {
 async fn test_get_storage_info_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
-    let (status, json) = get_json(&mut app, "/api/v1/admin/storage").await;
+
+    // Login to get auth token
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/storage", &token).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(json["total_bytes"].is_number());
@@ -370,7 +477,11 @@ async fn test_get_storage_info_e2e() {
 async fn test_get_query_stats_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
-    let (status, json) = get_json(&mut app, "/api/v1/admin/stats").await;
+
+    // Login to get auth token
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/stats", &token).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(json["total_queries"].is_number());
@@ -387,7 +498,11 @@ async fn test_get_query_stats_e2e() {
 async fn test_get_alerts_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
-    let (status, json) = get_json(&mut app, "/api/v1/admin/alerts").await;
+
+    // Login to get auth token
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/alerts", &token).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(json["alerts"].is_array());
@@ -410,7 +525,11 @@ async fn test_get_alerts_e2e() {
 async fn test_get_activities_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
-    let (status, json) = get_json(&mut app, "/api/v1/admin/activities").await;
+
+    // Login to get auth token
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/activities", &token).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(json.is_array());
@@ -431,19 +550,15 @@ async fn test_activities_logged_after_login_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
-    // Login to generate activity
-    let _ = post_json(
-        &mut app,
-        "/api/v1/auth/login",
-        json!({
-            "username": "demo",
-            "password": "demo"
-        }),
-    )
-    .await;
+    // Login to generate activity and get token
+    let token = login_test_user(&mut app, "testdemo", "TestDemo123!").await.unwrap();
 
-    // Check activities - should include the login
-    let (status, json) = get_json(&mut app, "/api/v1/admin/activities?limit=10").await;
+    // Check activities - should include the login (need admin token for this)
+    let admin_token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/activities?limit=10", &admin_token).await;
+
+    // Token is used for validation, just need it to exist
+    assert!(!token.is_empty());
 
     assert_eq!(status, StatusCode::OK);
     assert!(json.is_array());
@@ -512,50 +627,54 @@ async fn test_full_user_journey_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "demo",
-            "password": "demo"
+            "username": "testdemo",
+            "password": "TestDemo123!"
         }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let _token = json["token"].as_str().unwrap().to_string();
+    let token = json["token"].as_str().unwrap().to_string();
 
-    // 3. Get dashboard summary
-    let (status, json) = get_json(&mut app, "/api/v1/admin/dashboard").await;
+    // 3. Get dashboard summary (with auth)
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/dashboard", &token).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["cluster"]["state"], "Healthy");
 
-    // 4. Get nodes
-    let (status, json) = get_json(&mut app, "/api/v1/admin/nodes").await;
+    // 4. Get nodes (with auth)
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/nodes", &token).await;
     assert_eq!(status, StatusCode::OK);
     let nodes = json.as_array().unwrap();
     assert!(!nodes.is_empty());
 
-    // 5. Get storage info
-    let (status, json) = get_json(&mut app, "/api/v1/admin/storage").await;
+    // 5. Get storage info (with auth)
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/storage", &token).await;
     assert_eq!(status, StatusCode::OK);
     assert!(json["total_bytes"].as_u64().unwrap() > json["used_bytes"].as_u64().unwrap());
 
-    // 6. Get query stats
-    let (status, json) = get_json(&mut app, "/api/v1/admin/stats").await;
+    // 6. Get query stats (with auth)
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/stats", &token).await;
     assert_eq!(status, StatusCode::OK);
     // With no queries recorded, percentiles may all be 0.0
     // Just verify the fields exist and are non-negative
     assert!(json["p50_duration_ms"].as_f64().unwrap() >= 0.0);
     assert!(json["p99_duration_ms"].as_f64().unwrap() >= 0.0);
 
-    // 7. Get alerts
-    let (status, _) = get_json(&mut app, "/api/v1/admin/alerts").await;
+    // 7. Get alerts (with auth)
+    let (status, _) = get_json_auth(&mut app, "/api/v1/admin/alerts", &token).await;
     assert_eq!(status, StatusCode::OK);
 
-    // 8. Get activities
-    let (status, _) = get_json(&mut app, "/api/v1/admin/activities").await;
+    // 8. Get activities (with auth)
+    let (status, _) = get_json_auth(&mut app, "/api/v1/admin/activities", &token).await;
     assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
 async fn test_admin_user_full_journey_with_mfa_e2e() {
     let state = shared_state();
+
+    // Enable MFA for admin user
+    let mfa_secret = state.auth.enable_mfa("testadmin").unwrap();
+
     let mut app = app_with_state(state);
 
     // 1. Login as admin (requires MFA)
@@ -563,8 +682,8 @@ async fn test_admin_user_full_journey_with_mfa_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "admin",
-            "password": "admin"
+            "username": "testadmin",
+            "password": "TestAdmin123!"
         }),
     )
     .await;
@@ -573,7 +692,7 @@ async fn test_admin_user_full_journey_with_mfa_e2e() {
     let temp_token = json["token"].as_str().unwrap().to_string();
 
     // 2. Verify MFA
-    let totp_code = generate_admin_totp();
+    let totp_code = generate_totp(&mfa_secret);
     let (status, json) = post_json(
         &mut app,
         "/api/v1/auth/mfa/verify",
@@ -587,8 +706,8 @@ async fn test_admin_user_full_journey_with_mfa_e2e() {
     assert_eq!(json["user"]["role"], "admin");
     let token = json["token"].as_str().unwrap().to_string();
 
-    // 3. Access admin resources
-    let (status, _) = get_json(&mut app, "/api/v1/admin/dashboard").await;
+    // 3. Access admin resources (with auth)
+    let (status, _) = get_json_auth(&mut app, "/api/v1/admin/dashboard", &token).await;
     assert_eq!(status, StatusCode::OK);
 
     // 4. Logout
@@ -617,8 +736,8 @@ async fn test_operator_user_login_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "operator",
-            "password": "operator"
+            "username": "testoperator",
+            "password": "TestOperator123!"
         }),
     )
     .await;
@@ -626,7 +745,7 @@ async fn test_operator_user_login_e2e() {
     assert_eq!(status, StatusCode::OK);
     assert!(json["token"].is_string());
     assert!(json["user"].is_object());
-    assert_eq!(json["user"]["username"], "operator");
+    assert_eq!(json["user"]["username"], "testoperator");
     assert_eq!(json["user"]["role"], "operator");
     assert_eq!(json["user"]["mfa_enabled"], false);
 }
@@ -645,8 +764,8 @@ async fn test_session_validation_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "demo",
-            "password": "demo"
+            "username": "testdemo",
+            "password": "TestDemo123!"
         }),
     )
     .await;
@@ -656,7 +775,7 @@ async fn test_session_validation_e2e() {
     let (status, json) = get_json(&mut app, &format!("/api/v1/auth/session?token={}", token)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(json.is_object());
-    assert_eq!(json["username"], "demo");
+    assert_eq!(json["username"], "testdemo");
 }
 
 #[tokio::test]
@@ -1315,7 +1434,7 @@ async fn test_multiple_failed_logins_e2e() {
             &mut app,
             "/api/v1/auth/login",
             json!({
-                "username": "admin",
+                "username": "testadmin",
                 "password": "wrong_password"
             }),
         )
@@ -1328,8 +1447,8 @@ async fn test_multiple_failed_logins_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "demo",
-            "password": "demo"
+            "username": "testdemo",
+            "password": "TestDemo123!"
         }),
     )
     .await;
@@ -1436,18 +1555,31 @@ async fn test_api_v1_prefix_e2e() {
     let state = shared_state();
     let mut app = app_with_state(state);
 
-    // All v1 endpoints should work
-    let endpoints = vec![
+    // Login to get auth token for admin endpoints
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+
+    // Admin v1 endpoints (require auth)
+    let admin_endpoints = vec![
         "/api/v1/admin/cluster",
         "/api/v1/admin/nodes",
         "/api/v1/admin/stats",
         "/api/v1/admin/alerts",
         "/api/v1/admin/dashboard",
+    ];
+
+    for endpoint in admin_endpoints {
+        let (status, _) = get_json_auth(&mut app, endpoint, &token).await;
+        assert!(status == StatusCode::OK || status == StatusCode::NOT_FOUND,
+            "Endpoint {} returned unexpected status: {}", endpoint, status);
+    }
+
+    // Public v1 endpoints (no auth required)
+    let public_endpoints = vec![
         "/api/v1/tables",
         "/api/v1/metrics",
     ];
 
-    for endpoint in endpoints {
+    for endpoint in public_endpoints {
         let (status, _) = get_json(&mut app, endpoint).await;
         assert!(status == StatusCode::OK || status == StatusCode::NOT_FOUND,
             "Endpoint {} returned unexpected status: {}", endpoint, status);
@@ -1473,13 +1605,13 @@ async fn test_complete_system_flow_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "demo",
-            "password": "demo"
+            "username": "testdemo",
+            "password": "TestDemo123!"
         }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let _token = json["token"].as_str().unwrap();
+    let token = json["token"].as_str().unwrap().to_string();
 
     // 3. Store data in KV (returns the created entry)
     let test_key = format!("system_test_{}", uuid::Uuid::new_v4());
@@ -1508,13 +1640,13 @@ async fn test_complete_system_flow_e2e() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["success"], true);
 
-    // 5. Check cluster status
-    let (status, json) = get_json(&mut app, "/api/v1/admin/cluster").await;
+    // 5. Check cluster status (with auth)
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/cluster", &token).await;
     assert_eq!(status, StatusCode::OK);
     assert!(json["name"].is_string());
 
-    // 6. Get dashboard summary
-    let (status, json) = get_json(&mut app, "/api/v1/admin/dashboard").await;
+    // 6. Get dashboard summary (with auth)
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/dashboard", &token).await;
     assert_eq!(status, StatusCode::OK);
     assert!(json["cluster"].is_object());
 
@@ -1523,8 +1655,8 @@ async fn test_complete_system_flow_e2e() {
     assert_eq!(status, StatusCode::OK);
     assert!(json["total_requests"].is_number());
 
-    // 8. Check activities were logged
-    let (status, json) = get_json(&mut app, "/api/v1/admin/activities").await;
+    // 8. Check activities were logged (with auth)
+    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/activities", &token).await;
     assert_eq!(status, StatusCode::OK);
     assert!(json.as_array().unwrap().len() > 0);
 
