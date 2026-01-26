@@ -2,7 +2,7 @@
 
 ## Business Source License 1.1 (BSL)
 
-**Copyright 2024-2026 AutomataNexus Development Team**
+**Copyright 2024-2026 Andrew Jewell Sr / AutomataNexus LLC**
 
 Aegis Database is licensed under the Business Source License 1.1 (BSL).
 
@@ -19,7 +19,7 @@ Aegis Database is licensed under the Business Source License 1.1 (BSL).
 ### Key Terms
 
 - **Licensed Work**: Aegis Database Platform
-- **Licensor**: AutomataNexus Development Team
+- **Licensor**: Andrew Jewell Sr / AutomataNexus LLC
 - **Change Date**: January 26, 2030
 - **Change License**: Apache License 2.0
 
@@ -37,7 +37,7 @@ On **January 26, 2030** (or 4 years after any specific version's release, whiche
 
 For production use as a Database Service, contact us for a commercial license:
 
-- **Email**: sales@automatanexus.com
+- **Email**: Devops@automatanexus.com
 - **Website**: https://automatanexus.com/aegis-db/licensing
 
 ### Commercial License Includes
@@ -74,7 +74,7 @@ A: Yes, you can modify and create derivative works.
 A: Yes! Contributions are welcome under a Contributor License Agreement.
 
 **Q: Can I offer Aegis as a managed database service to customers?**
-A: This requires a commercial license. Contact sales@automatanexus.com.
+A: This requires a commercial license. Contact Devops@automatanexus.com.
 
 **Q: What happens after January 26, 2030?**
 A: Version 0.1.8 and all earlier versions become Apache-2.0 licensed.
@@ -90,4 +90,4 @@ See the [LICENSE](LICENSE) file for the complete Business Source License 1.1 tex
 ## Questions
 
 For licensing questions: legal@automatanexus.com
-For commercial licensing: sales@automatanexus.com
+For commercial licensing: Devops@automatanexus.com
