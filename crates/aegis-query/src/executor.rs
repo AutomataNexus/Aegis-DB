@@ -19,6 +19,7 @@ use crate::planner::{
     PlanBinaryOp, PlanExpression, PlanJoinType, PlanLiteral, PlanNode, PlanUnaryOp, ProjectNode,
     ProjectionExpr, QueryPlan, ScanNode, SortKey, SortNode, UpdateNode,
 };
+use crate::index::{TableIndexManager, IndexType, IndexKey, IndexError};
 use aegis_common::{DataType, Row, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -47,6 +48,15 @@ pub enum ExecutorError {
 
     #[error("Execution error: {0}")]
     Internal(String),
+
+    #[error("Index error: {0}")]
+    IndexError(String),
+}
+
+impl From<IndexError> for ExecutorError {
+    fn from(e: IndexError) -> Self {
+        ExecutorError::IndexError(e.to_string())
+    }
 }
 
 pub type ExecutorResult<T> = Result<T, ExecutorError>;
@@ -59,7 +69,10 @@ pub type ExecutorResult<T> = Result<T, ExecutorError>;
 pub struct ExecutionContext {
     tables: HashMap<String, Arc<RwLock<TableData>>>,
     table_schemas: HashMap<String, TableSchema>,
+    /// Index metadata (for persistence)
     indexes: HashMap<String, Vec<IndexSchema>>,
+    /// Actual index data structures
+    table_indexes: HashMap<String, Arc<TableIndexManager>>,
     batch_size: usize,
 }
 
@@ -132,6 +145,7 @@ impl ExecutionContext {
             tables: HashMap::new(),
             table_schemas: HashMap::new(),
             indexes: HashMap::new(),
+            table_indexes: HashMap::new(),
             batch_size: 1024,
         }
     }
@@ -398,9 +412,9 @@ impl ExecutionContext {
         unique: bool,
         if_not_exists: bool,
     ) -> ExecutorResult<()> {
-        if !self.tables.contains_key(&table) {
-            return Err(ExecutorError::TableNotFound(table));
-        }
+        let table_data = self.tables.get(&table)
+            .ok_or_else(|| ExecutorError::TableNotFound(table.clone()))?
+            .clone();
 
         let indexes = self.indexes.entry(table.clone()).or_default();
 
@@ -415,12 +429,47 @@ impl ExecutionContext {
             )));
         }
 
+        // Store metadata
         indexes.push(IndexSchema {
-            name,
-            table,
-            columns,
+            name: name.clone(),
+            table: table.clone(),
+            columns: columns.clone(),
             unique,
         });
+
+        // Create actual index structure
+        let index_manager = self.table_indexes.entry(table.clone())
+            .or_insert_with(|| Arc::new(TableIndexManager::new(table.clone())));
+
+        // Use B-tree by default (supports range queries)
+        Arc::get_mut(index_manager)
+            .ok_or_else(|| ExecutorError::Internal("Cannot modify shared index manager".to_string()))?
+            .create_index(name.clone(), columns.clone(), unique, IndexType::BTree)?;
+
+        // Populate the index with existing data
+        let table_guard = table_data.read()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        let index_manager = self.table_indexes.get(&table).unwrap();
+        for (row_id, row) in table_guard.rows.iter().enumerate() {
+            let column_values: HashMap<String, Value> = table_guard.columns.iter()
+                .zip(row.values.iter())
+                .map(|(col, val)| (col.clone(), val.clone()))
+                .collect();
+
+            // Build index key from specified columns
+            let key_values: Vec<crate::index::IndexValue> = columns.iter()
+                .map(|col| {
+                    column_values.get(col)
+                        .map(IndexKey::from_value)
+                        .unwrap_or(crate::index::IndexValue::Null)
+                })
+                .collect();
+            let key = IndexKey::new(key_values);
+
+            // Insert into the index using public API
+            index_manager.insert_into_index(&name, key, row_id)?;
+        }
 
         Ok(())
     }
@@ -428,11 +477,24 @@ impl ExecutionContext {
     /// Drop an index.
     pub fn drop_index(&mut self, name: &str, if_exists: bool) -> ExecutorResult<()> {
         let mut found = false;
-        for indexes in self.indexes.values_mut() {
+        let mut table_name = None;
+
+        // Find and remove from metadata
+        for (tbl, indexes) in self.indexes.iter_mut() {
             if let Some(pos) = indexes.iter().position(|idx| idx.name == name) {
                 indexes.remove(pos);
+                table_name = Some(tbl.clone());
                 found = true;
                 break;
+            }
+        }
+
+        // Remove from actual index structure
+        if let Some(tbl) = table_name {
+            if let Some(manager) = self.table_indexes.get_mut(&tbl) {
+                if let Some(m) = Arc::get_mut(manager) {
+                    let _ = m.drop_index(name);
+                }
             }
         }
 
@@ -444,6 +506,16 @@ impl ExecutionContext {
         }
 
         Ok(())
+    }
+
+    /// Get the index manager for a table.
+    pub fn get_index_manager(&self, table: &str) -> Option<Arc<TableIndexManager>> {
+        self.table_indexes.get(table).cloned()
+    }
+
+    /// Get index metadata for a table.
+    pub fn get_indexes(&self, table: &str) -> Option<&Vec<IndexSchema>> {
+        self.indexes.get(table)
     }
 
     /// Get table schema.
@@ -487,10 +559,72 @@ impl ExecutionContext {
             ctx.tables.insert(table.name.clone(), Arc::new(RwLock::new(table)));
         }
 
-        // Restore indexes
-        ctx.indexes = snapshot.indexes;
+        // Store index metadata
+        ctx.indexes = snapshot.indexes.clone();
+
+        // Rebuild actual index structures from metadata
+        for (table_name, index_schemas) in snapshot.indexes {
+            for index_schema in index_schemas {
+                // Rebuild each index
+                let _ = ctx.rebuild_index(
+                    &index_schema.name,
+                    &table_name,
+                    &index_schema.columns,
+                    index_schema.unique,
+                );
+            }
+        }
 
         ctx
+    }
+
+    /// Rebuild an index from existing table data.
+    fn rebuild_index(
+        &mut self,
+        name: &str,
+        table: &str,
+        columns: &[String],
+        unique: bool,
+    ) -> ExecutorResult<()> {
+        let table_data = self.tables.get(table)
+            .ok_or_else(|| ExecutorError::TableNotFound(table.to_string()))?
+            .clone();
+
+        // Create index manager if needed
+        let index_manager = self.table_indexes.entry(table.to_string())
+            .or_insert_with(|| Arc::new(TableIndexManager::new(table.to_string())));
+
+        // Create the index structure
+        if let Some(m) = Arc::get_mut(index_manager) {
+            m.create_index(name.to_string(), columns.to_vec(), unique, IndexType::BTree)?;
+        } else {
+            return Err(ExecutorError::Internal("Cannot modify shared index manager".to_string()));
+        }
+
+        // Populate with existing data
+        let table_guard = table_data.read()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        let index_manager = self.table_indexes.get(table).unwrap();
+        for (row_id, row) in table_guard.rows.iter().enumerate() {
+            let column_values: HashMap<String, Value> = table_guard.columns.iter()
+                .zip(row.values.iter())
+                .map(|(col, val)| (col.clone(), val.clone()))
+                .collect();
+
+            let key_values: Vec<crate::index::IndexValue> = columns.iter()
+                .map(|col| {
+                    column_values.get(col)
+                        .map(IndexKey::from_value)
+                        .unwrap_or(crate::index::IndexValue::Null)
+                })
+                .collect();
+            let key = IndexKey::new(key_values);
+
+            index_manager.insert_into_index(name, key, row_id)?;
+        }
+
+        Ok(())
     }
 
     /// Save the execution context to a file.

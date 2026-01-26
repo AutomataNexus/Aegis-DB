@@ -18,9 +18,11 @@ pub mod ast;
 pub mod analyzer;
 pub mod planner;
 pub mod executor;
+pub mod index;
 
 pub use parser::Parser;
 pub use ast::*;
 pub use analyzer::Analyzer;
 pub use planner::{QueryPlan, Planner};
 pub use executor::Executor;
+pub use index::{BTreeIndex, HashIndex, IndexType, IndexKey, IndexValue, TableIndexManager, IndexError};
