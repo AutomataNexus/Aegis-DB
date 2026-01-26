@@ -1,0 +1,34 @@
+# Aegis DB Configuration
+# See docs/USER_GUIDE.md for full options
+
+[server]
+host = "127.0.0.1"
+port = 9090
+data_dir = "./data"
+
+[auth]
+# Set these via environment variables in production:
+# AEGIS_ADMIN_USERNAME, AEGIS_ADMIN_PASSWORD
+enabled = true
+session_timeout_minutes = 60
+
+[cors]
+# Allowed origins (comma-separated, or use AEGIS_CORS_ORIGINS env var)
+# Use "*" to allow all origins (not recommended for production)
+allowed_origins = ["http://localhost:8000", "http://localhost:3000"]
+
+[cluster]
+# Cluster mode settings
+enabled = false
+# join_addresses = ["127.0.0.1:9091", "127.0.0.1:9092"]
+
+[backup]
+enabled = true
+schedule = "0 2 * * *"
+retention_days = 30
+
+[security]
+tls_enabled = false
+# tls_cert = "./certs/server.crt"
+# tls_key = "./certs/server.key"
+audit_logging = true

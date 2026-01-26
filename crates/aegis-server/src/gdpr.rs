@@ -633,7 +633,7 @@ impl GdprService {
         specific_tables: Option<&[String]>,
     ) -> Vec<DeletedItem> {
         let mut deleted = Vec::new();
-        let tables = state.query_engine.list_tables();
+        let tables = state.query_engine.list_tables(None);
 
         for table_name in tables {
             // Skip if specific tables are specified and this isn't one of them
@@ -644,7 +644,7 @@ impl GdprService {
             }
 
             // Get table schema to find searchable columns
-            if let Some(table_info) = state.query_engine.get_table_info(&table_name) {
+            if let Some(table_info) = state.query_engine.get_table_info(&table_name, None) {
                 let searchable_columns: Vec<&String> = table_info.columns
                     .iter()
                     .filter(|c| {
@@ -664,7 +664,7 @@ impl GdprService {
                         table_name, column, escaped_subject
                     );
 
-                    if let Ok(result) = state.query_engine.execute(&delete_sql) {
+                    if let Ok(result) = state.query_engine.execute(&delete_sql, None) {
                         if result.rows_affected > 0 {
                             deleted.push(DeletedItem {
                                 store_type: "sql".to_string(),
@@ -1095,7 +1095,7 @@ impl GdprService {
         _date_range: Option<&DateRange>,
     ) -> Vec<ExportedItem> {
         let mut exported = Vec::new();
-        let tables = state.query_engine.list_tables();
+        let tables = state.query_engine.list_tables(None);
 
         for table_name in tables {
             // Skip if specific tables are specified and this isn't one of them
@@ -1106,7 +1106,7 @@ impl GdprService {
             }
 
             // Get table schema to find searchable columns
-            if let Some(table_info) = state.query_engine.get_table_info(&table_name) {
+            if let Some(table_info) = state.query_engine.get_table_info(&table_name, None) {
                 let searchable_columns: Vec<&String> = table_info.columns
                     .iter()
                     .filter(|c| {
@@ -1126,7 +1126,7 @@ impl GdprService {
                         table_name, column, escaped_subject
                     );
 
-                    if let Ok(result) = state.query_engine.execute(&select_sql) {
+                    if let Ok(result) = state.query_engine.execute(&select_sql, None) {
                         for (idx, row) in result.rows.iter().enumerate() {
                             // Convert row to JSON object
                             let mut row_data = serde_json::Map::new();

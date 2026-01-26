@@ -1,0 +1,17 @@
+{
+  "name": "Aegis DB Dashboard",
+  "short_name": "Aegis DB",
+  "description": "Multi-Paradigm Distributed Database Dashboard",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#14b8a6",
+  "icons": [
+    {
+      "src": "AegisDB-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -246,9 +246,9 @@ impl AppState {
         Ok(())
     }
 
-    /// Execute a SQL query.
-    pub async fn execute_query(&self, sql: &str) -> Result<QueryResult, QueryError> {
-        self.query_engine.execute(sql)
+    /// Execute a SQL query against the specified database.
+    pub async fn execute_query(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
+        self.query_engine.execute(sql, database)
     }
 
     /// Record a request metric.
@@ -621,12 +621,13 @@ impl Default for GraphStore {
 // =============================================================================
 
 /// Query engine for executing SQL statements.
-/// Maintains a persistent ExecutionContext so DDL operations persist across queries.
+/// Maintains separate ExecutionContexts per database for multi-tenancy.
 /// Now with disk persistence support for crash recovery.
 pub struct QueryEngine {
     parser: Parser,
     planner: Planner,
-    context: Arc<std::sync::RwLock<ExecutionContext>>,
+    /// Map of database name -> ExecutionContext
+    contexts: Arc<std::sync::RwLock<HashMap<String, Arc<std::sync::RwLock<ExecutionContext>>>>>,
     /// Path to persist SQL tables (if set, enables persistence)
     data_path: Option<PathBuf>,
 }
@@ -634,10 +635,13 @@ pub struct QueryEngine {
 impl QueryEngine {
     pub fn new() -> Self {
         let schema = Arc::new(PlannerSchema::new());
+        let mut contexts = HashMap::new();
+        // Create default database
+        contexts.insert("default".to_string(), Arc::new(std::sync::RwLock::new(ExecutionContext::new())));
         Self {
             parser: Parser::new(),
             planner: Planner::new(schema),
-            context: Arc::new(std::sync::RwLock::new(ExecutionContext::new())),
+            contexts: Arc::new(std::sync::RwLock::new(contexts)),
             data_path: None,
         }
     }
@@ -645,38 +649,85 @@ impl QueryEngine {
     /// Create a QueryEngine with persistence to the specified directory.
     pub fn with_persistence(data_dir: &std::path::Path) -> Self {
         let schema = Arc::new(PlannerSchema::new());
-        let db_path = data_dir.join("sql_tables.json");
+        let db_dir = data_dir.join("databases");
 
-        // Try to load existing data
-        let context = if db_path.exists() {
-            match ExecutionContext::load_from_file(&db_path) {
-                Ok(ctx) => {
-                    tracing::info!("Loaded SQL tables from {:?}", db_path);
-                    ctx
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load SQL tables from {:?}: {}", db_path, e);
-                    ExecutionContext::new()
+        // Create databases directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all(&db_dir) {
+            tracing::warn!("Failed to create databases directory: {}", e);
+        }
+
+        let mut contexts = HashMap::new();
+
+        // Load all existing databases from the directory
+        if let Ok(entries) = std::fs::read_dir(&db_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "json").unwrap_or(false) {
+                    if let Some(db_name) = path.file_stem().and_then(|s| s.to_str()) {
+                        match ExecutionContext::load_from_file(&path) {
+                            Ok(ctx) => {
+                                tracing::info!("Loaded database '{}' from {:?}", db_name, path);
+                                contexts.insert(db_name.to_string(), Arc::new(std::sync::RwLock::new(ctx)));
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to load database '{}' from {:?}: {}", db_name, path, e);
+                            }
+                        }
+                    }
                 }
             }
-        } else {
-            ExecutionContext::new()
-        };
+        }
+
+        // Ensure default database exists
+        if !contexts.contains_key("default") {
+            contexts.insert("default".to_string(), Arc::new(std::sync::RwLock::new(ExecutionContext::new())));
+        }
 
         Self {
             parser: Parser::new(),
             planner: Planner::new(schema),
-            context: Arc::new(std::sync::RwLock::new(context)),
-            data_path: Some(db_path),
+            contexts: Arc::new(std::sync::RwLock::new(contexts)),
+            data_path: Some(db_dir),
         }
     }
 
-    /// Persist current state to disk.
-    fn persist(&self) {
-        if let Some(ref path) = self.data_path {
-            if let Ok(ctx) = self.context.read() {
-                if let Err(e) = ctx.save_to_file(path) {
-                    tracing::error!("Failed to persist SQL tables to {:?}: {}", path, e);
+    /// Get or create an ExecutionContext for the specified database.
+    fn get_or_create_context(&self, database: &str) -> Arc<std::sync::RwLock<ExecutionContext>> {
+        let db_name = if database.is_empty() { "default" } else { database };
+
+        // Try to get existing context
+        {
+            let contexts = self.contexts.read().unwrap();
+            if let Some(ctx) = contexts.get(db_name) {
+                return ctx.clone();
+            }
+        }
+
+        // Create new context for this database
+        let mut contexts = self.contexts.write().unwrap();
+        // Double-check after acquiring write lock
+        if let Some(ctx) = contexts.get(db_name) {
+            return ctx.clone();
+        }
+
+        tracing::info!("Creating new database: {}", db_name);
+        let ctx = Arc::new(std::sync::RwLock::new(ExecutionContext::new()));
+        contexts.insert(db_name.to_string(), ctx.clone());
+        ctx
+    }
+
+    /// Persist a specific database to disk.
+    fn persist(&self, database: &str) {
+        if let Some(ref base_path) = self.data_path {
+            let db_name = if database.is_empty() { "default" } else { database };
+            let path = base_path.join(format!("{}.json", db_name));
+
+            let contexts = self.contexts.read().unwrap();
+            if let Some(ctx) = contexts.get(db_name) {
+                if let Ok(ctx_guard) = ctx.read() {
+                    if let Err(e) = ctx_guard.save_to_file(&path) {
+                        tracing::error!("Failed to persist database '{}' to {:?}: {}", db_name, path, e);
+                    }
                 }
             }
         }
@@ -694,8 +745,10 @@ impl QueryEngine {
         sql_upper.starts_with("TRUNCATE")
     }
 
-    /// Execute a SQL query.
-    pub fn execute(&self, sql: &str) -> Result<QueryResult, QueryError> {
+    /// Execute a SQL query against the specified database.
+    pub fn execute(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
+        let db_name = database.unwrap_or("default");
+
         let statements = self.parser.parse(sql)
             .map_err(|e| QueryError::Parse(e.to_string()))?;
 
@@ -711,14 +764,15 @@ impl QueryEngine {
         let plan = self.planner.plan(statement)
             .map_err(|e| QueryError::Plan(e.to_string()))?;
 
-        // Use shared context so DDL operations persist across queries
-        let executor = Executor::with_shared_context(self.context.clone());
+        // Get the context for this database
+        let context = self.get_or_create_context(db_name);
+        let executor = Executor::with_shared_context(context);
         let result = executor.execute(&plan)
             .map_err(|e| QueryError::Execute(e.to_string()))?;
 
         // Persist to disk if this was a mutation
         if Self::is_mutation(sql) {
-            self.persist();
+            self.persist(db_name);
         }
 
         Ok(QueryResult {
@@ -730,16 +784,29 @@ impl QueryEngine {
         })
     }
 
-    /// List all tables in the database.
-    pub fn list_tables(&self) -> Vec<String> {
-        self.context.read()
+    /// List all tables in the specified database.
+    pub fn list_tables(&self, database: Option<&str>) -> Vec<String> {
+        let db_name = database.unwrap_or("default");
+        let contexts = self.contexts.read().unwrap();
+        contexts.get(db_name)
+            .and_then(|ctx| ctx.read().ok())
             .map(|ctx| ctx.list_tables())
             .unwrap_or_default()
     }
 
-    /// Get table schema information.
-    pub fn get_table_info(&self, name: &str) -> Option<TableInfo> {
-        let ctx = self.context.read().ok()?;
+    /// List all databases.
+    pub fn list_databases(&self) -> Vec<String> {
+        self.contexts.read()
+            .map(|contexts| contexts.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Get table schema information from the specified database.
+    pub fn get_table_info(&self, name: &str, database: Option<&str>) -> Option<TableInfo> {
+        let db_name = database.unwrap_or("default");
+        let contexts = self.contexts.read().ok()?;
+        let ctx_lock = contexts.get(db_name)?;
+        let ctx = ctx_lock.read().ok()?;
         let schema = ctx.get_table_schema(name)?;
         let table_data = ctx.get_table(name)?;
         let row_count = table_data.read().ok().map(|t| t.rows.len() as u64);
@@ -755,9 +822,19 @@ impl QueryEngine {
         })
     }
 
-    /// Force persist all data to disk (for graceful shutdown).
+    /// Force persist all databases to disk (for graceful shutdown).
     pub fn flush(&self) {
-        self.persist();
+        if let Some(ref base_path) = self.data_path {
+            let contexts = self.contexts.read().unwrap();
+            for (db_name, ctx) in contexts.iter() {
+                let path = base_path.join(format!("{}.json", db_name));
+                if let Ok(ctx_guard) = ctx.read() {
+                    if let Err(e) = ctx_guard.save_to_file(&path) {
+                        tracing::error!("Failed to persist database '{}' to {:?}: {}", db_name, path, e);
+                    }
+                }
+            }
+        }
     }
 }
 
