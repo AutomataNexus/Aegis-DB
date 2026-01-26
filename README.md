@@ -5,7 +5,7 @@
 <h1 align="center">Aegis Database Platform</h1>
 
 <p align="center">
-  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status">
   <img src="https://img.shields.io/badge/tests-497%20passing-brightgreen.svg" alt="Tests">
@@ -226,7 +226,13 @@ trunk build --release
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE.md](LICENSE.md) for details.
+**Business Source License 1.1 (BSL)**
+
+- Free for development, testing, internal use, and non-commercial projects
+- Commercial "Database Service" offerings require a license
+- Converts to Apache-2.0 on January 26, 2030
+
+See [LICENSE.md](LICENSE.md) for details. For commercial licensing: sales@automatanexus.com
 
 Copyright 2024-2026 AutomataNexus Development Team
 
