@@ -78,7 +78,7 @@ pub async fn execute_query(
 ) -> impl IntoResponse {
     let start = Instant::now();
 
-    let result = state.execute_query(&request.sql).await;
+    let result = state.execute_query(&request.sql, request.database.as_deref()).await;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     match result {
@@ -140,12 +140,12 @@ pub struct ColumnInfo {
     pub nullable: bool,
 }
 
-/// List all tables.
+/// List all tables (from default database, use query endpoint with database param for others).
 pub async fn list_tables(State(state): State<AppState>) -> Json<TablesResponse> {
-    let table_names = state.query_engine.list_tables();
+    let table_names = state.query_engine.list_tables(None);
     let tables: Vec<TableInfo> = table_names
         .into_iter()
-        .filter_map(|name| state.query_engine.get_table_info(&name))
+        .filter_map(|name| state.query_engine.get_table_info(&name, None))
         .map(|info| TableInfo {
             name: info.name,
             columns: info.columns.into_iter().map(|c| ColumnInfo {
@@ -159,12 +159,12 @@ pub async fn list_tables(State(state): State<AppState>) -> Json<TablesResponse> 
     Json(TablesResponse { tables })
 }
 
-/// Get table details.
+/// Get table details (from default database).
 pub async fn get_table(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match state.query_engine.get_table_info(&name) {
+    match state.query_engine.get_table_info(&name, None) {
         Some(info) => Json(TableInfo {
             name: info.name,
             columns: info.columns.into_iter().map(|c| ColumnInfo {
@@ -1742,6 +1742,8 @@ pub async fn get_graph_data(State(state): State<AppState>) -> Json<GraphDataResp
 #[derive(Debug, Deserialize)]
 pub struct ExecuteQueryRequest {
     pub query: String,
+    #[serde(default)]
+    pub database: Option<String>,
 }
 
 /// Query execution response.
@@ -1764,7 +1766,7 @@ pub async fn execute_builder_query(
     state.activity.log_query(&request.query, 0, None);
 
     // Execute through the real query engine
-    match state.query_engine.execute(&request.query) {
+    match state.query_engine.execute(&request.query, request.database.as_deref()) {
         Ok(result) => {
             Json(ExecuteQueryResponse {
                 success: true,
