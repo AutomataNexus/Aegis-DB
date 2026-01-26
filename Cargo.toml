@@ -20,11 +20,11 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 rust-version = "1.75"
 authors = ["AutomataNexus Development Team"]
-license = "Apache-2.0"
+license-file = "LICENSE"
 repository = "https://github.com/AutomataNexus/Aegis-DB"
 homepage = "https://automatanexus.com"
 description = "Unified multi-paradigm database platform"

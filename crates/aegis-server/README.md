@@ -239,4 +239,4 @@ cargo test -p aegis-server
 
 ## License
 
-Apache-2.0
+Business Source License 1.1 (BSL) - See [LICENSE](../../LICENSE) for details.
