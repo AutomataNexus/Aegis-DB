@@ -52,6 +52,9 @@ pub async fn health_check() -> Json<HealthResponse> {
 /// Query request body.
 #[derive(Debug, Deserialize)]
 pub struct QueryRequest {
+    /// Target database name (optional, defaults to "default")
+    #[serde(default)]
+    pub database: Option<String>,
     pub sql: String,
     #[serde(default)]
     pub params: Vec<serde_json::Value>,
