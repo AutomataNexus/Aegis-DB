@@ -13,7 +13,10 @@ This document covers security features, best practices, and configuration for pr
 7. [Nginx Reverse Proxy](#nginx-reverse-proxy)
 8. [Security Headers](#security-headers)
 9. [Audit Logging](#audit-logging)
-10. [Best Practices](#best-practices)
+10. [Data Encryption](#data-encryption)
+11. [Breach Detection and Response](#breach-detection-and-response)
+12. [Regulatory Compliance](#regulatory-compliance)
+13. [Best Practices](#best-practices)
 
 ---
 
@@ -420,6 +423,475 @@ All security-relevant actions are logged:
 | Activity Log | `/var/log/aegis/activity.log` |
 | Server Log | `/var/log/aegis/server.log` |
 | Audit Log | `/var/log/aegis/audit.log` |
+
+---
+
+## Data Encryption
+
+AegisDB provides comprehensive encryption for data protection at rest and in transit.
+
+### Data at Rest Encryption
+
+Enable encryption for stored data using AES-256-GCM:
+
+```bash
+# Set encryption key (must be 32 bytes / 256 bits, base64 encoded)
+export AEGIS_ENCRYPTION_KEY=your-base64-encoded-32-byte-key
+
+# Generate a secure encryption key
+openssl rand -base64 32
+```
+
+| Feature | Algorithm | Key Size |
+|---------|-----------|----------|
+| Data at Rest | AES-256-GCM | 256-bit |
+| Key Derivation | HKDF-SHA256 | 256-bit |
+| IV/Nonce | Random | 96-bit |
+
+### Configuration
+
+```toml
+[encryption]
+enabled = true
+algorithm = "aes-256-gcm"
+key_rotation_days = 90
+```
+
+### Encrypted Backups
+
+All backups are encrypted by default when `AEGIS_ENCRYPTION_KEY` is configured:
+
+```bash
+# Create encrypted backup
+curl -X POST https://localhost:9090/api/v1/admin/backup \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"encrypted": true}'
+
+# Backup metadata includes encryption info
+{
+  "backup_id": "backup-2026-01-26-153000",
+  "encrypted": true,
+  "encryption_algorithm": "aes-256-gcm",
+  "created_at": "2026-01-26T15:30:00Z",
+  "size_bytes": 104857600
+}
+```
+
+### Key Management
+
+| Practice | Recommendation |
+|----------|----------------|
+| Key Storage | Use HashiCorp Vault or AWS KMS |
+| Key Rotation | Rotate every 90 days |
+| Key Backup | Store in separate secure location |
+| Access Control | Limit key access to authorized personnel |
+
+### TLS for Data in Transit
+
+All client-server communication should use TLS 1.2 or higher:
+
+```bash
+# Verify TLS configuration
+openssl s_client -connect localhost:9090 -tls1_3
+
+# Check supported cipher suites
+nmap --script ssl-enum-ciphers -p 9090 localhost
+```
+
+See [TLS/HTTPS Configuration](#tlshttps-configuration) for detailed setup instructions.
+
+---
+
+## Breach Detection and Response
+
+AegisDB includes built-in breach detection and automated notification capabilities.
+
+### How Breach Detection Works
+
+The breach detection system monitors for:
+
+| Indicator | Detection Method | Severity |
+|-----------|------------------|----------|
+| Multiple failed logins | Threshold-based (>10 in 5 min) | High |
+| Unusual access patterns | Anomaly detection | Medium |
+| Privilege escalation attempts | Rule-based | Critical |
+| Data exfiltration signals | Volume/rate monitoring | Critical |
+| SQL injection attempts | Pattern matching | High |
+| Unauthorized API access | Token validation failures | Medium |
+
+### Detection Configuration
+
+```toml
+[breach_detection]
+enabled = true
+failed_login_threshold = 10
+failed_login_window_minutes = 5
+anomaly_detection = true
+data_exfiltration_threshold_mb = 100
+```
+
+### Configuring Webhook Notifications
+
+Configure automated alerts when potential breaches are detected:
+
+```bash
+# Set webhook URL for breach notifications
+export AEGIS_BREACH_WEBHOOK_URL=https://your-incident-management.example.com/webhook
+
+# Optional: Set webhook authentication
+export AEGIS_BREACH_WEBHOOK_SECRET=your-webhook-secret
+```
+
+### Webhook Payload Format
+
+When a breach is detected, AegisDB sends a POST request:
+
+```json
+{
+  "event_type": "security_breach",
+  "severity": "critical",
+  "timestamp": "2026-01-26T15:30:00Z",
+  "breach_type": "multiple_failed_logins",
+  "details": {
+    "ip_address": "192.168.1.100",
+    "username": "admin",
+    "failed_attempts": 15,
+    "time_window_minutes": 5
+  },
+  "recommended_action": "Block IP address and investigate",
+  "instance_id": "aegis-prod-01"
+}
+```
+
+### Integration Examples
+
+**Slack Integration:**
+```bash
+export AEGIS_BREACH_WEBHOOK_URL=https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXX
+```
+
+**PagerDuty Integration:**
+```bash
+export AEGIS_BREACH_WEBHOOK_URL=https://events.pagerduty.com/v2/enqueue
+export AEGIS_BREACH_WEBHOOK_SECRET=your-pagerduty-routing-key
+```
+
+### Incident Response Procedures
+
+When a breach is detected:
+
+1. **Immediate Actions (0-15 minutes)**
+   - Automated webhook notification sent
+   - Suspicious IP addresses temporarily blocked
+   - Affected user sessions invalidated
+   - Audit logs preserved
+
+2. **Investigation Phase (15-60 minutes)**
+   - Review audit logs at `/var/log/aegis/audit.log`
+   - Identify scope of potential breach
+   - Determine affected data and users
+   - Document timeline of events
+
+3. **Containment (1-4 hours)**
+   - Isolate affected systems if necessary
+   - Revoke compromised credentials
+   - Apply emergency patches if vulnerability exploited
+   - Enable enhanced monitoring
+
+4. **Recovery (4-24 hours)**
+   - Restore from encrypted backups if needed
+   - Reset affected user passwords
+   - Re-enable services with additional monitoring
+   - Communicate with stakeholders
+
+5. **Post-Incident (24-72 hours)**
+   - Complete incident report
+   - Identify root cause
+   - Implement preventive measures
+   - Update security policies
+   - Notify regulatory bodies if required (see [Regulatory Compliance](#regulatory-compliance))
+
+### Incident Response API
+
+```bash
+# Get active security alerts
+GET /api/v1/admin/security/alerts
+
+# Acknowledge an alert
+POST /api/v1/admin/security/alerts/{alert_id}/acknowledge
+
+# Block an IP address
+POST /api/v1/admin/security/block-ip
+{
+  "ip_address": "192.168.1.100",
+  "reason": "Multiple failed login attempts",
+  "duration_hours": 24
+}
+
+# Get blocked IPs
+GET /api/v1/admin/security/blocked-ips
+```
+
+---
+
+## Regulatory Compliance
+
+AegisDB includes features to help organizations meet regulatory compliance requirements.
+
+### HIPAA Compliance
+
+For organizations handling Protected Health Information (PHI):
+
+| Requirement | AegisDB Feature | Configuration |
+|-------------|-----------------|---------------|
+| Access Controls | RBAC with 25+ permissions | `[rbac]` section |
+| Audit Controls | Comprehensive audit logging | `[audit]` section |
+| Transmission Security | TLS 1.2/1.3 encryption | `--tls` flag |
+| Encryption | AES-256-GCM at rest | `AEGIS_ENCRYPTION_KEY` |
+| Integrity Controls | Checksums and WAL | Built-in |
+| Automatic Logoff | Session timeout | `session_timeout_minutes` |
+
+**Encrypted Backups for HIPAA:**
+
+```bash
+# Configure HIPAA-compliant backups
+export AEGIS_ENCRYPTION_KEY=your-256-bit-key
+export AEGIS_BACKUP_ENCRYPTION=required
+
+# Backup with PHI must be encrypted
+curl -X POST https://localhost:9090/api/v1/admin/backup \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"encrypted": true, "compliance_mode": "hipaa"}'
+```
+
+**Audit Log Requirements:**
+
+All access to PHI is logged with:
+- User identity
+- Date and time of access
+- Type of action performed
+- Data accessed
+- Source IP address
+
+**Breach Notification:**
+
+Configure automated breach notification (required within 60 days for HIPAA):
+
+```bash
+export AEGIS_BREACH_WEBHOOK_URL=https://your-compliance-system.example.com/hipaa-breach
+export AEGIS_BREACH_NOTIFICATION_REQUIRED=true
+```
+
+### GDPR Compliance
+
+For organizations handling EU personal data:
+
+| GDPR Right | AegisDB Feature | API Endpoint |
+|------------|-----------------|--------------|
+| Right to Erasure | Data deletion API | `DELETE /api/v1/gdpr/erasure` |
+| Right to Portability | Data export (JSON/CSV) | `GET /api/v1/gdpr/export` |
+| Right to Access | Data retrieval API | `GET /api/v1/gdpr/access` |
+| Consent Management | Consent tracking | `POST /api/v1/gdpr/consent` |
+| Data Minimization | Retention policies | `[retention]` config |
+
+**Right to Erasure (Article 17):**
+
+```bash
+# Request data erasure for a user
+curl -X DELETE https://localhost:9090/api/v1/gdpr/erasure \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subject_id": "user-12345",
+    "reason": "user_request",
+    "verification_token": "verification-abc123"
+  }'
+
+# Response
+{
+  "erasure_id": "erasure-2026-01-26-001",
+  "status": "completed",
+  "records_deleted": 1547,
+  "completed_at": "2026-01-26T15:35:00Z",
+  "audit_reference": "audit-gdpr-12345"
+}
+```
+
+**Data Portability (Article 20):**
+
+```bash
+# Export user data in portable format
+curl -X GET "https://localhost:9090/api/v1/gdpr/export?subject_id=user-12345&format=json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o user-data-export.json
+
+# Supported formats: json, csv, xml
+```
+
+**Consent Management:**
+
+```bash
+# Record consent
+curl -X POST https://localhost:9090/api/v1/gdpr/consent \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "subject_id": "user-12345",
+    "purpose": "marketing",
+    "granted": true,
+    "timestamp": "2026-01-26T15:30:00Z"
+  }'
+
+# Query consent status
+curl -X GET "https://localhost:9090/api/v1/gdpr/consent?subject_id=user-12345" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Data Retention Configuration:**
+
+```toml
+[retention]
+enabled = true
+default_retention_days = 365
+pii_retention_days = 90
+audit_log_retention_days = 2555  # 7 years for compliance
+auto_delete_expired = true
+```
+
+### CCPA Compliance
+
+For organizations handling California consumer data:
+
+| CCPA Right | AegisDB Feature | Implementation |
+|------------|-----------------|----------------|
+| Right to Know | Data access API | `GET /api/v1/ccpa/access` |
+| Right to Delete | Data deletion API | `DELETE /api/v1/ccpa/delete` |
+| Right to Opt-Out | Do Not Sell flag | `POST /api/v1/ccpa/opt-out` |
+| Non-Discrimination | Access logging | Audit trail |
+
+**Do Not Sell Implementation:**
+
+```bash
+# Set Do Not Sell flag for a consumer
+curl -X POST https://localhost:9090/api/v1/ccpa/opt-out \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "consumer_id": "consumer-12345",
+    "opt_out_type": "do_not_sell",
+    "effective_date": "2026-01-26"
+  }'
+
+# Response
+{
+  "opt_out_id": "optout-2026-01-26-001",
+  "consumer_id": "consumer-12345",
+  "status": "active",
+  "effective_date": "2026-01-26",
+  "confirmation_number": "CCPA-DNX-12345"
+}
+```
+
+**Data Deletion Request:**
+
+```bash
+# Process CCPA deletion request
+curl -X DELETE https://localhost:9090/api/v1/ccpa/delete \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "consumer_id": "consumer-12345",
+    "request_type": "consumer_request",
+    "verification_method": "email_verified"
+  }'
+
+# Response includes service provider notification list
+{
+  "deletion_id": "del-2026-01-26-001",
+  "status": "processing",
+  "estimated_completion": "2026-02-10T00:00:00Z",
+  "service_providers_notified": [
+    "analytics-provider",
+    "backup-service"
+  ]
+}
+```
+
+### SOC 2 Controls
+
+AegisDB implements controls aligned with SOC 2 Trust Service Criteria:
+
+| Category | Control | AegisDB Implementation |
+|----------|---------|------------------------|
+| **Security** | CC6.1 Logical Access | RBAC, MFA, session management |
+| **Security** | CC6.2 System Boundaries | Network isolation, TLS |
+| **Security** | CC6.3 Access Removal | User deprovisioning API |
+| **Security** | CC6.6 Security Events | Audit logging, breach detection |
+| **Security** | CC6.7 Transmission Security | TLS 1.2/1.3 required |
+| **Availability** | A1.1 Capacity Planning | Metrics and monitoring |
+| **Availability** | A1.2 Recovery | Encrypted backups, replication |
+| **Confidentiality** | C1.1 Data Classification | Field-level encryption |
+| **Confidentiality** | C1.2 Data Disposal | Secure deletion API |
+| **Processing Integrity** | PI1.1 Data Validation | Input validation, checksums |
+
+**SOC 2 Audit Evidence Collection:**
+
+```bash
+# Generate SOC 2 compliance report
+curl -X GET https://localhost:9090/api/v1/admin/compliance/soc2-report \
+  -H "Authorization: Bearer $TOKEN" \
+  -o soc2-evidence.json
+
+# Report includes:
+# - Access control logs
+# - Configuration change history
+# - Security event summary
+# - Encryption status
+# - Backup verification logs
+```
+
+**Continuous Compliance Monitoring:**
+
+```toml
+[compliance]
+soc2_monitoring = true
+alert_on_control_failure = true
+evidence_retention_days = 365
+automated_evidence_collection = true
+```
+
+### Compliance Dashboard
+
+Access compliance status via the admin dashboard:
+
+```bash
+# Get compliance status summary
+GET /api/v1/admin/compliance/status
+
+# Response
+{
+  "hipaa": {
+    "status": "compliant",
+    "last_audit": "2026-01-15",
+    "controls_met": 18,
+    "controls_total": 18
+  },
+  "gdpr": {
+    "status": "compliant",
+    "last_audit": "2026-01-15",
+    "pending_erasure_requests": 0,
+    "pending_access_requests": 2
+  },
+  "ccpa": {
+    "status": "compliant",
+    "do_not_sell_count": 1547,
+    "pending_deletion_requests": 1
+  },
+  "soc2": {
+    "status": "monitoring",
+    "controls_implemented": 45,
+    "controls_total": 50
+  }
+}
+```
 
 ---
 

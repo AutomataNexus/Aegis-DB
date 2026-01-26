@@ -63,6 +63,7 @@ A unified, multi-paradigm database platform built in Rust. Combines relational, 
 - Row-level security policies
 - Comprehensive audit logging (100k+ entries)
 - Compliance reporting and export
+- **Regulatory Compliance**: HIPAA, GDPR, CCPA, SOC 2, FERPA support
 
 ### SDKs and Integrations
 - **Python SDK** - Async-first with aiohttp, query builder, transactions
@@ -78,6 +79,7 @@ Key-Value:      GET/POST /api/v1/kv/keys, DELETE /api/v1/kv/keys/:key
 Documents:      GET  /api/v1/documents/collections, /collections/:name
 Graph:          GET  /api/v1/graph/data
 Query Builder:  POST /api/v1/query-builder/execute
+Compliance:     GET  /api/v1/compliance/{status,report,frameworks,audit-summary}
 ```
 
 ## Project Structure
@@ -194,6 +196,26 @@ export VAULT_TOKEN=hvs.your-token
 export VAULT_ROLE_ID=your-role-id
 export VAULT_SECRET_ID=your-secret-id
 ```
+
+### Compliance
+
+Aegis-DB provides built-in support for regulatory compliance frameworks:
+
+- **HIPAA** - Healthcare data protection
+- **GDPR** - EU data privacy
+- **CCPA** - California consumer privacy
+- **SOC 2** - Security and availability controls
+- **FERPA** - Educational records privacy
+
+Key endpoints:
+```
+GET  /api/v1/compliance/status          # Overall compliance status
+GET  /api/v1/compliance/report          # Generate compliance report
+GET  /api/v1/compliance/frameworks      # List enabled frameworks
+GET  /api/v1/compliance/audit-summary   # Audit log summary
+```
+
+See [docs/SECURITY.md](docs/SECURITY.md) for detailed compliance configuration and requirements.
 
 ### Uninstall
 
