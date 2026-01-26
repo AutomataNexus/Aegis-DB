@@ -4,7 +4,7 @@ HTTP API server providing REST endpoints for database operations.
 
 ## Overview
 
-The `aegis-server` crate implements the HTTP API layer for the Aegis database using the Axum web framework. It provides REST endpoints for query execution, table management, health checks, and metrics.
+The `aegis-server` crate implements the HTTP API layer for the Aegis database using the Axum web framework. It provides REST endpoints for query execution, table management, health checks, metrics, and comprehensive security features including TLS, rate limiting, and secrets management.
 
 ## Modules
 
@@ -92,6 +92,37 @@ HTTP middleware:
 - Adds `x-request-id` header to request and response
 - Enables request tracing
 
+**Rate Limiting Middleware:**
+- Token bucket algorithm
+- Per-IP request tracking
+- Configurable limits (default: 1000/min API, 30/min login)
+
+**Authentication Middleware:**
+- Bearer token validation
+- Session management
+- CORS configuration
+
+### secrets.rs
+Secrets management with HashiCorp Vault integration:
+
+```rust
+pub trait SecretsProvider: Send + Sync {
+    fn get(&self, key: &str) -> Option<String>;
+    fn get_or(&self, key: &str, default: &str) -> String;
+    fn exists(&self, key: &str) -> bool;
+}
+
+// Providers (checked in order):
+// 1. HashiCorp Vault (if configured)
+// 2. Environment variables
+// 3. Default values
+```
+
+**Vault Authentication Methods:**
+- Token-based (`VAULT_TOKEN`)
+- AppRole (`VAULT_ROLE_ID` + `VAULT_SECRET_ID`)
+- Kubernetes (`VAULT_KUBERNETES_ROLE`)
+
 ## Usage
 
 ```rust
@@ -130,6 +161,31 @@ curl -X POST http://localhost:3000/api/v1/query \
 curl http://localhost:3000/api/v1/metrics
 ```
 
+## TLS/HTTPS Configuration
+
+```bash
+# Enable TLS with command-line arguments
+cargo run -p aegis-server -- \
+  --tls \
+  --tls-cert /path/to/server.crt \
+  --tls-key /path/to/server.key
+
+# Or use environment variables
+export AEGIS_TLS_CERT=/path/to/server.crt
+export AEGIS_TLS_KEY=/path/to/server.key
+cargo run -p aegis-server -- --tls
+```
+
+## Security Features
+
+| Feature | Implementation |
+|---------|---------------|
+| Password Hashing | Argon2id (19MB memory, 2 iterations) |
+| Rate Limiting | Token bucket (1000/min API, 30/min login) |
+| TLS | rustls with TLSv1.2/1.3 |
+| Secrets | HashiCorp Vault + environment variables |
+| Tokens | Cryptographically secure random generation |
+
 ## Tests
 
-7 tests covering configuration, state management, and HTTP endpoints.
+54 tests covering configuration, state management, HTTP endpoints, authentication, and rate limiting.

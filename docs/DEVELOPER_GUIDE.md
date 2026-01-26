@@ -325,7 +325,8 @@ aegis-db/
 │   │       ├── state.rs      # Application state
 │   │       ├── config.rs     # Server config
 │   │       ├── auth.rs       # Authentication
-│   │       ├── middleware.rs # HTTP middleware
+│   │       ├── middleware.rs # HTTP middleware (auth, rate limiting)
+│   │       ├── secrets.rs    # HashiCorp Vault integration
 │   │       ├── admin.rs      # Admin types
 │   │       └── activity.rs   # Activity logging
 │   │   └── tests/
@@ -780,7 +781,51 @@ pub struct AppState {
     pub streaming_engine: Arc<StreamingEngine>,
     pub activity: Arc<ActivityLog>,
     pub metrics: Arc<MetricsCollector>,
+    pub rate_limiter: Arc<RateLimiter>,
+    pub login_rate_limiter: Arc<RateLimiter>,
 }
+```
+
+### Security Modules
+
+**secrets.rs** - HashiCorp Vault and environment variable secrets management:
+```rust
+pub trait SecretsProvider: Send + Sync {
+    fn get(&self, key: &str) -> Option<String>;
+    fn get_or(&self, key: &str, default: &str) -> String;
+    fn exists(&self, key: &str) -> bool;
+}
+
+pub struct SecretsManager {
+    providers: Vec<Box<dyn SecretsProvider>>,
+}
+```
+
+**Rate Limiting (middleware.rs):**
+```rust
+pub struct RateLimiter {
+    entries: Arc<RwLock<HashMap<String, RateLimitEntry>>>,
+    max_requests: u32,
+    window_secs: u64,
+}
+
+// Token bucket algorithm
+pub async fn rate_limit(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response<Body>, impl IntoResponse>
+```
+
+**Password Hashing (auth.rs):**
+```rust
+// Argon2id configuration
+const ARGON2_MEMORY_COST: u32 = 19_456; // 19 MiB
+const ARGON2_TIME_COST: u32 = 2;
+const ARGON2_PARALLELISM: u32 = 1;
+
+pub fn hash_password(password: &str) -> Result<String, String>;
+pub fn verify_password(password: &str, hash: &str) -> Result<bool, String>;
 ```
 
 ### aegis-client

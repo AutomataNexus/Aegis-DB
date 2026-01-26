@@ -322,6 +322,96 @@ enabled = true
 default_role = "viewer"
 ```
 
+### TLS/HTTPS Configuration
+
+AegisDB supports native TLS for encrypted connections:
+
+**Command Line:**
+```bash
+# Start with TLS enabled
+cargo run -p aegis-server -- \
+  --tls \
+  --tls-cert /path/to/server.crt \
+  --tls-key /path/to/server.key
+
+# Or use environment variables
+export AEGIS_TLS_CERT=/path/to/server.crt
+export AEGIS_TLS_KEY=/path/to/server.key
+cargo run -p aegis-server -- --tls
+```
+
+**Configuration File:**
+```toml
+[server.tls]
+enabled = true
+cert_file = "/etc/aegis/tls.crt"
+key_file = "/etc/aegis/tls.key"
+```
+
+**Generating Self-Signed Certificates (Development):**
+```bash
+# Create certs directory
+mkdir -p certs
+
+# Generate self-signed certificate
+openssl req -x509 -newkey rsa:4096 \
+  -keyout certs/server.key \
+  -out certs/server.crt \
+  -days 365 -nodes \
+  -subj "/CN=localhost/O=Aegis-DB/C=US"
+```
+
+### HashiCorp Vault Integration
+
+For enterprise deployments, AegisDB integrates with HashiCorp Vault for secrets management:
+
+**Environment Variables:**
+```bash
+# Vault server address
+export VAULT_ADDR=https://vault.example.com:8200
+
+# Token authentication (simplest)
+export VAULT_TOKEN=hvs.your-vault-token
+
+# AppRole authentication (recommended for production)
+export VAULT_ROLE_ID=your-role-id
+export VAULT_SECRET_ID=your-secret-id
+
+# Kubernetes authentication (for K8s deployments)
+export VAULT_KUBERNETES_ROLE=aegis-db
+```
+
+**Vault Secret Paths:**
+| Secret | Vault Path | Environment Fallback |
+|--------|------------|---------------------|
+| TLS Certificate | `secret/data/aegis/tls_cert_path` | `AEGIS_TLS_CERT` |
+| TLS Private Key | `secret/data/aegis/tls_key_path` | `AEGIS_TLS_KEY` |
+| Database Password | `secret/data/aegis/db_password` | `AEGIS_DB_PASSWORD` |
+| JWT Secret | `secret/data/aegis/jwt_secret` | `AEGIS_JWT_SECRET` |
+
+**Vault Policy Example:**
+```hcl
+path "secret/data/aegis/*" {
+  capabilities = ["read"]
+}
+```
+
+### Rate Limiting
+
+AegisDB includes built-in rate limiting to prevent brute force attacks:
+
+| Endpoint | Default Limit | Window |
+|----------|--------------|--------|
+| `/api/v1/auth/login` | 30 requests | per minute per IP |
+| All other endpoints | 1000 requests | per minute per IP |
+
+Rate limit headers are included in responses:
+- `X-RateLimit-Limit`: Maximum requests allowed
+- `X-RateLimit-Remaining`: Requests remaining in window
+- `X-RateLimit-Reset`: Unix timestamp when window resets
+
+When rate limited, the API returns `429 Too Many Requests`.
+
 ### Cluster Configuration
 
 ```toml
@@ -1488,7 +1578,7 @@ A: AegisDB can serve as a replacement or complement for:
 - Kafka (streaming)
 
 **Q: Is AegisDB production-ready?**
-A: AegisDB is currently in active development (v0.1.0). It's suitable for development and testing, with production readiness planned for v1.0.
+A: Yes, AegisDB v0.1.8+ includes production security features: TLS/HTTPS support, Argon2id password hashing, rate limiting, HashiCorp Vault integration, and secure token generation. It's suitable for production deployments with proper configuration.
 
 **Q: What's the license?**
 A: Apache 2.0 for the core platform. Enterprise features may require a commercial license.
@@ -1518,7 +1608,7 @@ A: AegisDB uses Raft consensus. The partition with a majority of nodes continues
 A: Encryption at rest is planned for v0.2. Currently, rely on filesystem-level encryption (LUKS, BitLocker).
 
 **Q: How are passwords stored?**
-A: Passwords are hashed using bcrypt with salt. In the current version, a simplified hash is used for development.
+A: Passwords are hashed using Argon2id, the winner of the Password Hashing Competition. Each password has a unique random salt, and the hash parameters are tuned for security (memory cost: 19MB, time cost: 2 iterations, parallelism: 1).
 
 ---
 
