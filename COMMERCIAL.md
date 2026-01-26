@@ -2,81 +2,80 @@
 
 ## Overview
 
-Aegis Database is available under a dual-licensing model:
+Aegis Database is licensed under the **Business Source License 1.1 (BSL)**.
 
-1. **Open Source License (Apache 2.0)** - Free for open source and commercial use
-2. **Enterprise License** - Additional features, support, and SLA guarantees
+- **Source Available**: Full source code is available for inspection, learning, and modification
+- **Free for Most Uses**: Development, testing, internal business use, non-commercial projects
+- **Commercial Service License Required**: For offering Aegis as a Database-as-a-Service to third parties
+- **Future Open Source**: Converts to Apache-2.0 on January 26, 2030
 
 ---
 
-## Open Source (Apache 2.0)
+## What's Allowed (Free)
 
-The open source version includes all core features:
+| Use Case | Allowed |
+|----------|---------|
+| Development and testing | Yes |
+| Internal business applications | Yes |
+| Non-commercial projects | Yes |
+| Educational and research use | Yes |
+| Evaluation and proof-of-concept | Yes |
+| Self-hosted production (internal) | Yes |
+| Modify source code | Yes |
+
+---
+
+## What Requires a Commercial License
+
+**Offering Aegis as a "Database Service"** - a commercial offering that allows third parties (other than your employees and contractors) to access database functionality.
+
+Examples requiring a commercial license:
+- Managed database hosting (DBaaS)
+- Database-as-a-Service platform
+- Cloud database offering
+- Reselling database access
+
+---
+
+## Commercial License Tiers
+
+### Startup
+- Up to 5 nodes
+- Email support (business hours)
+- Community Slack access
+- **$499/month**
+
+### Professional
+- Up to 25 nodes
+- Priority email + chat support
+- 99.9% SLA
+- **$1,999/month**
+
+### Enterprise
+- Unlimited nodes
+- 24/7 phone + dedicated support
+- 99.99% SLA
+- Custom development
+- **Contact for pricing**
+
+---
+
+## Enterprise Features
+
+All commercial licenses include:
 
 | Feature | Included |
 |---------|----------|
-| Multi-paradigm storage (SQL, Time Series, Document, Streaming) | Yes |
-| Distributed replication (Raft consensus) | Yes |
-| Sharding and partitioning | Yes |
-| REST API | Yes |
-| Web Dashboard | Yes |
-| Basic authentication | Yes |
-| Python & JavaScript SDKs | Yes |
-| Community support | Yes |
-
-**You may:**
-- Use in commercial applications
-- Modify and distribute
-- Use in SaaS products
-- Include in proprietary software
-
-**Requirements:**
-- Include license and copyright notice
-- State changes if modified
-- Include NOTICE file if present
-
----
-
-## Enterprise License
-
-For organizations requiring additional capabilities:
-
-### Enterprise Features
-
-| Feature | Enterprise |
-|---------|------------|
+| Full source code access | Yes |
 | LDAP/Active Directory integration | Yes |
 | OAuth2/OIDC SSO | Yes |
 | Advanced RBAC with row-level security | Yes |
 | Audit logging and compliance reports | Yes |
 | Encryption at rest (AES-256) | Yes |
 | Multi-region replication | Yes |
-| Priority support (24/7) | Yes |
-| SLA guarantees (99.99% uptime) | Yes |
-| Custom feature development | Yes |
-| Training and onboarding | Yes |
-| Dedicated success manager | Yes |
-
-### Pricing Tiers
-
-#### Starter
-- Up to 5 nodes
-- Email support (business hours)
-- Community Slack access
-- **Contact for pricing**
-
-#### Professional
-- Up to 25 nodes
-- Priority email + chat support
-- 99.9% SLA
-- **Contact for pricing**
-
-#### Enterprise
-- Unlimited nodes
-- 24/7 phone + dedicated support
-- 99.99% SLA
-- Custom development
-- **Contact for pricing**
+| HashiCorp Vault integration | Yes |
+| Priority support | Yes |
+| SLA guarantees | Yes |
 
 ---
 
@@ -88,18 +87,14 @@ For organizations requiring additional capabilities:
 - Documentation
 - Stack Overflow tag: `aegis-db`
 
-### Professional Support
-- Dedicated support portal
-- Response time SLAs
-- Direct access to engineers
-- Incident management
+### Commercial Support
 
-| Severity | Professional | Enterprise |
-|----------|-------------|------------|
-| Critical (P1) | 4 hours | 1 hour |
-| High (P2) | 8 hours | 4 hours |
-| Medium (P3) | 24 hours | 8 hours |
-| Low (P4) | 72 hours | 24 hours |
+| Severity | Startup | Professional | Enterprise |
+|----------|---------|--------------|------------|
+| Critical (P1) | 24 hours | 4 hours | 1 hour |
+| High (P2) | 48 hours | 8 hours | 4 hours |
+| Medium (P3) | 5 days | 24 hours | 8 hours |
+| Low (P4) | Best effort | 72 hours | 24 hours |
 
 ---
 
@@ -117,10 +112,10 @@ Contact sales@automatanexus.com for OEM/reseller inquiries.
 
 ## Academic & Non-Profit
 
-Discounted licensing available for:
+Free commercial licenses available for:
 
 - Universities and research institutions
-- Non-profit organizations
+- Non-profit organizations (501(c)(3) or equivalent)
 - Open source projects
 
 Contact academic@automatanexus.com
@@ -129,21 +124,23 @@ Contact academic@automatanexus.com
 
 ## FAQ
 
-### Can I use the open source version commercially?
-Yes. Apache 2.0 permits commercial use without royalties or fees.
+### Can I use Aegis for free in my company?
+Yes! Internal use, development, and testing are all free under BSL.
 
-### Do I need an Enterprise license for production?
-No. The open source version is production-ready. Enterprise licenses provide additional features, support, and SLAs.
+### Do I need a license to self-host Aegis for my company?
+No. Self-hosted internal use is allowed under BSL.
+
+### When do I need a commercial license?
+Only when offering Aegis as a service to third parties (Database-as-a-Service).
 
 ### Can I modify the source code?
-Yes. Both open source and Enterprise licenses allow modifications. Enterprise includes support for custom features.
+Yes. You can modify and create derivative works for any allowed use.
 
-### What if I need a feature not in the open source version?
-Contact us about Enterprise licensing or custom development. We also accept feature requests via GitHub Issues.
+### What happens on January 26, 2030?
+Version 0.1.x converts to Apache-2.0, becoming fully open source with no restrictions.
 
-### How do I get support?
-- Open source: GitHub Issues, Discord, Stack Overflow
-- Enterprise: Dedicated support portal with SLA guarantees
+### How is this different from open source?
+BSL is "source available" - you can see and modify the code, but there's one restriction: you can't offer it as a database service without a license. After the change date, it becomes true open source (Apache-2.0).
 
 ---
 
@@ -153,6 +150,8 @@ Contact us about Enterprise licensing or custom development. We also accept feat
 
 **Support:** support@automatanexus.com
 
+**Legal:** legal@automatanexus.com
+
 **Website:** https://automatanexus.com
 
 **GitHub:** https://github.com/AutomataNexus/Aegis-DB
@@ -160,3 +159,5 @@ Contact us about Enterprise licensing or custom development. We also accept feat
 ---
 
 Copyright 2024-2026 AutomataNexus Development Team
+
+Licensed under the Business Source License 1.1
