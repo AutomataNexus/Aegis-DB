@@ -1,8 +1,83 @@
-title: Aegis-DB Documentation
-description: The multi-paradigm database built for regulated industries
-theme: jekyll-theme-cayman
-markdown: GFM
+# Aegis-DB Documentation - Jekyll Configuration
+# GitHub Pages site configuration
 
-exclude:
-  - Gemfile
-  - Gemfile.lock
+title: Aegis-DB Documentation
+description: Multi-paradigm database built for regulated industries
+baseurl: "/Aegis-DB"
+url: "https://automatanexus.github.io"
+
+# Theme
+remote_theme: just-the-docs/just-the-docs
+color_scheme: dark
+
+# Repository
+repository: AutomataNexus/Aegis-DB
+gh_edit_link: true
+gh_edit_link_text: "Edit this page on GitHub"
+gh_edit_repository: "https://github.com/AutomataNexus/Aegis-DB"
+gh_edit_branch: "main"
+gh_edit_view_mode: "edit"
+
+# Navigation
+nav_enabled: true
+nav_sort: case_insensitive
+
+# Search
+search_enabled: true
+search_tokenizer_separator: /[\s/]+/
+
+# Heading anchor links
+heading_anchors: true
+
+# Footer
+footer_content: "Copyright &copy; 2024-2026 AutomataNexus LLC. Licensed under BSL-1.1."
+
+# Aux links
+aux_links:
+  "GitHub":
+    - "https://github.com/AutomataNexus/Aegis-DB"
+  "GitLab":
+    - "https://gitlab.com/automatanexus/aegis-db"
+
+aux_links_new_tab: true
+
+# Collections
+collections:
+  crates:
+    output: true
+    permalink: /crates/:name/
+
+# Defaults
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+  - scope:
+      path: "crates"
+      type: crates
+    values:
+      layout: default
+      nav_exclude: false
+
+# Plugins
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+  - jekyll-feed
+
+# SEO
+tagline: "Multi-paradigm Database Platform"
+author:
+  name: AutomataNexus
+  email: devops@automatanexus.com
+
+social:
+  name: AutomataNexus
+  links:
+    - https://github.com/AutomataNexus
+    - https://gitlab.com/automatanexus
+
+# Logo
+logo: "/assets/images/logo.png"
+favicon_ico: "/assets/images/favicon.ico"

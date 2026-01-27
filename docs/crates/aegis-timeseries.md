@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-timeseries
+parent: Crate Documentation
+nav_order: 6
+description: "Time series engine"
+---
+
 # aegis-timeseries
 
 Time Series Engine for Aegis Database Platform.

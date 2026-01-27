@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-replication
+parent: Crate Documentation
+nav_order: 8
+description: "Clustering and replication"
+---
+
 # aegis-replication
 
 Distributed Replication and Raft Consensus for Aegis Database Platform.
