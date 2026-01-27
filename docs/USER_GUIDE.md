@@ -1,16 +1,27 @@
-<p align="center">
-  <img src="../AegisDB-logo.png" alt="AegisDB Logo" width="400">
-</p>
+---
+layout: default
+title: User Guide
+nav_order: 3
+description: "Comprehensive guide for installing, configuring, and using Aegis-DB"
+---
 
-<h1 align="center">AegisDB End User Guide</h1>
+# Aegis-DB User Guide
+{: .no_toc }
 
-<p align="center">
-  <strong>Comprehensive guide for installing, configuring, and using AegisDB</strong>
-</p>
+Comprehensive guide for installing, configuring, and using Aegis-DB
+{: .fs-6 .fw-300 }
 
 ---
 
 ## Table of Contents
+{: .no_toc .text-delta }
+
+1. TOC
+{:toc}
+
+---
+
+## Overview
 
 1. [Introduction](#introduction)
 2. [Installation](#installation)

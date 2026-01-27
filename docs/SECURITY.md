@@ -1,8 +1,25 @@
-# AegisDB Security Guide
+---
+layout: default
+title: Security
+nav_order: 5
+description: "Security features, TLS, authentication, and encryption"
+---
 
-This document covers security features, best practices, and configuration for production deployments of AegisDB.
+# Security Guide
+{: .no_toc }
+
+Security features, best practices, and configuration for production deployments
+{: .fs-6 .fw-300 }
+
+---
 
 ## Table of Contents
+{: .no_toc .text-delta }
+
+1. TOC
+{:toc}
+
+---
 
 1. [Overview](#overview)
 2. [TLS/HTTPS Configuration](#tlshttps-configuration)

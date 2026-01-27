@@ -1,8 +1,25 @@
-# Support Terms and Conditions
+---
+layout: default
+title: Support Terms
+nav_order: 9
+description: "Support terms and conditions for Aegis-DB subscriptions"
+---
 
-**Effective Date:** January 2025
-**Last Updated:** January 2025
-**Version:** 1.0
+# Support Terms and Conditions
+{: .no_toc }
+
+**Effective Date:** January 2025 | **Version:** 1.0
+{: .fs-6 .fw-300 }
+
+---
+
+## Table of Contents
+{: .no_toc .text-delta }
+
+1. TOC
+{:toc}
+
+---
 
 These Support Terms and Conditions ("Support Terms") govern the provision of technical support services ("Support Services") by Automata Nexus ("Provider," "we," "us," or "our") to customers ("Customer," "you," or "your") who have purchased a valid support subscription for Aegis-DB.
 

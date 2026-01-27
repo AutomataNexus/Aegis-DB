@@ -1,16 +1,25 @@
-<p align="center">
-  <img src="../AegisDB-logo.png" alt="AegisDB Logo" width="400">
-</p>
+---
+layout: default
+title: Developer Guide
+nav_order: 8
+description: "Guide for developing, contributing to, and extending Aegis-DB"
+---
 
-<h1 align="center">AegisDB Developer Guide</h1>
+# Developer Guide
+{: .no_toc }
 
-<p align="center">
-  <strong>Comprehensive guide for developing, contributing to, and extending AegisDB</strong>
-</p>
+Comprehensive guide for developing, contributing to, and extending Aegis-DB
+{: .fs-6 .fw-300 }
 
 ---
 
 ## Table of Contents
+{: .no_toc .text-delta }
+
+1. TOC
+{:toc}
+
+---
 
 1. [Introduction](#introduction)
 2. [Architecture Overview](#architecture-overview)
