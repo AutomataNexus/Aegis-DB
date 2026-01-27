@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-memory
+parent: Crate Documentation
+nav_order: 2
+description: "Memory management and buffer pools"
+---
+
 # aegis-memory
 
 Memory management utilities including arena allocators and memory pools.

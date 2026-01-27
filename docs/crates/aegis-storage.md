@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-storage
+parent: Crate Documentation
+nav_order: 3
+description: "Storage backends and WAL"
+---
+
 # aegis-storage
 
 Storage engine providing persistence, transactions, and durability guarantees.

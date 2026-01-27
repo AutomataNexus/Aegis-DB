@@ -1,6 +1,25 @@
-# Consulting Services Agreement
+---
+layout: default
+title: Consulting Agreement
+nav_order: 10
+description: "Professional services and consulting agreement"
+---
 
-**Aegis-DB Professional Services**
+# Consulting Services Agreement
+{: .no_toc }
+
+Aegis-DB Professional Services
+{: .fs-6 .fw-300 }
+
+---
+
+## Table of Contents
+{: .no_toc .text-delta }
+
+1. TOC
+{:toc}
+
+---
 
 This Consulting Services Agreement ("Agreement") is entered into as of the date of last signature below ("Effective Date") by and between Aegis-DB ("Consultant") and the undersigned client ("Client").
 

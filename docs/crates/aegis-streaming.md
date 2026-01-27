@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-streaming
+parent: Crate Documentation
+nav_order: 7
+description: "Real-time streaming"
+---
+
 # aegis-streaming
 
 Real-time Streaming Engine for Aegis Database Platform.

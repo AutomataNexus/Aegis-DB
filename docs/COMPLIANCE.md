@@ -1,8 +1,25 @@
-# Aegis-DB Compliance Guide
+---
+layout: default
+title: Compliance
+nav_order: 6
+description: "HIPAA, GDPR, CCPA, SOC 2, and FERPA compliance guidance"
+---
 
-This document provides comprehensive guidance for deploying Aegis-DB in regulated environments. It covers GDPR, CCPA/CPRA, HIPAA, FERPA, and SOC 2 Type II compliance requirements and how Aegis-DB addresses them.
+# Compliance Guide
+{: .no_toc }
+
+Comprehensive guidance for deploying Aegis-DB in regulated environments
+{: .fs-6 .fw-300 }
+
+---
 
 ## Table of Contents
+{: .no_toc .text-delta }
+
+1. TOC
+{:toc}
+
+---
 
 1. [Overview](#overview)
 2. [Supported Frameworks](#supported-frameworks)

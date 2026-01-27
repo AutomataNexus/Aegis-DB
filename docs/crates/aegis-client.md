@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-client
+parent: Crate Documentation
+nav_order: 9
+description: "Client SDK"
+---
+
 # aegis-client
 
 Native Rust Client SDK for Aegis Database Platform.

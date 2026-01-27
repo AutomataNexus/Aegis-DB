@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-query
+parent: Crate Documentation
+nav_order: 4
+description: "SQL parser and query execution"
+---
+
 # aegis-query
 
 SQL query engine with parsing, analysis, planning, and execution.

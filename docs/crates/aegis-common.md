@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-common
+parent: Crate Documentation
+nav_order: 1
+description: "Core types and error handling"
+---
+
 # aegis-common
 
 Shared types, error definitions, and utilities used across all Aegis crates.

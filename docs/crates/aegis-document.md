@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-document
+parent: Crate Documentation
+nav_order: 5
+description: "Document store operations"
+---
+
 # aegis-document
 
 Document Store Engine for Aegis Database Platform.

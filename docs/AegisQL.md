@@ -1,11 +1,28 @@
-# AegisQL - Query Language Reference
+---
+layout: default
+title: AegisQL Reference
+nav_order: 4
+description: "AegisQL query language documentation and reference"
+---
+
+# AegisQL Reference
+{: .no_toc }
+
+Query language documentation for SQL, Document, TimeSeries, and Graph operations
+{: .fs-6 .fw-300 }
 
 **Version:** 1.0.0
-**Last Updated:** January 2026
+{: .label .label-green }
 
 ---
 
 ## Table of Contents
+{: .no_toc .text-delta }
+
+1. TOC
+{:toc}
+
+---
 
 1. [Introduction](#1-introduction)
 2. [Quick Start](#2-quick-start)

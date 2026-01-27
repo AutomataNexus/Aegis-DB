@@ -1,3 +1,11 @@
+---
+layout: default
+title: aegis-server
+parent: Crate Documentation
+nav_order: 10
+description: "REST API server"
+---
+
 # aegis-server
 
 HTTP API server providing REST endpoints for database operations.
