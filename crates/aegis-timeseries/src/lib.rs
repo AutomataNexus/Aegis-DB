@@ -21,6 +21,7 @@ pub mod retention;
 pub mod index;
 pub mod query;
 pub mod engine;
+pub mod persistence;
 
 pub use types::{DataPoint, Series, Metric, MetricType, Tags};
 pub use partition::{Partition, PartitionManager, PartitionConfig};
@@ -30,3 +31,4 @@ pub use retention::{RetentionPolicy, RetentionManager};
 pub use index::TimeSeriesIndex;
 pub use query::{TimeSeriesQuery, QueryResult};
 pub use engine::TimeSeriesEngine;
+pub use persistence::PersistenceManager;

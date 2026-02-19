@@ -298,7 +298,7 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de>> LWWRegister<T> {
     /// Set the register value.
     pub fn set(&mut self, value: T, node_id: &NodeId) {
         let ts = Self::now();
-        if ts > self.timestamp || (ts == self.timestamp && node_id.as_str() > &self.node_id) {
+        if ts > self.timestamp || (ts == self.timestamp && node_id.as_str() > self.node_id.as_str()) {
             self.value = Some(value);
             self.timestamp = ts;
             self.node_id = node_id.as_str().to_string();
@@ -308,7 +308,7 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de>> LWWRegister<T> {
     /// Set with a specific timestamp.
     pub fn set_with_timestamp(&mut self, value: T, timestamp: u64, node_id: &NodeId) {
         if timestamp > self.timestamp
-            || (timestamp == self.timestamp && node_id.as_str() > &self.node_id)
+            || (timestamp == self.timestamp && node_id.as_str() > self.node_id.as_str())
         {
             self.value = Some(value);
             self.timestamp = timestamp;

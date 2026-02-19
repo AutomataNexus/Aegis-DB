@@ -197,7 +197,7 @@ impl ServerConfig {
                 ..Default::default()
             },
             memory: MemoryConfig {
-                buffer_pool_size: 4 * 1024 * 1024 * 1024, // 4 GB
+                buffer_pool_size: 256 * 1024 * 1024, // 4 GB
                 ..Default::default()
             },
             network: NetworkConfig {

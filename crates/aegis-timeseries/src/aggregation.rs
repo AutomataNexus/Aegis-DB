@@ -249,16 +249,23 @@ impl RollingWindow {
         }
     }
 
-    /// Apply rolling window aggregation.
+    /// Apply rolling window aggregation using O(n) sliding window.
     pub fn apply(&self, points: &[DataPoint]) -> Vec<DataPoint> {
         let mut result = Vec::with_capacity(points.len());
+        let mut window_start_idx = 0;
 
         for (i, point) in points.iter().enumerate() {
-            let window_start = point.timestamp - self.window_size;
+            let window_start_time = point.timestamp - self.window_size;
 
-            let window_values: Vec<f64> = points[..=i]
+            // Advance the window start pointer forward (O(1) amortized)
+            while window_start_idx < i
+                && points[window_start_idx].timestamp < window_start_time
+            {
+                window_start_idx += 1;
+            }
+
+            let window_values: Vec<f64> = points[window_start_idx..=i]
                 .iter()
-                .filter(|p| p.timestamp >= window_start)
                 .map(|p| p.value)
                 .collect();
 

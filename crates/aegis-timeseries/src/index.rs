@@ -6,8 +6,27 @@
 //! @author AutomataNexus Development Team
 
 use crate::types::{Metric, Tags};
+use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use std::sync::LazyLock;
+
+// =============================================================================
+// Regex Cache
+// =============================================================================
+
+/// Global regex cache to avoid recompiling on every query.
+static REGEX_CACHE: LazyLock<Mutex<HashMap<String, regex::Regex>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn get_or_compile_regex(pattern: &str) -> Option<regex::Regex> {
+    let mut cache = REGEX_CACHE.lock();
+    if let Some(re) = cache.get(pattern) {
+        return Some(re.clone());
+    }
+    let re = regex::Regex::new(pattern).ok()?;
+    cache.insert(pattern.to_string(), re.clone());
+    Some(re)
+}
 
 // =============================================================================
 // Time Series Index
@@ -40,12 +59,12 @@ impl TimeSeriesIndex {
         };
 
         {
-            let mut by_id = self.series_by_id.write().expect("series_by_id lock poisoned");
+            let mut by_id = self.series_by_id.write();
             by_id.insert(series_id.clone(), metadata);
         }
 
         {
-            let mut by_metric = self.series_by_metric.write().expect("series_by_metric lock poisoned");
+            let mut by_metric = self.series_by_metric.write();
             by_metric
                 .entry(metric.name.clone())
                 .or_default()
@@ -53,7 +72,7 @@ impl TimeSeriesIndex {
         }
 
         {
-            let mut by_tag = self.series_by_tag.write().expect("series_by_tag lock poisoned");
+            let mut by_tag = self.series_by_tag.write();
             for (key, value) in tags.iter() {
                 by_tag
                     .entry(key.clone())
@@ -69,13 +88,13 @@ impl TimeSeriesIndex {
 
     /// Get series metadata by ID.
     pub fn get(&self, series_id: &str) -> Option<SeriesMetadata> {
-        let by_id = self.series_by_id.read().expect("series_by_id lock poisoned");
+        let by_id = self.series_by_id.read();
         by_id.get(series_id).cloned()
     }
 
     /// Find series by metric name.
     pub fn find_by_metric(&self, metric_name: &str) -> Vec<String> {
-        let by_metric = self.series_by_metric.read().expect("series_by_metric lock poisoned");
+        let by_metric = self.series_by_metric.read();
         by_metric
             .get(metric_name)
             .map(|set| set.iter().cloned().collect())
@@ -84,7 +103,7 @@ impl TimeSeriesIndex {
 
     /// Find series by tag key-value pair.
     pub fn find_by_tag(&self, key: &str, value: &str) -> Vec<String> {
-        let by_tag = self.series_by_tag.read().expect("series_by_tag lock poisoned");
+        let by_tag = self.series_by_tag.read();
         by_tag
             .get(key)
             .and_then(|values| values.get(value))
@@ -96,7 +115,7 @@ impl TimeSeriesIndex {
     pub fn find_by_tags(&self, tags: &Tags) -> Vec<String> {
         let mut result: Option<HashSet<String>> = None;
 
-        let by_tag = self.series_by_tag.read().expect("series_by_tag lock poisoned");
+        let by_tag = self.series_by_tag.read();
 
         for (key, value) in tags.iter() {
             let matching = by_tag
@@ -116,13 +135,13 @@ impl TimeSeriesIndex {
 
     /// Get all tag keys.
     pub fn tag_keys(&self) -> Vec<String> {
-        let by_tag = self.series_by_tag.read().expect("series_by_tag lock poisoned");
+        let by_tag = self.series_by_tag.read();
         by_tag.keys().cloned().collect()
     }
 
     /// Get all values for a tag key.
     pub fn tag_values(&self, key: &str) -> Vec<String> {
-        let by_tag = self.series_by_tag.read().expect("series_by_tag lock poisoned");
+        let by_tag = self.series_by_tag.read();
         by_tag
             .get(key)
             .map(|values| values.keys().cloned().collect())
@@ -131,13 +150,13 @@ impl TimeSeriesIndex {
 
     /// Get all metric names.
     pub fn metric_names(&self) -> Vec<String> {
-        let by_metric = self.series_by_metric.read().expect("series_by_metric lock poisoned");
+        let by_metric = self.series_by_metric.read();
         by_metric.keys().cloned().collect()
     }
 
     /// Get the number of indexed series.
     pub fn len(&self) -> usize {
-        let by_id = self.series_by_id.read().expect("series_by_id lock poisoned");
+        let by_id = self.series_by_id.read();
         by_id.len()
     }
 
@@ -149,7 +168,7 @@ impl TimeSeriesIndex {
     /// Remove a series from the index.
     pub fn remove(&self, series_id: &str) -> bool {
         let metadata = {
-            let mut by_id = self.series_by_id.write().expect("series_by_id lock poisoned");
+            let mut by_id = self.series_by_id.write();
             by_id.remove(series_id)
         };
 
@@ -158,14 +177,14 @@ impl TimeSeriesIndex {
         };
 
         {
-            let mut by_metric = self.series_by_metric.write().expect("series_by_metric lock poisoned");
+            let mut by_metric = self.series_by_metric.write();
             if let Some(set) = by_metric.get_mut(&metadata.metric_name) {
                 set.remove(series_id);
             }
         }
 
         {
-            let mut by_tag = self.series_by_tag.write().expect("series_by_tag lock poisoned");
+            let mut by_tag = self.series_by_tag.write();
             for (key, value) in metadata.tags.iter() {
                 if let Some(values) = by_tag.get_mut(key) {
                     if let Some(set) = values.get_mut(value) {
@@ -217,7 +236,7 @@ impl LabelMatcher {
             Self::NotEqual(key, value) => tags.get(key) != Some(value),
             Self::Regex(key, pattern) => {
                 if let Some(value) = tags.get(key) {
-                    regex::Regex::new(pattern)
+                    get_or_compile_regex(pattern)
                         .map(|re| re.is_match(value))
                         .unwrap_or(false)
                 } else {
@@ -226,7 +245,7 @@ impl LabelMatcher {
             }
             Self::NotRegex(key, pattern) => {
                 if let Some(value) = tags.get(key) {
-                    regex::Regex::new(pattern)
+                    get_or_compile_regex(pattern)
                         .map(|re| !re.is_match(value))
                         .unwrap_or(true)
                 } else {
@@ -311,5 +330,17 @@ mod tests {
         let values = index.tag_values("region");
         assert!(values.contains(&"us-east".to_string()));
         assert!(values.contains(&"us-west".to_string()));
+    }
+
+    #[test]
+    fn test_regex_matcher() {
+        let mut tags = Tags::new();
+        tags.insert("host", "server123");
+
+        let matcher = LabelMatcher::Regex("host".to_string(), "server\\d+".to_string());
+        assert!(matcher.matches(&tags));
+
+        let matcher = LabelMatcher::NotRegex("host".to_string(), "^web".to_string());
+        assert!(matcher.matches(&tags));
     }
 }

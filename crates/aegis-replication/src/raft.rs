@@ -28,6 +28,9 @@ pub struct RaftConfig {
     pub heartbeat_interval: Duration,
     pub max_entries_per_request: usize,
     pub snapshot_threshold: u64,
+    /// Duration for which a leader lease is valid after receiving majority acks.
+    /// Should be slightly longer than heartbeat_interval to avoid flapping.
+    pub lease_duration: Duration,
 }
 
 impl Default for RaftConfig {
@@ -38,6 +41,7 @@ impl Default for RaftConfig {
             heartbeat_interval: Duration::from_millis(50),
             max_entries_per_request: 100,
             snapshot_threshold: 10000,
+            lease_duration: Duration::from_millis(200),
         }
     }
 }
@@ -134,6 +138,10 @@ pub struct InstallSnapshotRequest {
     pub offset: u64,
     pub data: Vec<u8>,
     pub done: bool,
+    /// CRC32 checksum of the full snapshot data (set when done=true).
+    /// None for backward compatibility with older nodes.
+    #[serde(default)]
+    pub checksum: Option<u32>,
 }
 
 /// Response to an install snapshot request.
@@ -181,6 +189,9 @@ pub struct RaftNode {
     snapshot_metadata: RwLock<Option<SnapshotMetadata>>,
     /// In-progress snapshot being received
     pending_snapshot: RwLock<Option<PendingSnapshot>>,
+    /// Leader lease expiry time. Only meaningful when this node is the leader.
+    /// If the lease has expired, the leader should step down.
+    lease_expiry: RwLock<Option<Instant>>,
 }
 
 impl RaftNode {
@@ -211,6 +222,7 @@ impl RaftNode {
             votes_received: RwLock::new(HashSet::new()),
             snapshot_metadata: RwLock::new(None),
             pending_snapshot: RwLock::new(None),
+            lease_expiry: RwLock::new(None),
         }
     }
 
@@ -237,6 +249,39 @@ impl RaftNode {
     /// Check if this node is the leader.
     pub fn is_leader(&self) -> bool {
         self.role() == NodeRole::Leader
+    }
+
+    /// Check if this node is the leader and holds a valid lease.
+    /// Unlike `is_leader()`, this also verifies that the leader has recently
+    /// received acknowledgements from a majority, preventing split-brain.
+    pub fn is_leader_with_lease(&self) -> bool {
+        self.is_leader() && self.has_valid_lease()
+    }
+
+    /// Extend the leader lease to now + lease_duration.
+    /// Called when the leader receives successful acks from a majority.
+    pub fn extend_lease(&self) {
+        let expiry = Instant::now() + self.config.lease_duration;
+        *self.lease_expiry.write().expect("raft lease_expiry lock poisoned") = Some(expiry);
+    }
+
+    /// Check if the leader lease is still valid.
+    pub fn has_valid_lease(&self) -> bool {
+        match *self.lease_expiry.read().expect("raft lease_expiry lock poisoned") {
+            Some(expiry) => Instant::now() < expiry,
+            None => false,
+        }
+    }
+
+    /// Periodic check: if this node is leader but the lease has expired,
+    /// step down to follower to prevent split-brain.
+    pub fn check_lease(&self) {
+        if self.is_leader() && !self.has_valid_lease() {
+            *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
+            *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
+            // Clear the lease
+            *self.lease_expiry.write().expect("raft lease_expiry lock poisoned") = None;
+        }
     }
 
     /// Add a peer to the cluster.
@@ -557,9 +602,20 @@ impl RaftNode {
         if response.success {
             match_index.insert(peer_id.clone(), response.match_index);
             next_index.insert(peer_id.clone(), response.match_index + 1);
+
+            // Check if we have acks from a majority to extend the lease.
+            // Count successful peers (match_index > 0 means they've acked at least once).
+            let ack_count = match_index.values().filter(|&&idx| idx > 0).count() + 1; // +1 for self
+            let quorum = self.quorum_size();
+
             drop(next_index);
             drop(match_index);
             drop(state);
+
+            if ack_count >= quorum {
+                self.extend_lease();
+            }
+
             self.try_advance_commit_index();
         } else if let Some(conflict_index) = response.conflict_index {
             next_index.insert(peer_id.clone(), conflict_index);
@@ -721,6 +777,13 @@ impl RaftNode {
         let chunk = data[start..end].to_vec();
         let done = end >= data.len();
 
+        // Compute CRC32 checksum of the full snapshot data when this is the last chunk
+        let checksum = if done {
+            Some(crc32fast::hash(&data))
+        } else {
+            None
+        };
+
         Some(InstallSnapshotRequest {
             term,
             leader_id: self.id.clone(),
@@ -729,6 +792,7 @@ impl RaftNode {
             offset,
             data: chunk,
             done,
+            checksum,
         })
     }
 
@@ -791,6 +855,18 @@ impl RaftNode {
                 let snapshot_data = std::mem::take(&mut snapshot.data);
                 let metadata = snapshot.metadata.clone();
                 drop(pending);
+
+                // Verify CRC32 checksum if provided
+                if let Some(expected_checksum) = request.checksum {
+                    let actual_checksum = crc32fast::hash(&snapshot_data);
+                    if actual_checksum != expected_checksum {
+                        // Checksum mismatch - discard the snapshot
+                        *self.pending_snapshot.write().expect("raft pending_snapshot lock poisoned") = None;
+                        return InstallSnapshotResponse {
+                            term: state.current_term,
+                        };
+                    }
+                }
 
                 // Deserialize and apply the snapshot
                 if let Some(restored_snapshot) = Snapshot::from_bytes(&snapshot_data) {
@@ -1113,6 +1189,7 @@ mod tests {
             offset: 0,
             data: snapshot_bytes,
             done: true,
+            checksum: None,
         };
 
         let response = follower.handle_install_snapshot(&request);
@@ -1158,6 +1235,7 @@ mod tests {
             offset: 0,
             data: chunk1.to_vec(),
             done: false,
+            checksum: None,
         };
         let response1 = follower.handle_install_snapshot(&request1);
         assert_eq!(response1.term, 1);
@@ -1171,6 +1249,7 @@ mod tests {
             offset: chunk_size as u64,
             data: chunk2.to_vec(),
             done: true,
+            checksum: None,
         };
         let response2 = follower.handle_install_snapshot(&request2);
         assert_eq!(response2.term, 1);
@@ -1199,6 +1278,7 @@ mod tests {
             offset: 0,
             data: vec![1, 2, 3],
             done: true,
+            checksum: None,
         };
 
         let response = follower.handle_install_snapshot(&request);
@@ -1282,5 +1362,216 @@ mod tests {
         assert_eq!(request.last_included_term, 2);
         assert_eq!(request.offset, 0);
         assert!(!request.data.is_empty());
+    }
+
+    // =========================================================================
+    // Leader Lease Tests
+    // =========================================================================
+
+    #[test]
+    fn test_leader_lease_not_valid_initially() {
+        let node = RaftNode::new("node1", RaftConfig::default());
+        assert!(!node.has_valid_lease());
+        assert!(!node.is_leader_with_lease());
+    }
+
+    #[test]
+    fn test_extend_and_check_lease() {
+        let node = RaftNode::new("node1", RaftConfig::default());
+        node.extend_lease();
+        assert!(node.has_valid_lease());
+    }
+
+    #[test]
+    fn test_is_leader_with_lease() {
+        let node = RaftNode::new("node1", RaftConfig::default());
+        node.add_peer(NodeId::new("node2"));
+
+        // Become leader
+        node.start_election();
+        let response = VoteResponse {
+            term: 1,
+            vote_granted: true,
+            voter_id: NodeId::new("node2"),
+        };
+        node.handle_vote_response(&response);
+        assert!(node.is_leader());
+
+        // No lease yet
+        assert!(!node.is_leader_with_lease());
+
+        // Extend lease
+        node.extend_lease();
+        assert!(node.is_leader_with_lease());
+    }
+
+    #[test]
+    fn test_check_lease_steps_down_leader() {
+        let config = RaftConfig {
+            lease_duration: Duration::from_millis(1),
+            ..RaftConfig::default()
+        };
+        let node = RaftNode::new("node1", config);
+        node.add_peer(NodeId::new("node2"));
+
+        // Become leader
+        node.start_election();
+        let response = VoteResponse {
+            term: 1,
+            vote_granted: true,
+            voter_id: NodeId::new("node2"),
+        };
+        node.handle_vote_response(&response);
+        assert!(node.is_leader());
+
+        // Lease is not set, so check_lease should step down
+        node.check_lease();
+        assert!(!node.is_leader());
+        assert_eq!(node.role(), NodeRole::Follower);
+    }
+
+    #[test]
+    fn test_lease_extended_on_majority_ack() {
+        let node = RaftNode::new("leader", RaftConfig::default());
+        node.add_peer(NodeId::new("follower1"));
+        node.add_peer(NodeId::new("follower2"));
+
+        // Become leader (need 2 votes out of 3)
+        node.start_election();
+        node.handle_vote_response(&VoteResponse {
+            term: 1,
+            vote_granted: true,
+            voter_id: NodeId::new("follower1"),
+        });
+        assert!(node.is_leader());
+
+        // Propose a command so there's something to replicate
+        let command = Command::set("key", b"value".to_vec());
+        node.propose(command).unwrap();
+
+        // Simulate successful append entries response from follower1
+        let response = AppendEntriesResponse {
+            term: 1,
+            success: true,
+            match_index: 2, // noop + command
+            conflict_index: None,
+            conflict_term: None,
+        };
+        node.handle_append_entries_response(&NodeId::new("follower1"), &response);
+
+        // With leader + follower1 acking, that's 2/3 = majority, lease should be extended
+        assert!(node.has_valid_lease());
+        assert!(node.is_leader_with_lease());
+    }
+
+    // =========================================================================
+    // Snapshot Checksum Tests
+    // =========================================================================
+
+    #[test]
+    fn test_create_install_snapshot_has_checksum() {
+        let leader = RaftNode::new("leader", RaftConfig::default());
+        leader.add_peer(NodeId::new("follower"));
+
+        // Set up as leader
+        {
+            let mut state = leader.state.write().unwrap();
+            state.current_term = 2;
+        }
+        *leader.role.write().unwrap() = NodeRole::Leader;
+
+        // Apply some data
+        let cmd = Command::set("test_key", b"test_value".to_vec());
+        leader.state_machine.apply(&cmd, 1);
+
+        use crate::log::LogEntry;
+        leader.log.append(LogEntry::command(1, 2, cmd.to_bytes()));
+        leader.log.set_commit_index(1);
+        {
+            let mut state = leader.state.write().unwrap();
+            state.last_applied = 1;
+            state.commit_index = 1;
+        }
+
+        leader.take_snapshot();
+
+        leader
+            .next_index
+            .write()
+            .unwrap()
+            .insert(NodeId::new("follower"), 0);
+
+        // The snapshot is small enough to fit in one chunk, so done=true and checksum should be set
+        let request = leader.create_install_snapshot(&NodeId::new("follower"), 0).unwrap();
+        assert!(request.done);
+        assert!(request.checksum.is_some());
+
+        // Verify checksum matches the full snapshot data
+        let (_, full_data) = leader.get_snapshot_data().unwrap();
+        let expected_checksum = crc32fast::hash(&full_data);
+        assert_eq!(request.checksum.unwrap(), expected_checksum);
+    }
+
+    #[test]
+    fn test_snapshot_checksum_mismatch_discards() {
+        let follower = RaftNode::new("follower", RaftConfig::default());
+
+        // Create valid snapshot data
+        let mut data = std::collections::HashMap::new();
+        data.insert("key1".to_string(), b"value1".to_vec());
+        let snapshot = crate::state::Snapshot {
+            data,
+            last_applied: 3,
+            version: 2,
+        };
+        let snapshot_bytes = snapshot.to_bytes();
+
+        // Send with a wrong checksum
+        let request = InstallSnapshotRequest {
+            term: 1,
+            leader_id: NodeId::new("leader"),
+            last_included_index: 3,
+            last_included_term: 1,
+            offset: 0,
+            data: snapshot_bytes,
+            done: true,
+            checksum: Some(0xDEADBEEF), // intentionally wrong
+        };
+
+        let _response = follower.handle_install_snapshot(&request);
+
+        // State machine should NOT have been modified because checksum failed
+        assert!(follower.state_machine.is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_checksum_valid_applies() {
+        let follower = RaftNode::new("follower", RaftConfig::default());
+
+        let mut data = std::collections::HashMap::new();
+        data.insert("key1".to_string(), b"value1".to_vec());
+        let snapshot = crate::state::Snapshot {
+            data,
+            last_applied: 3,
+            version: 2,
+        };
+        let snapshot_bytes = snapshot.to_bytes();
+        let correct_checksum = crc32fast::hash(&snapshot_bytes);
+
+        let request = InstallSnapshotRequest {
+            term: 1,
+            leader_id: NodeId::new("leader"),
+            last_included_index: 3,
+            last_included_term: 1,
+            offset: 0,
+            data: snapshot_bytes,
+            done: true,
+            checksum: Some(correct_checksum),
+        };
+
+        let _response = follower.handle_install_snapshot(&request);
+
+        // State machine should have been restored
+        assert_eq!(follower.state_machine.get("key1").unwrap(), b"value1");
     }
 }

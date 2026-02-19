@@ -9,7 +9,7 @@ description: "Rust crate architecture and documentation"
 # Crate Documentation
 {: .no_toc }
 
-Aegis-DB is built as a Rust workspace with 12 specialized crates.
+Aegis-DB is built as a Rust workspace with 13 specialized crates.
 
 ---
 
@@ -24,7 +24,7 @@ Aegis-DB is built as a Rust workspace with 12 specialized crates.
 ├──────────────┬──────────────┬──────────────┬────────────────────┤
 │ aegis-client │  aegis-query │ aegis-document│ aegis-timeseries   │
 ├──────────────┴──────────────┴──────────────┴────────────────────┤
-│                   aegis-streaming, aegis-replication             │
+│              aegis-streaming, aegis-replication, aegis-updates    │
 ├─────────────────────────────────────────────────────────────────┤
 │                    aegis-storage (Backends, WAL, MVCC)           │
 ├─────────────────────────────────────────────────────────────────┤
@@ -48,6 +48,7 @@ Aegis-DB is built as a Rust workspace with 12 specialized crates.
 | [aegis-replication](aegis-replication.md) | Raft, 2PC, CRDTs, sharding | raft-rs |
 | [aegis-monitoring](aegis-monitoring.md) | Metrics and health monitoring | prometheus |
 | [aegis-client](aegis-client.md) | Client SDK | reqwest, tokio |
+| [aegis-updates](aegis-updates.md) | OTA rolling update system | reqwest, sha2, tokio |
 | [aegis-server](aegis-server.md) | REST API server | axum, tower |
 | [aegis-cli](aegis-cli.md) | Command-line interface | clap |
 
@@ -62,6 +63,7 @@ aegis-server
 ├── aegis-timeseries
 ├── aegis-streaming
 ├── aegis-replication
+├── aegis-updates
 └── aegis-monitoring
 
 aegis-query

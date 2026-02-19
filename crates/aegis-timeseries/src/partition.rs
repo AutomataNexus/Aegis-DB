@@ -9,7 +9,8 @@ use crate::types::DataPoint;
 use chrono::{DateTime, Duration, Utc, Timelike, Datelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 // =============================================================================
 // Partition Configuration
@@ -218,13 +219,13 @@ impl PartitionManager {
         let key = self.config.interval.partition_key(timestamp);
 
         {
-            let partitions = self.partitions.read().expect("partitions lock poisoned");
+            let partitions = self.partitions.read();
             if let Some(partition) = partitions.get(&key) {
                 return Arc::clone(partition);
             }
         }
 
-        let mut partitions = self.partitions.write().expect("partitions lock poisoned");
+        let mut partitions = self.partitions.write();
 
         if let Some(partition) = partitions.get(&key) {
             return Arc::clone(partition);
@@ -235,7 +236,7 @@ impl PartitionManager {
         let partition = Arc::new(RwLock::new(partition));
         partitions.insert(key.clone(), Arc::clone(&partition));
 
-        let mut current = self.current_partition.write().expect("current_partition lock poisoned");
+        let mut current = self.current_partition.write();
         *current = Some(key);
 
         partition
@@ -247,11 +248,11 @@ impl PartitionManager {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Vec<Arc<RwLock<Partition>>> {
-        let partitions = self.partitions.read().expect("partitions lock poisoned");
+        let partitions = self.partitions.read();
         partitions
             .values()
             .filter(|p| {
-                let partition = p.read().expect("partition lock poisoned");
+                let partition = p.read();
                 partition.start_time < end && partition.end_time > start
             })
             .cloned()
@@ -260,9 +261,9 @@ impl PartitionManager {
 
     /// Seal old partitions.
     pub fn seal_old_partitions(&self, before: DateTime<Utc>) {
-        let partitions = self.partitions.read().expect("partitions lock poisoned");
+        let partitions = self.partitions.read();
         for partition in partitions.values() {
-            let mut p = partition.write().expect("partition lock poisoned");
+            let mut p = partition.write();
             if p.end_time <= before && !p.is_sealed {
                 p.seal();
             }
@@ -271,10 +272,10 @@ impl PartitionManager {
 
     /// Remove partitions older than a timestamp.
     pub fn remove_partitions_before(&self, before: DateTime<Utc>) -> usize {
-        let mut partitions = self.partitions.write().expect("partitions lock poisoned");
+        let mut partitions = self.partitions.write();
         let to_remove: Vec<_> = partitions
             .iter()
-            .filter(|(_, p)| p.read().expect("partition lock poisoned").end_time <= before)
+            .filter(|(_, p)| p.read().end_time <= before)
             .map(|(k, _)| k.clone())
             .collect();
 
@@ -287,13 +288,13 @@ impl PartitionManager {
 
     /// Get partition statistics.
     pub fn stats(&self) -> PartitionStats {
-        let partitions = self.partitions.read().expect("partitions lock poisoned");
+        let partitions = self.partitions.read();
         let mut total_points = 0;
         let mut total_series = 0;
         let mut total_bytes = 0;
 
         for partition in partitions.values() {
-            let p = partition.read().expect("partition lock poisoned");
+            let p = partition.read();
             total_points += p.point_count;
             total_series += p.series.len();
             total_bytes += p.size_bytes();
@@ -368,7 +369,7 @@ mod tests {
         let partition = manager.get_partition(now);
 
         {
-            let mut p = partition.write().expect("partition lock poisoned");
+            let mut p = partition.write();
             p.insert("test:host=a", DataPoint::now(1.0));
         }
 

@@ -84,7 +84,9 @@ fn get_encryption_key() -> Result<&'static [u8; AES_256_KEY_SIZE]> {
     // Store the key - this will succeed because we hold the mutex
     let _ = ENCRYPTION_KEY.set(key);
 
-    Ok(ENCRYPTION_KEY.get().unwrap())
+    ENCRYPTION_KEY.get().ok_or_else(|| {
+        AegisError::Encryption("Failed to retrieve encryption key after initialization".to_string())
+    })
 }
 
 /// Encrypt data using AES-256-GCM.

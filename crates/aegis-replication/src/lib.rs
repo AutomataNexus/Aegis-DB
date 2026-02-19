@@ -21,6 +21,7 @@ pub mod state;
 pub mod node;
 pub mod cluster;
 pub mod transport;
+pub mod http_transport;
 pub mod engine;
 pub mod hash;
 pub mod shard;
@@ -36,6 +37,7 @@ pub use state::{StateMachine, StateMachineBackend, DatabaseStateMachine, Databas
 pub use node::{NodeId, NodeInfo, NodeStatus};
 pub use cluster::{Cluster, ClusterConfig, ClusterState};
 pub use transport::{Message, MessageType, Transport};
+pub use http_transport::HttpTransport;
 pub use engine::ReplicationEngine;
 pub use hash::{ConsistentHash, HashRing, VirtualNode};
 pub use shard::{Shard, ShardId, ShardManager, ShardState};

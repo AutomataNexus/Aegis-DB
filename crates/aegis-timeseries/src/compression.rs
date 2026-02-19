@@ -216,10 +216,14 @@ impl Compressor {
 
     /// Finish compression and return the compressed data.
     pub fn finish(self) -> CompressedBlock {
+        let data = self.writer.finish();
+        let checksum = crc32fast::hash(&data);
         CompressedBlock {
-            data: self.writer.finish(),
+            data,
             first_timestamp: self.first_timestamp.unwrap_or(0),
+            last_timestamp: self.prev_timestamp,
             count: self.count,
+            checksum,
         }
     }
 }
@@ -239,7 +243,9 @@ impl Default for Compressor {
 pub struct CompressedBlock {
     pub data: Vec<u8>,
     pub first_timestamp: i64,
+    pub last_timestamp: i64,
     pub count: usize,
+    pub checksum: u32,
 }
 
 impl CompressedBlock {
@@ -250,6 +256,11 @@ impl CompressedBlock {
             return 1.0;
         }
         uncompressed_size as f64 / self.data.len() as f64
+    }
+
+    /// Verify block integrity using CRC32 checksum.
+    pub fn verify_checksum(&self) -> bool {
+        crc32fast::hash(&self.data) == self.checksum
     }
 }
 

@@ -10,12 +10,14 @@ use crate::aggregation::AggregateFunction;
 use crate::compression::{CompressedBlock, Compressor, Decompressor};
 use crate::index::TimeSeriesIndex;
 use crate::partition::{PartitionConfig, PartitionManager};
+use crate::persistence::{PersistenceManager, PersistedBlock, PersistedSeries, PersistedState};
 use crate::query::{QueryExecutor, QueryResult, TimeSeriesQuery};
 use crate::retention::{RetentionManager, RetentionResult};
 use crate::types::{DataPoint, Metric, Series, Tags};
 use chrono::{DateTime, Duration, Utc};
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::path::PathBuf;
 
 // =============================================================================
 // Time Series Engine Configuration
@@ -29,6 +31,7 @@ pub struct EngineConfig {
     pub compression_threshold: usize,
     pub max_series_per_metric: usize,
     pub write_buffer_size: usize,
+    pub data_path: Option<PathBuf>,
 }
 
 impl Default for EngineConfig {
@@ -39,6 +42,7 @@ impl Default for EngineConfig {
             compression_threshold: 1000,
             max_series_per_metric: 100_000,
             write_buffer_size: 10_000,
+            data_path: None,
         }
     }
 }
@@ -56,6 +60,7 @@ pub struct TimeSeriesEngine {
     series_data: RwLock<HashMap<String, SeriesBuffer>>,
     metrics: RwLock<HashMap<String, Metric>>,
     stats: RwLock<EngineStats>,
+    persistence: Option<PersistenceManager>,
 }
 
 impl TimeSeriesEngine {
@@ -66,7 +71,17 @@ impl TimeSeriesEngine {
 
     /// Create a new time series engine with custom configuration.
     pub fn with_config(config: EngineConfig) -> Self {
-        Self {
+        let persistence = config.data_path.as_ref().and_then(|path| {
+            match PersistenceManager::new(path) {
+                Ok(pm) => Some(pm),
+                Err(e) => {
+                    eprintln!("Failed to initialize timeseries persistence at {:?}: {}", path, e);
+                    None
+                }
+            }
+        });
+
+        let mut engine = Self {
             partition_manager: PartitionManager::new(config.partition_config.clone()),
             config,
             index: TimeSeriesIndex::new(),
@@ -74,7 +89,12 @@ impl TimeSeriesEngine {
             series_data: RwLock::new(HashMap::new()),
             metrics: RwLock::new(HashMap::new()),
             stats: RwLock::new(EngineStats::default()),
-        }
+            persistence,
+        };
+
+        // Load persisted data if available
+        engine.load_from_disk();
+        engine
     }
 
     // -------------------------------------------------------------------------
@@ -83,7 +103,7 @@ impl TimeSeriesEngine {
 
     /// Register a new metric.
     pub fn register_metric(&self, metric: Metric) -> Result<(), EngineError> {
-        let mut metrics = self.metrics.write().expect("metrics lock poisoned");
+        let mut metrics = self.metrics.write();
 
         if metrics.contains_key(&metric.name) {
             return Err(EngineError::MetricAlreadyExists(metric.name));
@@ -95,13 +115,13 @@ impl TimeSeriesEngine {
 
     /// Get a registered metric by name.
     pub fn get_metric(&self, name: &str) -> Option<Metric> {
-        let metrics = self.metrics.read().expect("metrics lock poisoned");
+        let metrics = self.metrics.read();
         metrics.get(name).cloned()
     }
 
     /// List all registered metrics.
     pub fn list_metrics(&self) -> Vec<Metric> {
-        let metrics = self.metrics.read().expect("metrics lock poisoned");
+        let metrics = self.metrics.read();
         metrics.values().cloned().collect()
     }
 
@@ -126,16 +146,26 @@ impl TimeSeriesEngine {
         }
 
         let metric = {
-            let metrics = self.metrics.read().expect("metrics lock poisoned");
+            let metrics = self.metrics.read();
             metrics.get(metric_name).cloned()
         };
 
         let metric = metric.unwrap_or_else(|| Metric::gauge(metric_name));
 
+        // Enforce cardinality limit before registering new series
+        let existing_series = self.index.find_by_metric(metric_name);
         let series_id = self.index.register(&metric, &tags);
+        if !existing_series.contains(&series_id)
+            && existing_series.len() >= self.config.max_series_per_metric
+        {
+            return Err(EngineError::StorageError(format!(
+                "Metric '{}' exceeds max_series_per_metric limit of {}",
+                metric_name, self.config.max_series_per_metric
+            )));
+        }
 
         {
-            let mut data = self.series_data.write().expect("series_data lock poisoned");
+            let mut data = self.series_data.write();
             let buffer = data.entry(series_id.clone()).or_insert_with(|| {
                 SeriesBuffer::new(metric.clone(), tags.clone())
             });
@@ -152,7 +182,7 @@ impl TimeSeriesEngine {
         }
 
         {
-            let mut stats = self.stats.write().expect("stats lock poisoned");
+            let mut stats = self.stats.write();
             stats.points_written += points.len() as u64;
             stats.bytes_written += (points.len() * 16) as u64;
         }
@@ -184,11 +214,11 @@ impl TimeSeriesEngine {
         };
 
         let series: Vec<Series> = {
-            let data = self.series_data.read().expect("series_data lock poisoned");
+            let data = self.series_data.read();
             series_ids
                 .iter()
                 .filter_map(|id| data.get(id))
-                .map(|buffer| buffer.to_series())
+                .map(|buffer| buffer.to_series_in_range(query.start, query.end))
                 .collect()
         };
 
@@ -196,7 +226,7 @@ impl TimeSeriesEngine {
         result.query_time_ms = start_time.elapsed().as_millis() as u64;
 
         {
-            let mut stats = self.stats.write().expect("stats lock poisoned");
+            let mut stats = self.stats.write();
             stats.queries_executed += 1;
             stats.points_scanned += result.points_scanned as u64;
         }
@@ -247,7 +277,7 @@ impl TimeSeriesEngine {
     /// Get all series for a metric.
     pub fn get_series(&self, metric_name: &str) -> Vec<Series> {
         let series_ids = self.index.find_by_metric(metric_name);
-        let data = self.series_data.read().expect("series_data lock poisoned");
+        let data = self.series_data.read();
 
         series_ids
             .iter()
@@ -258,14 +288,14 @@ impl TimeSeriesEngine {
 
     /// Get a specific series by ID.
     pub fn get_series_by_id(&self, series_id: &str) -> Option<Series> {
-        let data = self.series_data.read().expect("series_data lock poisoned");
+        let data = self.series_data.read();
         data.get(series_id).map(|buffer| buffer.to_series())
     }
 
     /// Delete a series.
     pub fn delete_series(&self, series_id: &str) -> bool {
         let removed = {
-            let mut data = self.series_data.write().expect("series_data lock poisoned");
+            let mut data = self.series_data.write();
             data.remove(series_id).is_some()
         };
 
@@ -320,19 +350,19 @@ impl TimeSeriesEngine {
 
     /// Get engine statistics.
     pub fn stats(&self) -> EngineStats {
-        let stats = self.stats.read().expect("stats lock poisoned");
+        let stats = self.stats.read();
         stats.clone()
     }
 
     /// Reset statistics.
     pub fn reset_stats(&self) {
-        let mut stats = self.stats.write().expect("stats lock poisoned");
+        let mut stats = self.stats.write();
         *stats = EngineStats::default();
     }
 
     /// Get memory usage estimate.
     pub fn memory_usage(&self) -> usize {
-        let data = self.series_data.read().expect("series_data lock poisoned");
+        let data = self.series_data.read();
         data.values().map(|b| b.memory_usage()).sum()
     }
 
@@ -342,17 +372,96 @@ impl TimeSeriesEngine {
 
     /// Compact all series buffers.
     pub fn compact(&self) {
-        let mut data = self.series_data.write().expect("series_data lock poisoned");
+        let mut data = self.series_data.write();
         for buffer in data.values_mut() {
             buffer.compress();
         }
     }
 
-    /// Flush all pending writes.
+    /// Flush all pending writes to disk.
     pub fn flush(&self) {
-        // In a real implementation, this would persist to disk
-        let mut stats = self.stats.write().expect("stats lock poisoned");
+        if let Some(ref pm) = self.persistence {
+            let metrics: Vec<Metric> = {
+                let m = self.metrics.read();
+                m.values().cloned().collect()
+            };
+
+            let series: Vec<PersistedSeries> = {
+                let data = self.series_data.read();
+                data.iter()
+                    .map(|(id, buffer)| PersistedSeries {
+                        series_id: id.clone(),
+                        metric: buffer.metric.clone(),
+                        tags: buffer.tags.clone(),
+                        points: buffer.points.clone(),
+                        compressed_blocks: buffer
+                            .compressed_blocks
+                            .iter()
+                            .map(PersistedBlock::from)
+                            .collect(),
+                    })
+                    .collect()
+            };
+
+            let state = PersistedState {
+                version: 1,
+                metrics,
+                series,
+            };
+
+            if let Err(e) = pm.save(&state) {
+                eprintln!("Failed to flush timeseries data: {}", e);
+            }
+        }
+
+        let mut stats = self.stats.write();
         stats.last_flush = Some(Utc::now());
+    }
+
+    /// Load persisted data from disk.
+    fn load_from_disk(&mut self) {
+        let Some(ref pm) = self.persistence else {
+            return;
+        };
+
+        let state = match pm.load() {
+            Ok(Some(s)) => s,
+            Ok(None) => return,
+            Err(e) => {
+                eprintln!("Failed to load timeseries data: {}", e);
+                return;
+            }
+        };
+
+        // Restore metrics
+        {
+            let mut metrics = self.metrics.write();
+            for metric in &state.metrics {
+                metrics.insert(metric.name.clone(), metric.clone());
+            }
+        }
+
+        // Restore series data and rebuild index
+        {
+            let mut data = self.series_data.write();
+            for ps in state.series {
+                // Re-register in index
+                self.index.register(&ps.metric, &ps.tags);
+
+                let buffer = SeriesBuffer {
+                    metric: ps.metric,
+                    tags: ps.tags,
+                    points: ps.points,
+                    compressed_blocks: ps
+                        .compressed_blocks
+                        .into_iter()
+                        .map(CompressedBlock::from)
+                        .collect(),
+                };
+
+                data.insert(ps.series_id, buffer);
+            }
+        }
     }
 }
 
@@ -412,6 +521,38 @@ impl SeriesBuffer {
         }
 
         all_points.extend(self.points.clone());
+        all_points.sort_by_key(|p| p.timestamp);
+
+        Series::with_points(self.metric.clone(), self.tags.clone(), all_points)
+    }
+
+    /// Query-optimized version that skips blocks outside the time range.
+    fn to_series_in_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Series {
+        let mut all_points = Vec::new();
+        let start_ms = start.timestamp_millis();
+        let end_ms = end.timestamp_millis();
+
+        for block in &self.compressed_blocks {
+            // Skip blocks entirely outside the query range
+            if block.last_timestamp < start_ms || block.first_timestamp > end_ms {
+                continue;
+            }
+
+            let mut decompressor = Decompressor::new(block);
+            let points = decompressor.decompress_all();
+            all_points.extend(
+                points
+                    .into_iter()
+                    .filter(|p| p.timestamp >= start && p.timestamp < end),
+            );
+        }
+
+        all_points.extend(
+            self.points
+                .iter()
+                .filter(|p| p.timestamp >= start && p.timestamp < end)
+                .cloned(),
+        );
         all_points.sort_by_key(|p| p.timestamp);
 
         Series::with_points(self.metric.clone(), self.tags.clone(), all_points)
@@ -591,5 +732,25 @@ mod tests {
         let deleted = engine.delete_series(&series_ids[0]);
         assert!(deleted);
         assert_eq!(engine.series_count(), 0);
+    }
+
+    #[test]
+    fn test_cardinality_limit() {
+        let config = EngineConfig {
+            max_series_per_metric: 3,
+            ..Default::default()
+        };
+        let engine = TimeSeriesEngine::with_config(config);
+
+        for i in 0..3 {
+            let mut tags = Tags::new();
+            tags.insert("host", &format!("server{}", i));
+            engine.write_now("cpu", tags, 50.0).expect("write should succeed");
+        }
+
+        let mut tags = Tags::new();
+        tags.insert("host", "server_new");
+        let result = engine.write_now("cpu", tags, 50.0);
+        assert!(result.is_err(), "Should reject writes exceeding cardinality limit");
     }
 }
