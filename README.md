@@ -8,7 +8,7 @@
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status">
-  <img src="https://img.shields.io/badge/tests-497%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-627%20passing-brightgreen.svg" alt="Tests">
   <img src="https://img.shields.io/badge/version-0.2.1-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg" alt="Platform">
 </p>
@@ -48,11 +48,13 @@ POST /api/v1/query
 ```
 
 ### Distributed Systems
-- Raft consensus for leader election and replication
+- Raft consensus with leader lease for split-brain prevention
+- HTTP transport for real-world Raft networking
 - Consistent hashing (HashRing, JumpHash, Rendezvous)
 - Distributed transactions with 2PC
 - CRDTs for conflict-free replication
 - Vector clocks for causality tracking
+- Snapshot integrity verification with CRC32 checksums
 
 ### Storage Engine
 - Pluggable storage backends (Memory, Local filesystem)
@@ -60,6 +62,13 @@ POST /api/v1/query
 - MVCC with snapshot isolation
 - Write-ahead logging for durability
 - Buffer pool with LRU eviction
+- Time series persistence with atomic writes and crash recovery
+
+### OTA Update System
+- Rolling updates across cluster nodes (followers first, leader last)
+- Binary staging with SHA-256 verification
+- Automatic rollback on failure with quorum protection
+- Post-update health checks and version verification
 
 ### Web Dashboard
 - Leptos/WASM frontend with NexusForge theme
@@ -95,6 +104,7 @@ Key-Value:      GET/POST /api/v1/kv/keys, DELETE /api/v1/kv/keys/:key
 Documents:      GET  /api/v1/documents/collections, /collections/:name
 Graph:          GET  /api/v1/graph/data
 Query Builder:  POST /api/v1/query-builder/execute
+Updates:        GET  /api/v1/updates/{version,history}, POST /plan, /execute, /status/:id
 Compliance:     GET  /api/v1/compliance/{status,report,frameworks,audit-summary}
 ```
 
@@ -115,6 +125,7 @@ aegis-db/
 │   ├── aegis-document/        # Document store
 │   ├── aegis-streaming/       # Real-time streaming
 │   ├── aegis-monitoring/      # Metrics, tracing, health checks
+│   ├── aegis-updates/         # OTA rolling update system
 │   └── aegis-dashboard/       # Web UI (Leptos/WASM)
 ├── deploy/
 │   └── helm/aegis-db/         # Kubernetes Helm charts

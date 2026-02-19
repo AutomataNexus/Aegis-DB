@@ -36,7 +36,8 @@ Time-based partitioning:
 Gorilla-style compression:
 - `Compressor` - Delta-of-delta timestamp and XOR value compression
 - `Decompressor` - Decompression for query access
-- `CompressedBlock` - Compressed data with metadata
+- `CompressedBlock` - Compressed data with metadata and CRC32 checksums
+- Partition pruning via `last_timestamp` on compressed blocks
 - Typically achieves 2-10x compression ratio
 
 ### aggregation.rs
@@ -44,7 +45,7 @@ Aggregation functions:
 - `AggregateFunction` - Sum, Count, Min, Max, Avg, First, Last, Median, StdDev, Variance, Rate, Increase
 - `Aggregator` - Streaming aggregation
 - `Downsampler` - Reduce data resolution
-- `RollingWindow` - Windowed aggregation
+- `RollingWindow` - O(n) sliding window aggregation (two-pointer algorithm)
 
 ### retention.rs
 Data lifecycle management:
@@ -58,6 +59,7 @@ Series indexing:
 - `TimeSeriesIndex` - Index by ID, metric, tags
 - `SeriesMetadata` - Indexed series information
 - `LabelMatcher` - Equal, NotEqual, Regex, NotRegex filters
+- Compiled regex cache for query performance
 
 ### query.rs
 Query execution:
@@ -70,9 +72,21 @@ Query execution:
 ### engine.rs
 Core engine:
 - `TimeSeriesEngine` - Main entry point
-- `EngineConfig` - Configuration options
+- `EngineConfig` - Configuration options (including `data_path` for persistence)
 - `SeriesBuffer` - In-memory buffer with auto-compression
 - `EngineStats` - Performance metrics
+- `flush()` - Persist all data to disk via PersistenceManager
+- `load_from_disk()` - Restore data from persisted state on startup
+- Cardinality limit enforcement (`max_series_per_metric`)
+
+### persistence.rs
+Crash-safe data persistence:
+- `PersistenceManager` - Manages atomic save/load operations
+- `PersistedState` - Full engine state snapshot (metrics, series, blocks)
+- `PersistedSeries` - Serialized series with tags and data points
+- `PersistedBlock` - Serialized compressed blocks
+- Uses bincode serialization for efficient binary encoding
+- Atomic writes (write to temp file, then rename) to prevent corruption
 
 ## Usage Example
 
@@ -103,4 +117,4 @@ let avg = engine.aggregate("cpu_usage", Duration::hours(1), AggregateFunction::A
 
 ## Tests
 
-31 tests covering all modules.
+36 tests covering all modules including persistence roundtrips.

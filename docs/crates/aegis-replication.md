@@ -45,12 +45,13 @@ State machine abstraction:
 
 ### raft.rs
 Core Raft consensus algorithm:
-- `RaftConfig` - Election timeout, heartbeat interval, snapshot threshold
+- `RaftConfig` - Election timeout, heartbeat interval, snapshot threshold, lease duration
 - `RaftState` - Persistent state (term, voted_for, commit_index)
 - `VoteRequest` / `VoteResponse` - Leader election
 - `AppendEntriesRequest` / `AppendEntriesResponse` - Log replication
-- `InstallSnapshotRequest` / `InstallSnapshotResponse` - Snapshot transfer
+- `InstallSnapshotRequest` / `InstallSnapshotResponse` - Snapshot transfer with CRC32 checksums
 - `RaftNode` - Full Raft implementation with election and replication
+- Leader lease mechanism to prevent split-brain (extends on majority heartbeat ack)
 
 ### cluster.rs
 Cluster coordination:
@@ -69,6 +70,13 @@ Network transport layer:
 - `Transport` trait - Send, receive, broadcast interface
 - `InMemoryTransport` - Testing transport
 - `ConnectionPool` - Peer connection management
+
+### http_transport.rs
+HTTP-based network transport for real-world deployments:
+- `HttpTransport` - Implements `Transport` trait using reqwest
+- Posts JSON messages to `{peer_url}/api/v1/cluster/raft`
+- Uses mpsc channel for incoming message buffering
+- Configurable HTTP client with connection pooling
 
 ### engine.rs
 Main replication engine:
@@ -168,12 +176,13 @@ let failed = cluster.check_failures();
 
 ## Tests
 
-49 tests covering all modules:
+48 tests covering all modules:
 - Node management and health
 - Replicated log operations
 - State machine commands
-- Raft leader election
+- Raft leader election and leader lease
 - Log replication
+- Snapshot integrity verification (CRC32)
 - Cluster coordination
-- Transport messaging
+- Transport messaging (in-memory and HTTP)
 - Replication engine

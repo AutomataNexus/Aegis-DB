@@ -120,7 +120,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/info", get(handlers::get_node_info))
         .route("/join", post(handlers::cluster_join))
         .route("/heartbeat", post(handlers::cluster_heartbeat))
-        .route("/peers", get(handlers::get_peers));
+        .route("/peers", get(handlers::get_peers))
+        .route("/shutdown", post(handlers::cluster_shutdown));
 
     // Login route with rate limiting to prevent brute force attacks
     let login_routes = Router::new()
@@ -180,6 +181,15 @@ pub fn create_router(state: AppState) -> Router {
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query));
 
+    // OTA Update routes (require auth)
+    let update_routes = Router::new()
+        .route("/version", get(handlers::get_update_version))
+        .route("/plan", post(handlers::create_update_plan))
+        .route("/execute", post(handlers::execute_update_plan))
+        .route("/status/:plan_id", get(handlers::get_update_status))
+        .route("/history", get(handlers::list_update_plans))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+
     // GDPR/CCPA compliance routes
     let compliance_routes = Router::new()
         // Data deletion (GDPR right to erasure - Article 17)
@@ -226,6 +236,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/streaming", streaming_routes)
         .nest("/api/v1/graph", graph_routes)
         .nest("/api/v1/query-builder", query_routes)
+        .nest("/api/v1/updates", update_routes)
         .nest("/api/v1/compliance", compliance_routes)
         .fallback(handlers::not_found)
         .layer(TraceLayer::new_for_http())

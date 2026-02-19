@@ -17,4 +17,10 @@ aegis-common = { workspace = true }
 aegis-storage = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
+bincode = { workspace = true }
+parking_lot = { workspace = true }
+crc32fast = "1.4"
 regex = "1.10"
+
+[dev-dependencies]
+tempfile = { workspace = true }

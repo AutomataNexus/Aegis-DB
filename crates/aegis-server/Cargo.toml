@@ -25,6 +25,7 @@ aegis-query = { workspace = true }
 aegis-document = { workspace = true }
 aegis-timeseries = { workspace = true }
 aegis-streaming = { workspace = true }
+aegis-updates = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
@@ -59,6 +60,7 @@ getrandom = "0.2"
 # TLS support
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls-pemfile = "2.0"
+openssl-sys = { version = "0.9.111", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

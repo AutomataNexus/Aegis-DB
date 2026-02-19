@@ -13,6 +13,7 @@ members = [
     "crates/aegis-document",
     "crates/aegis-streaming",
     "crates/aegis-monitoring",
+    "crates/aegis-updates",
 ]
 # WASM crates built separately with Trunk
 exclude = [
@@ -111,6 +112,7 @@ aegis-timeseries = { version = "0.1.7", path = "crates/aegis-timeseries" }
 aegis-document = { version = "0.1.7", path = "crates/aegis-document" }
 aegis-streaming = { version = "0.1.7", path = "crates/aegis-streaming" }
 aegis-monitoring = { version = "0.1.7", path = "crates/aegis-monitoring" }
+aegis-updates = { version = "0.1.7", path = "crates/aegis-updates" }
 
 [profile.release]
 lto = "thin"

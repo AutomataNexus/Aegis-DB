@@ -1802,32 +1802,71 @@ pub struct NodeActionResponse {
     pub node_id: String,
 }
 
-/// Restart a node.
+/// Restart a node by sending a shutdown signal to the target.
+/// PM2's autorestart will bring it back up.
 pub async fn restart_node(
     State(state): State<AppState>,
     Path(node_id): Path<String>,
 ) -> Json<NodeActionResponse> {
     state.activity.log_node(&format!("Restarting node: {}", node_id));
 
-    Json(NodeActionResponse {
-        success: true,
-        message: format!("Node {} restart initiated. Expected downtime: ~30 seconds.", node_id),
-        node_id,
-    })
+    // Find the peer's address
+    let peers = state.admin.get_peers();
+    let peer = peers.iter().find(|p| p.id == node_id || p.name.as_deref() == Some(&node_id));
+
+    if let Some(peer) = peer {
+        let address = peer.address.clone();
+        // Send shutdown request to the target node asynchronously
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+        let url = format!("{}/api/v1/cluster/shutdown", address);
+        tokio::spawn(async move {
+            let _ = client.post(&url).send().await;
+        });
+
+        Json(NodeActionResponse {
+            success: true,
+            message: format!("Node {} restart initiated at {}. PM2 will auto-restart.", node_id, address),
+            node_id,
+        })
+    } else {
+        Json(NodeActionResponse {
+            success: false,
+            message: format!("Node {} not found in cluster peers.", node_id),
+            node_id,
+        })
+    }
 }
 
-/// Drain a node (prepare for maintenance).
+/// Drain a node (mark as leaving, stop routing traffic).
 pub async fn drain_node(
     State(state): State<AppState>,
     Path(node_id): Path<String>,
 ) -> Json<NodeActionResponse> {
     state.activity.log_node(&format!("Draining node: {}", node_id));
 
-    Json(NodeActionResponse {
-        success: true,
-        message: format!("Node {} is being drained. Traffic will be redirected to other nodes.", node_id),
-        node_id,
-    })
+    // Mark the node as leaving in the peer list
+    let peers = state.admin.get_peers();
+    let found = peers.iter().any(|p| p.id == node_id || p.name.as_deref() == Some(&node_id));
+
+    if found {
+        // Update peer status to Leaving so the router stops sending traffic
+        state.admin.mark_peer_offline(&node_id);
+
+        Json(NodeActionResponse {
+            success: true,
+            message: format!("Node {} marked as draining. Traffic will be redirected to other nodes.", node_id),
+            node_id,
+        })
+    } else {
+        Json(NodeActionResponse {
+            success: false,
+            message: format!("Node {} not found in cluster peers.", node_id),
+            node_id,
+        })
+    }
 }
 
 /// Remove a node from the cluster.
@@ -1837,11 +1876,36 @@ pub async fn remove_node(
 ) -> impl IntoResponse {
     state.activity.log_node(&format!("Removing node from cluster: {}", node_id));
 
+    // Actually remove the peer from the admin service
+    state.admin.remove_peer(&node_id);
+
     (StatusCode::OK, Json(NodeActionResponse {
         success: true,
         message: format!("Node {} has been removed from the cluster.", node_id),
         node_id,
     }))
+}
+
+/// Graceful shutdown endpoint - called by restart_node on the target.
+/// Flushes data and exits; PM2 auto-restarts the process.
+pub async fn cluster_shutdown(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    state.activity.log_node("Graceful shutdown initiated via cluster API");
+
+    // Flush timeseries data
+    state.timeseries_engine.flush();
+
+    // Give a brief moment for the response to be sent
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        std::process::exit(0);
+    });
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "status": "shutting_down",
+        "message": "Node will restart via PM2"
+    })))
 }
 
 /// Node logs entry.
@@ -2299,4 +2363,122 @@ pub async fn delete_graph_node(
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
         Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": e}))),
     }
+}
+
+// =============================================================================
+// OTA Update Handlers
+// =============================================================================
+
+/// Get version information for all cluster nodes.
+pub async fn get_update_version(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let version = aegis_updates::version::VERSION;
+    let node_name = state.config.node_name.clone().unwrap_or_else(|| "unknown".to_string());
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "version": version,
+        "node_id": state.config.node_id,
+        "node_name": node_name,
+    })))
+}
+
+/// Create an update plan.
+#[derive(serde::Deserialize)]
+pub struct CreateUpdatePlanRequest {
+    pub version: String,
+    pub binary_url: String,
+    pub sha256: String,
+}
+
+pub async fn create_update_plan(
+    State(state): State<AppState>,
+    Json(request): Json<CreateUpdatePlanRequest>,
+) -> impl IntoResponse {
+    state.activity.log_system(&format!("Creating update plan for version {}", request.version));
+
+    // Populate cluster nodes from admin service peers
+    let peers = state.admin.get_peers();
+    let mut nodes = vec![
+        aegis_updates::orchestrator::ClusterNode {
+            node_id: state.config.node_id.clone(),
+            name: state.config.node_name.clone().unwrap_or_else(|| "self".to_string()),
+            address: format!("http://{}:{}", state.config.host, state.config.port),
+            role: "leader".to_string(),
+        },
+    ];
+    for peer in &peers {
+        nodes.push(aegis_updates::orchestrator::ClusterNode {
+            node_id: peer.id.clone(),
+            name: peer.name.clone().unwrap_or_else(|| peer.id.clone()),
+            address: peer.address.clone(),
+            role: "follower".to_string(),
+        });
+    }
+    state.update_orchestrator.set_cluster_nodes(nodes).await;
+
+    let plan = state.update_orchestrator.create_plan(
+        request.version,
+        request.binary_url,
+        request.sha256,
+    ).await;
+
+    (StatusCode::CREATED, Json(serde_json::json!({
+        "success": true,
+        "plan": plan,
+    })))
+}
+
+/// Execute an update plan.
+#[derive(serde::Deserialize)]
+pub struct ExecuteUpdateRequest {
+    pub plan_id: String,
+}
+
+pub async fn execute_update_plan(
+    State(state): State<AppState>,
+    Json(request): Json<ExecuteUpdateRequest>,
+) -> impl IntoResponse {
+    state.activity.log_system(&format!("Executing update plan {}", request.plan_id));
+
+    match state.update_orchestrator.execute_plan(&request.plan_id).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({
+            "success": true,
+            "message": "Update completed successfully",
+        }))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "success": false,
+            "error": e.to_string(),
+        }))),
+    }
+}
+
+/// Get update plan status.
+pub async fn get_update_status(
+    State(state): State<AppState>,
+    Path(plan_id): Path<String>,
+) -> impl IntoResponse {
+    match state.update_orchestrator.get_plan(&plan_id).await {
+        Some(plan) => (StatusCode::OK, Json(serde_json::json!({
+            "success": true,
+            "plan": plan,
+        }))),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "success": false,
+            "error": format!("Plan {} not found", plan_id),
+        }))),
+    }
+}
+
+/// List all update plans (history).
+pub async fn list_update_plans(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let plans = state.update_orchestrator.list_plans().await;
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "plans": plans,
+    })))
 }

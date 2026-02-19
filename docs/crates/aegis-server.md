@@ -37,7 +37,9 @@ Application state management:
 **AppState:**
 - Server configuration
 - Query engine instance
-- Metrics tracking
+- Metrics tracking (VecDeque for O(1) history operations)
+- Time series engine with persistence
+- Update orchestrator for OTA rolling updates
 
 **QueryEngine:**
 - SQL parser integration
@@ -62,6 +64,11 @@ HTTP request handlers:
 | GET | `/api/v1/tables` | List tables |
 | GET | `/api/v1/tables/:name` | Get table details |
 | GET | `/api/v1/metrics` | Server metrics |
+| GET | `/api/v1/updates/version` | Node version info |
+| POST | `/api/v1/updates/plan` | Create OTA update plan |
+| POST | `/api/v1/updates/execute` | Execute rolling update |
+| GET | `/api/v1/updates/status/:plan_id` | Get update status |
+| GET | `/api/v1/updates/history` | List update history |
 
 **Query Request:**
 ```json

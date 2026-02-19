@@ -21,7 +21,8 @@ use aegis_query::planner::PlannerSchema;
 use aegis_query::executor::ExecutionContext;
 use aegis_streaming::StreamingEngine;
 use aegis_timeseries::TimeSeriesEngine;
-use std::collections::HashMap;
+use aegis_updates::orchestrator::UpdateOrchestrator;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,7 +48,7 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     pub activity: Arc<ActivityLogger>,
     pub settings: Arc<RwLock<ServerSettings>>,
-    pub metrics_history: Arc<RwLock<Vec<MetricsDataPoint>>>,
+    pub metrics_history: Arc<RwLock<VecDeque<MetricsDataPoint>>>,
     pub graph_store: Arc<GraphStore>,
     pub rbac: Arc<RbacManager>,
     pub rate_limiter: Arc<RateLimiter>,
@@ -55,6 +56,7 @@ pub struct AppState {
     pub gdpr: Arc<GdprService>,
     pub consent_manager: Arc<ConsentManager>,
     pub breach_detector: Arc<BreachDetector>,
+    pub update_orchestrator: Arc<UpdateOrchestrator>,
     data_dir: Option<PathBuf>,
 }
 
@@ -142,7 +144,7 @@ impl AppState {
         let graph_store = Arc::new(GraphStore::new());
 
         // Initialize metrics history with some data points
-        let metrics_history = Arc::new(RwLock::new(Vec::new()));
+        let metrics_history = Arc::new(RwLock::new(VecDeque::new()));
 
         // Start metrics collection background task
         let metrics_history_clone = metrics_history.clone();
@@ -178,11 +180,28 @@ impl AppState {
             }
         }
 
+        // Initialize update orchestrator
+        let update_orchestrator = {
+            let binary_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis-server"));
+            let base_dir = data_dir.as_ref().map(|d| d.clone()).unwrap_or_else(|| PathBuf::from("/tmp/aegis-updates"));
+            Arc::new(UpdateOrchestrator::new(
+                binary_path,
+                base_dir.join("staging"),
+                base_dir.join("backups"),
+            ))
+        };
+
         Self {
             config: Arc::new(config),
             query_engine,
             document_engine,
-            timeseries_engine: Arc::new(TimeSeriesEngine::new()),
+            timeseries_engine: Arc::new({
+                let ts_config = aegis_timeseries::engine::EngineConfig {
+                    data_path: data_dir.as_ref().map(|d| d.join("timeseries")),
+                    ..Default::default()
+                };
+                TimeSeriesEngine::with_config(ts_config)
+            }),
             streaming_engine: Arc::new(StreamingEngine::new()),
             kv_store,
             metrics: Arc::new(RwLock::new(Metrics::default())),
@@ -198,6 +217,7 @@ impl AppState {
             gdpr: Arc::new(GdprService::new()),
             consent_manager: Arc::new(ConsentManager::new()),
             breach_detector,
+            update_orchestrator,
             data_dir,
         }
     }
@@ -237,6 +257,10 @@ impl AppState {
         self.query_engine.flush();
         tracing::debug!("Flushed SQL tables to disk");
 
+        // Flush timeseries data
+        self.timeseries_engine.flush();
+        tracing::debug!("Flushed timeseries data to disk");
+
         // Flush audit logs
         if let Err(e) = self.activity.flush() {
             tracing::error!("Failed to flush audit logs: {}", e);
@@ -262,7 +286,7 @@ impl AppState {
     }
 
     /// Background task to collect real system metrics periodically.
-    async fn collect_metrics_loop(metrics_history: Arc<RwLock<Vec<MetricsDataPoint>>>) {
+    async fn collect_metrics_loop(metrics_history: Arc<RwLock<VecDeque<MetricsDataPoint>>>) {
         use sysinfo::{System, Networks};
 
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
@@ -331,9 +355,9 @@ impl AppState {
 
             // Keep last 30 days of minute-resolution data (43200 points)
             if history.len() >= 43200 {
-                history.remove(0);
+                history.pop_front();
             }
-            history.push(point);
+            history.push_back(point);
         }
     }
 
