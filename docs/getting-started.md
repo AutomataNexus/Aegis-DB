@@ -25,17 +25,27 @@ Before installing Aegis-DB, ensure you have:
 
 ## Quick Installation
 
+### From Crates.io
+
+```bash
+# Install server
+cargo install aegis-server
+
+# Install CLI
+cargo install aegisdb-cli
+```
+
 ### From Binary Release
 
 ```bash
-# Download latest release
-curl -LO https://github.com/AutomataNexus/Aegis-DB/releases/latest/download/aegis-db-linux-x86_64.tar.gz
+# Download latest release (v0.2.2)
+curl -LO https://github.com/AutomataNexus/Aegis-DB/releases/latest/download/aegis-db-0.2.2-linux-x86_64.tar.gz
 
 # Extract
-tar -xzf aegis-db-linux-x86_64.tar.gz
-cd aegis-db
+tar -xzf aegis-db-0.2.2-linux-x86_64.tar.gz
+cd aegis-db-0.2.2-linux-x86_64
 
-# Run server
+# Run server (default port 9090)
 ./aegis-server
 ```
 
@@ -49,7 +59,7 @@ cd Aegis-DB
 # Build release
 cargo build --release --workspace
 
-# Run server
+# Run server (default port 9090)
 ./target/release/aegis-server
 ```
 
@@ -109,7 +119,7 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "uptime": 123
 }
 ```
@@ -131,16 +141,22 @@ Default credentials: `demo` / `demo`
 ## Using the CLI
 
 ```bash
-# Install CLI
+# Install CLI (from crates.io)
+cargo install aegisdb-cli
+
+# Or install from source
 cargo install --path crates/aegis-cli
 
-# Connect to server
-aegis-client connect localhost:9090
+# Check server status (port 9090)
+aegis-client -s http://localhost:9090 status
 
-# Run queries
-aegis-client query "CREATE TABLE users (id INT, name TEXT)"
-aegis-client query "INSERT INTO users VALUES (1, 'Alice')"
-aegis-client query "SELECT * FROM users"
+# Run queries (subcommand comes AFTER the database flag)
+aegis-client -s http://localhost:9090 query "CREATE TABLE users (id INT, name TEXT)"
+aegis-client -s http://localhost:9090 query "INSERT INTO users VALUES (1, 'Alice')"
+aegis-client -s http://localhost:9090 query "SELECT * FROM users"
+
+# Interactive shell
+aegis-client -s http://localhost:9090 shell
 ```
 
 ## Using the Client SDK

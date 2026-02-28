@@ -44,6 +44,7 @@ Comprehensive guide for developing, contributing to, and extending Aegis-DB
    - [aegis-streaming](#aegis-streaming)
    - [aegis-monitoring](#aegis-monitoring)
    - [aegis-dashboard](#aegis-dashboard)
+   - [aegis-updates](#aegis-updates)
 6. [Code Style & Conventions](#code-style--conventions)
 7. [Testing](#testing)
    - [Unit Tests](#unit-tests)
@@ -337,7 +338,8 @@ aegis-db/
 │   │       ├── middleware.rs # HTTP middleware (auth, rate limiting)
 │   │       ├── secrets.rs    # HashiCorp Vault integration
 │   │       ├── admin.rs      # Admin types
-│   │       └── activity.rs   # Activity logging
+│   │       ├── activity.rs   # Activity logging
+│   │       └── import.rs     # Data import module
 │   │   └── tests/
 │   │       └── integration_test.rs  # E2E tests
 │   │
@@ -398,19 +400,24 @@ aegis-db/
 │   │       ├── tracing.rs
 │   │       └── health.rs
 │   │
-│   └── aegis-dashboard/      # Web UI (Leptos/WASM)
+│   ├── aegis-dashboard/      # Web UI (Leptos/WASM)
+│   │   ├── Cargo.toml
+│   │   ├── Trunk.toml
+│   │   ├── index.html
+│   │   ├── assets/
+│   │   │   └── styles.css
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── api.rs
+│   │       ├── types.rs
+│   │       ├── state.rs
+│   │       └── pages/
+│   │           └── dashboard.rs
+│   │
+│   └── aegis-updates/        # OTA update system
 │       ├── Cargo.toml
-│       ├── Trunk.toml
-│       ├── index.html
-│       ├── assets/
-│       │   └── styles.css
 │       └── src/
-│           ├── lib.rs
-│           ├── api.rs
-│           ├── types.rs
-│           ├── state.rs
-│           └── pages/
-│               └── dashboard.rs
+│           └── lib.rs        # Update checking, download, verification
 │
 ├── docs/                      # Documentation
 │   ├── AegisQL.md            # Query language reference
@@ -596,6 +603,46 @@ pub struct BlockId(pub u64);
 pub struct TransactionId(pub u64);
 ```
 
+**Data Classification (HIPAA/PHI support):**
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub enum DataClassification {
+    Public,
+    Internal,
+    Confidential,
+    PHI,           // Protected Health Information (HIPAA)
+    PII,           // Personally Identifiable Information
+    Restricted,
+}
+```
+
+**Query Limits:**
+```rust
+pub struct QueryLimits {
+    pub max_result_rows: usize,     // Maximum rows returned per query
+    pub query_timeout_secs: u64,    // Query execution timeout in seconds
+}
+```
+
+**Consent Management:**
+```rust
+pub struct ConsentRecord {
+    pub subject_id: String,
+    pub purpose: String,
+    pub granted: bool,
+    pub granted_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+```
+
+**Breach Detection:**
+```rust
+pub struct BreachDetector {
+    pub rules: Vec<BreachRule>,
+    pub alert_threshold: usize,
+}
+```
+
 **Utilities:**
 ```rust
 // ID generation
@@ -645,6 +692,19 @@ impl TransactionManager {
     pub fn commit(&self, tx: Transaction) -> Result<()>;
     pub fn rollback(&self, tx: Transaction) -> Result<()>;
 }
+```
+
+**Compression (LZ4, Zstd, Snappy):**
+```rust
+pub enum CompressionAlgorithm {
+    None,
+    LZ4,     // Fast compression, good for real-time workloads
+    Zstd,    // High compression ratio, configurable levels
+    Snappy,  // Balanced speed/ratio, good default
+}
+
+pub fn compress(data: &[u8], algorithm: CompressionAlgorithm) -> Result<Vec<u8>>;
+pub fn decompress(data: &[u8], algorithm: CompressionAlgorithm) -> Result<Vec<u8>>;
 ```
 
 ### aegis-memory
@@ -734,6 +794,72 @@ impl QueryExecutor {
 }
 ```
 
+**Index Implementations (B-tree and Hash):**
+```rust
+pub enum IndexType {
+    BTree,
+    Hash,
+}
+
+pub struct BTreeIndex {
+    tree: BTreeMap<Value, Vec<RowId>>,
+    name: String,
+    column: String,
+}
+
+pub struct HashIndex {
+    map: HashMap<Value, Vec<RowId>>,
+    name: String,
+    column: String,
+}
+```
+
+**Direct Execution API (bypasses SQL parsing):**
+```rust
+// Execute updates directly without going through SQL parser
+pub fn execute_update_direct(
+    tables: &mut HashMap<String, Table>,
+    table_name: &str,
+    assignments: Vec<(String, Value)>,
+    filter: Option<Expression>,
+) -> Result<usize>;
+
+// Execute updates with indexed lookup for fast path
+pub fn execute_update_indexed_fn(
+    tables: &mut HashMap<String, Table>,
+    table_name: &str,
+    index: &dyn Index,
+    key: &Value,
+    assignments: Vec<(String, Value)>,
+) -> Result<usize>;
+```
+
+**Plan Cache (LRU, 1024 entries):**
+```rust
+pub struct PlanCache {
+    cache: LruCache<String, ExecutionPlan>,
+    capacity: usize,  // Default: 1024
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
+impl PlanCache {
+    pub fn get(&mut self, sql: &str) -> Option<&ExecutionPlan>;
+    pub fn insert(&mut self, sql: String, plan: ExecutionPlan);
+    pub fn hit_rate(&self) -> f64;
+}
+```
+
+**VACUUM / Compaction:**
+```rust
+// Reclaim storage space and optimize table layout
+// Supported via SQL: VACUUM table_name
+pub fn execute_vacuum(
+    tables: &mut HashMap<String, Table>,
+    table_name: &str,
+) -> Result<VacuumStats>;
+```
+
 ### aegis-server
 
 HTTP API server built on Axum.
@@ -792,6 +918,23 @@ pub struct AppState {
     pub metrics: Arc<MetricsCollector>,
     pub rate_limiter: Arc<RateLimiter>,
     pub login_rate_limiter: Arc<RateLimiter>,
+}
+```
+
+**Import Module (import.rs):**
+```rust
+// Bulk data import from external sources (CSV, JSON, etc.)
+pub async fn import_data(
+    state: &AppState,
+    source: ImportSource,
+    target_table: &str,
+    options: ImportOptions,
+) -> Result<ImportResult>;
+
+pub enum ImportSource {
+    Csv(PathBuf),
+    Json(PathBuf),
+    Url(String),
 }
 ```
 
@@ -1099,6 +1242,26 @@ pub fn Dashboard() -> impl IntoView {
 }
 ```
 
+### aegis-updates
+
+OTA (Over-The-Air) update system for Aegis-DB nodes.
+
+**Update Manager:**
+```rust
+pub struct UpdateManager {
+    pub current_version: Version,
+    pub update_url: String,
+    pub check_interval: Duration,
+}
+
+impl UpdateManager {
+    pub async fn check_for_updates(&self) -> Result<Option<UpdateInfo>>;
+    pub async fn download_update(&self, info: &UpdateInfo) -> Result<UpdatePackage>;
+    pub fn verify_signature(&self, package: &UpdatePackage) -> Result<bool>;
+    pub async fn apply_update(&self, package: UpdatePackage) -> Result<()>;
+}
+```
+
 ---
 
 ## Code Style & Conventions
@@ -1198,6 +1361,8 @@ pub use types::{Document, DocumentId};
 ---
 
 ## Testing
+
+The workspace currently has **634 tests** across 13 crates.
 
 ### Unit Tests
 
@@ -1998,6 +2163,14 @@ pub fn UserMenu() -> impl IntoView {
 
 ## Performance Optimization
 
+### Benchmark Results (v0.2.2)
+
+| Workload | Throughput |
+|----------|-----------|
+| Fund transfers (transactional) | 758K TPS |
+| High contention writes | 2.5M TPS |
+| KV reads | 12.3M reads/sec |
+
 ### Profiling
 
 ```bash
@@ -2090,6 +2263,22 @@ RUST_LOG=debug cargo run -p aegis-server
 RUST_LOG=aegis_query=trace,aegis_storage=debug cargo run -p aegis-server
 ```
 
+**Log Rotation (via tracing-appender):**
+```rust
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+
+// Daily log rotation
+let file_appender = RollingFileAppender::new(
+    Rotation::DAILY,
+    "/var/log/aegis",
+    "aegis-server.log",
+);
+let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+tracing_subscriber::fmt()
+    .with_writer(non_blocking)
+    .init();
+```
+
 ### Debug Builds
 
 ```toml
@@ -2140,7 +2329,7 @@ fn debug_validate(&self) {
 
 ```bash
 # Update version in all Cargo.toml files
-./scripts/bump-version.sh 0.2.0
+./scripts/bump-version.sh 0.2.2
 ```
 
 ### Release Checklist
@@ -2160,17 +2349,17 @@ fn debug_validate(&self) {
 
 3. **Create Release:**
    ```bash
-   git tag -a v0.2.0 -m "Release v0.2.0"
-   git push origin v0.2.0
+   git tag -a v0.2.2 -m "Release v0.2.2"
+   git push origin v0.2.2
    ```
 
 4. **Build Artifacts:**
    ```bash
    ./scripts/release.sh
    # Creates:
-   # - aegis-db-0.2.0-linux-x86_64.tar.gz
-   # - aegis-db-0.2.0-macos-x86_64.tar.gz
-   # - aegis-db-0.2.0-windows-x86_64.zip
+   # - aegis-db-0.2.2-linux-x86_64.tar.gz
+   # - aegis-db-0.2.2-macos-x86_64.tar.gz
+   # - aegis-db-0.2.2-windows-x86_64.zip
    ```
 
 5. **Publish to crates.io (if applicable):**

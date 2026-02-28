@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/crate-0.1.0-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/crate-0.2.2-green.svg" alt="Version">
   <a href="../../README.md"><img src="https://img.shields.io/badge/part%20of-AegisDB-teal.svg" alt="AegisDB"></a>
 </p>
 
@@ -27,6 +27,11 @@ REST API server for the Aegis Database Platform.
 - **Secrets Management** - HashiCorp Vault integration
 - **Audit Logging** - Comprehensive activity tracking
 - **Admin API** - Cluster management and monitoring
+- **Bulk Import** - CSV/JSON bulk data import via `import.rs`
+- **VACUUM** - Storage reclamation and index rebuild endpoint
+- **PHI Classification** - Column-level data classification endpoints
+- **Query Safety Limits** - Configurable max result rows and query timeouts
+- **Log Rotation** - Automatic log file rotation and retention
 
 ## Architecture
 
@@ -62,6 +67,7 @@ REST API server for the Aegis Database Platform.
 | `admin` | Cluster administration endpoints |
 | `activity` | Activity logging and audit trail |
 | `state` | Shared application state |
+| `import` | Bulk CSV/JSON data import |
 | `config` | Server configuration |
 
 ## API Endpoints
@@ -95,6 +101,23 @@ REST API server for the Aegis Database Platform.
 | GET | `/api/v1/documents/collections` | List collections |
 | GET | `/api/v1/documents/collections/:name` | Get documents |
 
+### Bulk Import
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/import/csv` | Bulk import from CSV |
+| POST | `/api/v1/import/json` | Bulk import from JSON |
+
+### VACUUM & Maintenance
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/vacuum` | Reclaim storage and rebuild indexes |
+
+### PHI Classification
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/classification/columns` | List column classifications |
+| POST | `/api/v1/classification/columns` | Set column classification |
+
 ### Admin
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -102,6 +125,8 @@ REST API server for the Aegis Database Platform.
 | GET | `/api/v1/admin/nodes` | Node list |
 | GET | `/api/v1/admin/stats` | Statistics |
 | GET | `/api/v1/admin/alerts` | Active alerts |
+| GET | `/api/v1/admin/query-limits` | Get query safety limits |
+| PUT | `/api/v1/admin/query-limits` | Set query safety limits |
 
 ## Usage
 
@@ -243,7 +268,7 @@ Secure random tokens generated using `rand::thread_rng()` with cryptographically
 cargo test -p aegis-server
 ```
 
-**Test count:** 54 tests (unit + integration)
+**Test count:** 634 tests (workspace total)
 
 ## License
 

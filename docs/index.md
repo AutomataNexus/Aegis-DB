@@ -21,14 +21,21 @@ Multi-paradigm database built for regulated industries
 
 Aegis-DB is a unified, multi-paradigm database platform built in Rust. It combines relational (SQL), time series, document, graph, and real-time streaming capabilities into a single system with enterprise-grade security and compliance features.
 
+**Version 0.2.2** -- 13 crates, 634 tests
+{: .label .label-green }
+
 ### Key Features
 
 - **Multi-Paradigm** - SQL, Document, TimeSeries, Graph, and Streaming in one platform
 - **Multi-Database** - Isolated databases per application with shared infrastructure
 - **Enterprise Security** - TLS, MFA, RBAC, audit logging, encryption at rest
-- **Compliance Ready** - HIPAA, GDPR, CCPA, SOC 2, FERPA support
+- **Compliance Ready** - HIPAA, GDPR, CCPA, SOC 2, FERPA support with PHI tagging and query limits
 - **Self-Hosted** - Complete data sovereignty, no cloud dependencies
-- **High Performance** - MVCC, vectorized execution, LZ4/Zstd compression
+- **High Performance** - MVCC, vectorized execution, B-tree/Hash indexes, LZ4/Zstd compression
+- **OTA Updates** - Rolling cluster updates with automatic rollback
+- **Bulk Import** - CSV and JSON bulk data import
+- **VACUUM** - Storage reclamation and compaction
+- **Graph Engine** - Nodes, edges, adjacency lists, label/relationship indexes
 
 ## Architecture
 
@@ -82,8 +89,8 @@ Aegis-DB is a unified, multi-paradigm database platform built in Rust. It combin
 
 Aegis-DB is licensed under the [Business Source License 1.1](https://github.com/AutomataNexus/Aegis-DB/blob/main/LICENSING.md).
 
-- **Use Limitation**: Production use limited to single organization with ≤50 users
+- **Use Limitation**: Free for everything except reselling as a managed Database-as-a-Service
 - **Change Date**: January 26, 2030
 - **Change License**: Apache License 2.0
 
-For enterprise licensing, contact [devops@automatanexus.com](mailto:devops@automatanexus.com).
+For commercial DBaaS licensing, contact [devops@automatanexus.com](mailto:devops@automatanexus.com).

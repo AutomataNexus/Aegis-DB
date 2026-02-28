@@ -16,13 +16,19 @@ The `aegis-server` crate implements the HTTP API layer for the Aegis database us
 
 ## Modules
 
+### import.rs
+Bulk data import:
+- CSV import with header detection and type inference
+- JSON array and NDJSON import
+- Batch insertion for performance
+
 ### config.rs
 Server configuration:
 
 ```rust
 pub struct ServerConfig {
     pub host: String,           // Default: "127.0.0.1"
-    pub port: u16,              // Default: 3000
+    pub port: u16,              // Default: 9090
     pub max_connections: usize, // Default: 10000
     pub request_timeout_secs: u64,
     pub body_limit_bytes: usize,
@@ -69,6 +75,13 @@ HTTP request handlers:
 | POST | `/api/v1/updates/execute` | Execute rolling update |
 | GET | `/api/v1/updates/status/:plan_id` | Get update status |
 | GET | `/api/v1/updates/history` | List update history |
+| POST | `/api/v1/import/csv` | Bulk import from CSV |
+| POST | `/api/v1/import/json` | Bulk import from JSON |
+| POST | `/api/v1/vacuum` | Reclaim storage and rebuild indexes |
+| GET | `/api/v1/classification/columns` | List column classifications |
+| POST | `/api/v1/classification/columns` | Set column classification |
+| GET | `/api/v1/admin/query-limits` | Get query safety limits |
+| PUT | `/api/v1/admin/query-limits` | Set query safety limits |
 
 **Query Request:**
 ```json
@@ -145,7 +158,7 @@ use aegis_server::{ServerConfig, AppState, create_router};
 
 #[tokio::main]
 async fn main() {
-    let config = ServerConfig::new("0.0.0.0", 3000);
+    let config = ServerConfig::new("0.0.0.0", 9090);
     let state = AppState::new(config.clone());
     let app = create_router(state);
 
@@ -161,19 +174,19 @@ async fn main() {
 
 **Health Check:**
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:9090/health
 ```
 
 **Execute Query:**
 ```bash
-curl -X POST http://localhost:3000/api/v1/query \
+curl -X POST http://localhost:9090/api/v1/query \
   -H "Content-Type: application/json" \
   -d '{"sql": "SELECT 1 + 1 as result"}'
 ```
 
 **Get Metrics:**
 ```bash
-curl http://localhost:3000/api/v1/metrics
+curl http://localhost:9090/api/v1/metrics
 ```
 
 ## TLS/HTTPS Configuration
@@ -203,4 +216,4 @@ cargo run -p aegis-server -- --tls
 
 ## Tests
 
-54 tests covering configuration, state management, HTTP endpoints, authentication, and rate limiting.
+634 tests (workspace total) covering configuration, state management, HTTP endpoints, authentication, rate limiting, bulk import, VACUUM, PHI classification, and query safety limits.

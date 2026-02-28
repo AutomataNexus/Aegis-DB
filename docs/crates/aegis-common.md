@@ -71,4 +71,4 @@ fn example() -> Result<Value> {
 
 ## Tests
 
-4 tests covering error handling and type conversions.
+634 tests (workspace total) covering error handling and type conversions.

@@ -176,7 +176,7 @@ let failed = cluster.check_failures();
 
 ## Tests
 
-48 tests covering all modules:
+634 tests (workspace total) covering all modules:
 - Node management and health
 - Replicated log operations
 - State machine commands

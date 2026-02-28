@@ -11,7 +11,7 @@ description: "AegisQL query language documentation and reference"
 Query language documentation for SQL, Document, TimeSeries, and Graph operations
 {: .fs-6 .fw-300 }
 
-**Version:** 1.0.0
+**Version:** 0.2.2
 {: .label .label-green }
 
 ---
@@ -334,14 +334,28 @@ ALTER TABLE products
 
 ```sql
 CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name
-ON table_name (column1 [, column2, ...]);
+ON table_name (column1 [, column2, ...])
+[USING { BTREE | HASH }];
 ```
+
+**Index Types:**
+
+| Type | Description | Best For |
+|------|-------------|----------|
+| `BTREE` (default) | B-tree index | Range queries, ORDER BY, equality |
+| `HASH` | Hash index | Equality lookups (O(1) average) |
 
 **Examples:**
 
 ```sql
--- Simple index
+-- Simple index (defaults to B-tree)
 CREATE INDEX idx_users_email ON users (email);
+
+-- Explicit B-tree index
+CREATE INDEX idx_orders_user_date ON orders (user_id, created_at) USING BTREE;
+
+-- Hash index for fast equality lookups
+CREATE INDEX idx_sessions_token ON sessions (token) USING HASH;
 
 -- Composite index
 CREATE INDEX idx_orders_user_date ON orders (user_id, created_at);
@@ -357,6 +371,36 @@ CREATE INDEX IF NOT EXISTS idx_products_name ON products (name);
 
 ```sql
 DROP INDEX [IF EXISTS] index_name;
+```
+
+### VACUUM
+
+Reclaims storage space by removing dead rows and compacting data files. Can target a specific table or the entire database.
+
+```sql
+VACUUM [table_name];
+```
+
+**REST API:**
+
+```bash
+# Vacuum entire database
+curl -X POST http://localhost:9090/api/v1/admin/vacuum
+
+# Vacuum a specific table
+curl -X POST http://localhost:9090/api/v1/admin/vacuum \
+  -H "Content-Type: application/json" \
+  -d '{"table_name": "users"}'
+```
+
+**Examples:**
+
+```sql
+-- Vacuum entire database
+VACUUM;
+
+-- Vacuum specific table
+VACUUM users;
 ```
 
 ---
@@ -1274,14 +1318,14 @@ let network_query = TimeSeriesQuery::last("network.bytes.in", Duration::days(7))
 ## Appendix A: Reserved Keywords
 
 ```
-ADD, ALL, ALTER, AND, AS, ASC, BETWEEN, BY, CASE, CAST,
+ADD, ALL, ALTER, AND, AS, ASC, BETWEEN, BTREE, BY, CASE, CAST,
 CHECK, COLUMN, CONSTRAINT, CREATE, CROSS, DELETE, DESC,
 DISTINCT, DROP, ELSE, END, EXISTS, FALSE, FOREIGN, FROM,
-FULL, GROUP, HAVING, IF, IN, INDEX, INNER, INSERT, INTO,
+FULL, GROUP, HASH, HAVING, IF, IN, INDEX, INNER, INSERT, INTO,
 IS, JOIN, KEY, LEFT, LIKE, LIMIT, NOT, NULL, OFFSET, ON,
 OR, ORDER, OUTER, PRIMARY, REFERENCES, RIGHT, SELECT, SET,
-TABLE, THEN, TRUE, UNION, UNIQUE, UPDATE, VALUES, WHEN,
-WHERE, WITH
+TABLE, THEN, TRUE, UNION, UNIQUE, UPDATE, USING, VACUUM,
+VALUES, WHEN, WHERE, WITH
 ```
 
 ---
@@ -1291,7 +1335,7 @@ WHERE, WITH
 ```bnf
 <statement> ::= <select_stmt> | <insert_stmt> | <update_stmt> | <delete_stmt>
               | <create_table_stmt> | <drop_table_stmt> | <create_index_stmt>
-              | <transaction_stmt>
+              | <drop_index_stmt> | <vacuum_stmt> | <transaction_stmt>
 
 <select_stmt> ::= SELECT [DISTINCT] <select_list>
                   [FROM <table_ref>]
@@ -1332,6 +1376,8 @@ WHERE, WITH
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.2.2 | Feb 2026 | VACUUM statement, B-tree/Hash index types, graph queries |
+| 0.2.1 | Jan 2026 | Multi-database support |
 | 1.0.0 | Jan 2026 | Initial release |
 
 ---
