@@ -1,0 +1,18 @@
+[package]
+name = "aegis-benchmarks"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "aegis-benchmarks"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+rand = "0.8"
+zipf = "7"
