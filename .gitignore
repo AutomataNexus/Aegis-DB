@@ -43,7 +43,9 @@ progress.txt
 CLAUDE.md
 
 # TLS certificates and keys
-certs/*.key
-certs/*.pem
+certs/
 *.key
 *.pem
+
+# Release binaries (use GitHub Releases instead)
+release-artifacts/

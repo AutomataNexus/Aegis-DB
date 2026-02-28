@@ -261,7 +261,7 @@ pub fn Login() -> impl IntoView {
 
                             <div class="demo-hint">
                                 <strong>"Demo credentials:"</strong><br/>
-                                "DevOps / Invertedskynet2$ (admin)"<br/>
+                                "admin / (set via AEGIS_ADMIN_PASSWORD)"<br/>
                                 "demo / demo (viewer)"
                             </div>
                         </Show>
