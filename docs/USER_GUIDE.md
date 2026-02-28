@@ -54,7 +54,9 @@ Comprehensive guide for installing, configuring, and using Aegis-DB
    - [Key-Value Store](#key-value-store-api)
    - [Document Store](#document-store-api)
    - [Time Series](#time-series-api)
+   - [Graph Database](#graph-database-api)
    - [Streaming](#streaming-api)
+   - [Bulk Data Import](#bulk-data-import-api)
    - [Admin Endpoints](#admin-endpoints)
    - [Compliance APIs (GDPR, CCPA, HIPAA)](#compliance-apis-gdpr-ccpa-hipaa)
 8. [Data Models](#data-models)
@@ -86,10 +88,16 @@ AegisDB is a unified, multi-paradigm database platform built in Rust. It combine
 ### Key Features
 
 - **Multi-Paradigm Support**: SQL, Time Series, Document Store, Graph, and Streaming in one platform
+- **Multi-Database Support**: Multiple isolated databases per server instance with automatic creation on first use
 - **Distributed Architecture**: Raft consensus, sharding, and multi-region replication
-- **High Performance**: Vectorized execution, Gorilla compression, zero-copy serialization
-- **Enterprise Security**: RBAC, audit logging, TLS, OAuth2/LDAP authentication
+- **High Performance**: 758K TPS transfers, 12.3M KV reads/sec, 223K SQL inserts/sec with vectorized execution
+- **Enterprise Security**: RBAC, audit logging, TLS, OAuth2/LDAP authentication, PHI data classification
+- **Compliance**: Built-in GDPR, CCPA, and HIPAA compliance APIs with consent management and breach detection
+- **Bulk Data Import**: CSV/JSON import for SQL tables, documents, and key-value pairs
+- **Query Safety**: Configurable result row limits and query timeouts to prevent runaway queries
+- **Log Rotation**: Automatic daily rotating log files when persistence is enabled
 - **Modern Stack**: Rust backend, Leptos/WASM dashboard, comprehensive REST API
+- **634 tests** across all crates ensuring reliability
 
 ### Use Cases
 
@@ -290,6 +298,10 @@ worker_threads = 0           # 0 = auto (number of CPUs)
 enabled = false
 cert_file = "/etc/aegis/tls.crt"
 key_file = "/etc/aegis/tls.key"
+
+[server.query_safety]
+max_result_rows = 100000       # Maximum rows returned per query (default: 100K)
+query_timeout_secs = 30        # Query execution timeout in seconds (default: 30s)
 ```
 
 ### Storage Configuration
@@ -298,7 +310,7 @@ key_file = "/etc/aegis/tls.key"
 [storage]
 backend = "local"            # "memory" or "local"
 data_directory = "/var/aegis/data"
-compression = "lz4"          # "none", "lz4", "zstd"
+compression = "lz4"          # "none", "lz4", "zstd", "snappy"
 buffer_pool_size = "1GB"
 wal_enabled = true
 sync_on_commit = true
@@ -852,6 +864,13 @@ Content-Type: application/json
   "sql": "SELECT * FROM users WHERE age > $1",
   "params": [21]
 }
+
+# With multi-database support - specify target database:
+{
+  "database": "my_app",
+  "sql": "SELECT * FROM users WHERE age > $1",
+  "params": [21]
+}
 ```
 
 Response:
@@ -1055,6 +1074,94 @@ Content-Type: application/json
 GET /api/v1/streaming/channels/:channel/history?limit=100
 ```
 
+### Graph Database API
+
+**Create Node:**
+```bash
+POST /api/v1/graph/nodes
+Content-Type: application/json
+
+{
+  "label": "User",
+  "properties": {
+    "name": "Alice",
+    "email": "alice@example.com"
+  }
+}
+```
+
+**Create Edge:**
+```bash
+POST /api/v1/graph/edges
+Content-Type: application/json
+
+{
+  "from_node": "node-001",
+  "to_node": "node-002",
+  "label": "FOLLOWS",
+  "properties": {
+    "since": "2024-01-01"
+  }
+}
+```
+
+**Get Graph Data:**
+```bash
+GET /api/v1/graph/data
+GET /api/v1/graph/data?label=User
+GET /api/v1/graph/data?depth=2&start_node=node-001
+```
+
+### Bulk Data Import API
+
+All bulk import endpoints require authentication.
+
+**Import SQL Data (CSV/JSON):**
+```bash
+POST /api/v1/import/sql
+Content-Type: application/json
+Authorization: Bearer $TOKEN
+
+{
+  "table": "users",
+  "format": "csv",
+  "data": "id,name,email\n1,Alice,alice@example.com\n2,Bob,bob@example.com",
+  "options": {
+    "on_conflict": "skip",
+    "batch_size": 1000
+  }
+}
+```
+
+**Import Documents:**
+```bash
+POST /api/v1/import/documents
+Content-Type: application/json
+Authorization: Bearer $TOKEN
+
+{
+  "collection": "products",
+  "documents": [
+    {"name": "Widget A", "price": 19.99},
+    {"name": "Widget B", "price": 29.99}
+  ]
+}
+```
+
+**Import Key-Value Pairs:**
+```bash
+POST /api/v1/import/kv
+Content-Type: application/json
+Authorization: Bearer $TOKEN
+
+{
+  "pairs": [
+    {"key": "config:theme", "value": "dark"},
+    {"key": "config:lang", "value": "en"}
+  ]
+}
+```
+
 ### Admin Endpoints
 
 **Cluster Info:**
@@ -1093,6 +1200,25 @@ GET /api/v1/admin/stats
 **Alerts:**
 ```bash
 GET /api/v1/admin/alerts
+```
+
+**VACUUM/Compaction:**
+```bash
+# Vacuum all tables
+POST /api/v1/admin/vacuum
+Content-Type: application/json
+Authorization: Bearer $TOKEN
+
+{}
+
+# Vacuum a specific table
+POST /api/v1/admin/vacuum
+Content-Type: application/json
+Authorization: Bearer $TOKEN
+
+{
+  "table_name": "orders"
+}
 ```
 
 **Activity Log:**
@@ -1512,6 +1638,72 @@ Response:
     "hipaa_notification_required": false
   },
   "download_url": "/api/v1/compliance/breaches/breach-001/report/download"
+}
+```
+
+**Resolve Incident:**
+
+Mark a security incident as resolved after remediation is complete.
+
+```bash
+POST /api/v1/compliance/breaches/{id}/resolve
+Content-Type: application/json
+Authorization: Bearer $TOKEN
+
+{
+  "resolved_by": "security_admin",
+  "resolution_notes": "Root cause identified and patched. All affected users notified.",
+  "remediation_steps_taken": [
+    "Patched authentication vulnerability",
+    "Rotated all affected API keys",
+    "Notified affected users via email"
+  ]
+}
+```
+
+#### PHI Data Classification (HIPAA)
+
+Classify and track Protected Health Information (PHI) across your databases to maintain HIPAA compliance.
+
+**Classify Data:**
+```bash
+POST /api/v1/compliance/classify
+Content-Type: application/json
+Authorization: Bearer $TOKEN
+
+{
+  "table": "patient_records",
+  "columns": {
+    "ssn": "phi_identifier",
+    "diagnosis": "phi_health",
+    "name": "pii_name",
+    "dob": "phi_demographic"
+  },
+  "classification_level": "restricted"
+}
+```
+
+**Get Classifications:**
+```bash
+GET /api/v1/compliance/classifications
+GET /api/v1/compliance/classifications?table=patient_records
+Authorization: Bearer $TOKEN
+```
+
+Response:
+```json
+{
+  "classifications": [
+    {
+      "table": "patient_records",
+      "column": "ssn",
+      "classification": "phi_identifier",
+      "level": "restricted",
+      "classified_at": "2024-01-15T10:00:00Z",
+      "classified_by": "admin"
+    }
+  ],
+  "total_count": 4
 }
 ```
 
@@ -1961,6 +2153,7 @@ sort_buffer_size = "64MB"
 [storage]
 compression = "lz4"           # Fast compression
 # compression = "zstd"        # Better ratio, slower
+# compression = "snappy"      # Google's fast compression
 
 [timeseries]
 compression = "gorilla"       # Best for time series
@@ -2025,6 +2218,10 @@ max_memory_per_query = "128MB"
 | Queries | `~/.aegis/logs/queries.log` |
 | Audit | `~/.aegis/logs/audit.log` |
 
+**Log Rotation:**
+
+When `--data-dir` is set, AegisDB automatically writes daily rotating log files to `{data_dir}/logs/`. Log files are named with the date (e.g., `server.2026-02-28.log`) and old logs are retained for review. This ensures log files do not grow unbounded in production deployments.
+
 ### Debug Mode
 
 ```bash
@@ -2060,7 +2257,7 @@ A: AegisDB can serve as a replacement or complement for:
 - Kafka (streaming)
 
 **Q: Is AegisDB production-ready?**
-A: Yes, AegisDB v0.1.8+ includes production security features: TLS/HTTPS support, Argon2id password hashing, rate limiting, HashiCorp Vault integration, and secure token generation. It's suitable for production deployments with proper configuration.
+A: Yes, AegisDB v0.2.2 includes production security features: TLS/HTTPS support, Argon2id password hashing, rate limiting, HashiCorp Vault integration, secure token generation, PHI data classification, consent management, breach detection, and HIPAA/GDPR/CCPA compliance APIs. It's suitable for production deployments with proper configuration.
 
 **Q: What's the license?**
 A: Apache 2.0 for the core platform. Enterprise features may require a commercial license.
@@ -2069,12 +2266,12 @@ A: Apache 2.0 for the core platform. Enterprise features may require a commercia
 
 **Q: How many operations per second can AegisDB handle?**
 A: Benchmarks show:
-- Key-Value: ~500K ops/sec (memory backend)
-- SQL queries: ~10K simple queries/sec
-- Time series writes: ~100K points/sec
+- Key-Value: ~12.3M reads/sec (memory backend)
+- SQL inserts: ~223K inserts/sec
+- Transfers: ~758K TPS
 
 **Q: How does compression affect performance?**
-A: LZ4 adds ~5% CPU overhead with 2-4x compression. Zstd adds ~15% overhead with 4-10x compression. Gorilla compression for time series achieves ~12x with minimal overhead.
+A: LZ4 adds ~5% CPU overhead with 2-4x compression. Zstd adds ~15% overhead with 4-10x compression. Snappy offers fast compression similar to LZ4 with slightly different trade-offs. Gorilla compression for time series achieves ~12x with minimal overhead.
 
 ### Clustering
 
@@ -2087,7 +2284,7 @@ A: AegisDB uses Raft consensus. The partition with a majority of nodes continues
 ### Security
 
 **Q: Is data encrypted at rest?**
-A: Encryption at rest is planned for v0.2. Currently, rely on filesystem-level encryption (LUKS, BitLocker).
+A: Encryption at rest is planned for a future release. Currently, rely on filesystem-level encryption (LUKS, BitLocker).
 
 **Q: How are passwords stored?**
 A: Passwords are hashed using Argon2id, the winner of the Password Hashing Competition. Each password has a unique random salt, and the hash parameters are tuned for security (memory cost: 19MB, time cost: 2 iterations, parallelism: 1).

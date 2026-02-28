@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/crate-0.1.0-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/crate-0.2.2-green.svg" alt="Version">
   <a href="../../README.md"><img src="https://img.shields.io/badge/part%20of-AegisDB-teal.svg" alt="AegisDB"></a>
 </p>
 
@@ -23,6 +23,12 @@ SQL query engine for the Aegis Database Platform.
 - **Semantic Analyzer** - Type checking and schema validation
 - **Query Planner** - Cost-based optimization with rule transformations
 - **Query Executor** - Vectorized execution engine
+- **Index Support** - B-tree and Hash index selection for predicates
+- **Direct Execution API** - `execute_update_direct` and `execute_update_indexed_fn` for bypassing the full pipeline
+- **Plan Cache** - LRU-based plan cache (1024 entries) for repeated query patterns
+- **Query Limits** - `QueryLimits` with configurable `max_result_rows` and `query_timeout_secs`
+- **Data Classification** - `DataClassification` enum for column-level sensitivity tagging
+- **VACUUM Support** - Reclaim storage space and rebuild indexes
 
 ## Architecture
 
@@ -59,6 +65,9 @@ SQL Query
 | `analyzer` | Semantic analysis and type checking |
 | `planner` | Query planning and optimization |
 | `executor` | Query execution engine |
+| `cache` | LRU plan cache (1024 entries) |
+| `limits` | Query safety limits (max rows, timeout) |
+| `classification` | Data classification and sensitivity tagging |
 
 ## Usage
 
@@ -126,6 +135,8 @@ The planner applies several optimization rules:
 - **Join Reordering** - Optimize join order based on cardinality
 - **Index Selection** - Choose optimal indexes for predicates
 - **Constant Folding** - Evaluate constant expressions at plan time
+- **B-tree Index Scan** - Use B-tree indexes for range and equality predicates
+- **Hash Index Scan** - Use hash indexes for exact-match lookups
 
 ## Tests
 
@@ -133,7 +144,7 @@ The planner applies several optimization rules:
 cargo test -p aegis-query
 ```
 
-**Test count:** 17 tests
+**Test count:** 634 tests (workspace total)
 
 ## License
 

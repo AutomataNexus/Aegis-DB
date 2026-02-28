@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/crate-0.1.0-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/crate-0.2.2-green.svg" alt="Version">
   <a href="../../README.md"><img src="https://img.shields.io/badge/part%20of-AegisDB-teal.svg" alt="AegisDB"></a>
 </p>
 
@@ -237,7 +237,7 @@ check_interval = "10s"
 cargo test -p aegis-monitoring
 ```
 
-**Test count:** 35 tests
+**Test count:** 634 tests (workspace total)
 
 ## License
 

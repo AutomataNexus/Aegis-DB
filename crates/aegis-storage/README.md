@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/crate-0.1.0-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/crate-0.2.2-green.svg" alt="Version">
   <a href="../../README.md"><img src="https://img.shields.io/badge/part%20of-AegisDB-teal.svg" alt="AegisDB"></a>
 </p>
 
@@ -22,7 +22,7 @@ High-performance storage engine for the Aegis Database Platform.
 - **Pluggable Backends** - Memory and local filesystem backends
 - **Write-Ahead Logging (WAL)** - Durability and crash recovery
 - **MVCC Transactions** - Snapshot isolation with multi-version concurrency control
-- **Block Compression** - LZ4 and Zstd compression support
+- **Block Compression** - LZ4, Zstd, and Snappy compression support
 - **Buffer Pool** - LRU-based page caching for optimal I/O
 
 ## Architecture
@@ -102,7 +102,7 @@ engine.write_block(block)?;
 [storage]
 backend = "local"              # "memory" or "local"
 data_directory = "/var/aegis"
-compression = "lz4"            # "none", "lz4", "zstd"
+compression = "lz4"            # "none", "lz4", "zstd", "snappy"
 buffer_pool_size = "1GB"
 wal_enabled = true
 sync_on_commit = true
@@ -120,7 +120,7 @@ sync_on_commit = true
 cargo test -p aegis-storage
 ```
 
-**Test count:** 23 tests
+**Test count:** 634 tests (workspace total)
 
 ## License
 

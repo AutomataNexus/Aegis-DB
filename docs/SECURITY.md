@@ -22,24 +22,27 @@ Security features, best practices, and configuration for production deployments
 ---
 
 1. [Overview](#overview)
-2. [TLS/HTTPS Configuration](#tlshttps-configuration)
-3. [Authentication](#authentication)
-4. [Password Security](#password-security)
-5. [Rate Limiting](#rate-limiting)
-6. [Secrets Management](#secrets-management)
-7. [Nginx Reverse Proxy](#nginx-reverse-proxy)
-8. [Security Headers](#security-headers)
-9. [Audit Logging](#audit-logging)
-10. [Data Encryption](#data-encryption)
-11. [Breach Detection and Response](#breach-detection-and-response)
-12. [Regulatory Compliance](#regulatory-compliance)
-13. [Best Practices](#best-practices)
+2. [Data Classification](#data-classification)
+3. [Query Safety Limits](#query-safety-limits)
+4. [TLS/HTTPS Configuration](#tlshttps-configuration)
+5. [Authentication](#authentication)
+6. [Password Security](#password-security)
+7. [Rate Limiting](#rate-limiting)
+8. [Secrets Management](#secrets-management)
+9. [Nginx Reverse Proxy](#nginx-reverse-proxy)
+10. [Security Headers](#security-headers)
+11. [Audit Logging](#audit-logging)
+12. [Data Encryption](#data-encryption)
+13. [Breach Detection and Response](#breach-detection-and-response)
+14. [Consent Management](#consent-management)
+15. [Regulatory Compliance](#regulatory-compliance)
+16. [Best Practices](#best-practices)
 
 ---
 
 ## Overview
 
-AegisDB v0.1.8+ includes production-ready security features:
+AegisDB v0.2.2 includes production-ready security features:
 
 | Feature | Implementation | Status |
 |---------|---------------|--------|
@@ -51,6 +54,125 @@ AegisDB v0.1.8+ includes production-ready security features:
 | MFA/2FA | TOTP (RFC 6238) | ✅ Production Ready |
 | RBAC | 25+ Permissions | ✅ Production Ready |
 | Audit Logging | Comprehensive Activity Log | ✅ Production Ready |
+| Data Classification | 6-level PHI/PII classification | ✅ Production Ready |
+| Query Safety Limits | Row limits, query timeouts | ✅ Production Ready |
+| Breach Detection | Real-time monitoring and notification | ✅ Production Ready |
+| Consent Management | GDPR/CCPA consent tracking | ✅ Production Ready |
+| Compression | LZ4, Zstd, Snappy | ✅ Production Ready |
+
+**Test Coverage:** 634 tests passing across the workspace.
+
+---
+
+## Data Classification
+
+AegisDB v0.2.2 supports 6-level data classification for columns and fields, enabling fine-grained access control and compliance enforcement for PHI, PII, and other sensitive data categories.
+
+### Classification Levels
+
+| Level | Name | Description | Example Data |
+|-------|------|-------------|--------------|
+| 0 | **Public** | Non-sensitive, freely accessible | Product names, public IDs |
+| 1 | **Internal** | Internal use only, low risk | Employee IDs, department names |
+| 2 | **Confidential** | Business-sensitive data | Revenue figures, internal reports |
+| 3 | **PHI** | Protected Health Information (HIPAA) | Diagnoses, treatment records, lab results |
+| 4 | **PII** | Personally Identifiable Information | SSN, date of birth, home address |
+| 5 | **Restricted** | Highest sensitivity, strictly controlled | Encryption keys, authentication secrets |
+
+### Classify Columns
+
+Use the compliance API to classify columns at the table level:
+
+```bash
+# Classify a column as PHI
+curl -X POST "http://localhost:9090/api/v1/compliance/classify" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table": "patients",
+    "column": "diagnosis",
+    "classification": "PHI",
+    "reason": "Contains medical diagnosis codes"
+  }'
+```
+
+### Classification Enforcement
+
+When data classification is enabled:
+
+- **Access Control**: Queries accessing PHI/PII columns require elevated permissions
+- **Audit Logging**: All access to classified columns (level 3+) is logged
+- **Encryption**: Columns classified as Restricted (level 5) are encrypted at rest by default
+- **Data Export**: Classification metadata is included in GDPR data portability exports
+- **Masking**: Classified columns can be automatically masked for lower-privilege roles
+
+### Configuration
+
+```toml
+[data_classification]
+enabled = true
+default_level = "internal"
+enforce_access_control = true
+audit_classified_access = true
+mask_phi_in_logs = true
+```
+
+---
+
+## Query Safety Limits
+
+AegisDB v0.2.2 enforces query safety limits to prevent accidental resource exhaustion and protect against runaway queries.
+
+### Default Limits
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_result_rows` | 100,000 | Maximum rows returned by a single query |
+| `query_timeout_secs` | 30 | Maximum query execution time in seconds |
+
+### Configuration
+
+```toml
+[query_limits]
+max_result_rows = 100000
+query_timeout_secs = 30
+```
+
+Override via environment variables:
+
+```bash
+export AEGIS_MAX_RESULT_ROWS=100000
+export AEGIS_QUERY_TIMEOUT_SECS=30
+```
+
+### Behavior
+
+- When `max_result_rows` is exceeded, the query returns the first 100,000 rows with a truncation warning in the response metadata.
+- When `query_timeout_secs` is exceeded, the query is cancelled and an error is returned.
+- These limits apply to all query types (SQL, document, graph, time series).
+
+### Response Example (Truncated)
+
+```json
+{
+  "success": true,
+  "rows": [...],
+  "metadata": {
+    "rows_returned": 100000,
+    "truncated": true,
+    "message": "Result set truncated at max_result_rows limit (100000)"
+  }
+}
+```
+
+### Response Example (Timeout)
+
+```json
+{
+  "success": false,
+  "error": "Query execution timed out after 30 seconds"
+}
+```
 
 ---
 
@@ -464,6 +586,9 @@ openssl rand -base64 32
 | Data at Rest | AES-256-GCM | 256-bit |
 | Key Derivation | HKDF-SHA256 | 256-bit |
 | IV/Nonce | Random | 96-bit |
+| Compression | LZ4, Zstd, Snappy | N/A |
+
+**Compression:** Data blocks are compressed before encryption using one of three supported algorithms: LZ4 (fastest, default), Zstd (best ratio), or Snappy (balanced). Compression is applied transparently at the storage layer.
 
 ### Configuration
 
@@ -649,6 +774,65 @@ POST /api/v1/admin/security/block-ip
 # Get blocked IPs
 GET /api/v1/admin/security/blocked-ips
 ```
+
+### Breach Detection and Notification Endpoints
+
+AegisDB provides dedicated compliance endpoints for breach lifecycle management:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/compliance/breaches` | List all breach incidents |
+| GET | `/api/v1/compliance/breaches/:id` | Get details of a specific incident |
+| POST | `/api/v1/compliance/breaches/:id/acknowledge` | Acknowledge an incident |
+| POST | `/api/v1/compliance/breaches/:id/resolve` | Resolve an incident |
+| GET | `/api/v1/compliance/breaches/:id/report` | Generate compliance report for an incident |
+| GET | `/api/v1/compliance/breaches/stats` | Get breach statistics summary |
+| POST | `/api/v1/compliance/breaches/cleanup` | Trigger cleanup of old resolved events |
+| GET | `/api/v1/compliance/security-events` | List raw security events |
+
+For full endpoint documentation and examples, see the [Compliance Guide](COMPLIANCE.md#breach-detection).
+
+---
+
+## Consent Management
+
+AegisDB includes a consent management system for GDPR Article 7 and CCPA compliance. Consent is tracked per data subject and purpose, with full audit history.
+
+### Consent Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/compliance/consent` | Record or update consent |
+| GET | `/api/v1/compliance/consent/:subject_id` | Get all consent records for a subject |
+| DELETE | `/api/v1/compliance/consent/:subject_id` | Delete all consent data for a subject |
+| GET | `/api/v1/compliance/consent/:subject_id/history` | Get consent change history |
+| GET | `/api/v1/compliance/consent/:subject_id/export` | Export consent data (GDPR portability) |
+| GET | `/api/v1/compliance/consent/:subject_id/check/:purpose` | Check consent for a specific purpose |
+| DELETE | `/api/v1/compliance/consent/:subject_id/:purpose` | Withdraw consent for a specific purpose |
+| GET | `/api/v1/compliance/consent/stats` | Get consent statistics |
+| GET | `/api/v1/compliance/do-not-sell` | Get CCPA Do Not Sell list |
+
+### Quick Example
+
+```bash
+# Record marketing consent
+curl -X POST "http://localhost:9090/api/v1/compliance/consent" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subject_id": "user@example.com",
+    "purpose": "marketing",
+    "granted": true,
+    "source": "web_form",
+    "version": "2.0"
+  }'
+
+# Check consent before processing
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:9090/api/v1/compliance/consent/user@example.com/check/marketing"
+```
+
+For full consent management documentation, see the [Compliance Guide](COMPLIANCE.md#consent-management).
 
 ---
 
@@ -962,6 +1146,6 @@ If you discover a security vulnerability in AegisDB, please report it responsibl
 
 ---
 
-**Document Version:** 1.0.0
-**Last Updated:** January 2026
+**Document Version:** 2.0.0 (Aegis-DB v0.2.2)
+**Last Updated:** February 2026
 **Maintainer:** AutomataNexus Security Team

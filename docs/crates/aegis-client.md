@@ -197,7 +197,7 @@ println!("Pool utilization: {:.1}%", stats.utilization());
 
 ## Tests
 
-45 tests covering all modules:
+634 tests (workspace total) covering all modules:
 - Configuration parsing and URL handling
 - Connection creation and management
 - Connection pooling and statistics

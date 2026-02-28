@@ -13,17 +13,17 @@ Key Components:
 - Deployment model specifications
 - Security and compliance framework
 
-@version 1.0.0
+@version 2.2.0
 @author Andrew Jewell Sr / AutomataNexus LLC
 """
 
 # Aegis Database Platform
 ## System Architecture Documentation
 
-**Version:** 1.5.0
+**Version:** 2.2.0
 **Author:** Andrew Jewell Sr / AutomataNexus LLC
-**Generated:** January 19, 2026
-**Status:** Phase 3 Complete
+**Updated:** February 28, 2026
+**Status:** All Phases Complete — Production Deployed
 
 ---
 
@@ -33,53 +33,82 @@ Key Components:
 
 | Component | Crate | Status | Tests |
 |-----------|-------|--------|-------|
-| Storage Abstraction | aegis-storage | ✅ Complete | 23 |
-| Memory Management | aegis-memory | ✅ Complete | 5 |
-| MVCC Transactions | aegis-storage | ✅ Complete | - |
-| Write-Ahead Log | aegis-storage | ✅ Complete | - |
-| SQL Parser | aegis-query | ✅ Complete | 8 |
-| Semantic Analyzer | aegis-query | ✅ Complete | 3 |
-| Query Planner | aegis-query | ✅ Complete | 3 |
-| Query Executor | aegis-query | ✅ Complete | 13 |
-| REST API | aegis-server | ✅ Complete | 7 |
-| Common Types | aegis-common | ✅ Complete | 4 |
+| Storage Abstraction | aegis-storage | Complete | 48 |
+| Memory Management | aegis-memory | Complete | 5 |
+| MVCC Transactions | aegis-storage | Complete | - |
+| Write-Ahead Log | aegis-storage | Complete | - |
+| SQL Parser | aegis-query | Complete | 41 |
+| Semantic Analyzer | aegis-query | Complete | - |
+| Query Planner | aegis-query | Complete | - |
+| Query Executor | aegis-query | Complete | - |
+| B-tree & Hash Indexes | aegis-query | Complete | - |
+| Plan Cache (LRU 1024) | aegis-query | Complete | - |
+| Direct Execution API | aegis-query | Complete | - |
+| REST API | aegis-server | Complete | 116 |
+| Common Types | aegis-common | Complete | 4 |
 
 ### Phase 2: Multi-Paradigm Support - COMPLETE
 
 | Component | Crate | Status | Tests |
 |-----------|-------|--------|-------|
-| Time Series Engine | aegis-timeseries | ✅ Complete | 31 |
-| Document Store | aegis-document | ✅ Complete | 36 |
-| Real-time Streaming | aegis-streaming | ✅ Complete | 31 |
+| Time Series Engine | aegis-timeseries | Complete | 36 |
+| Document Store | aegis-document | Complete | 36 |
+| Real-time Streaming | aegis-streaming | Complete | 31 |
+| Graph Database | aegis-server | Complete | - |
 
 ### Phase 3: Distribution & Scale - COMPLETE
 
 | Component | Crate | Status | Tests |
 |-----------|-------|--------|-------|
-| Raft Consensus | aegis-replication | ✅ Complete | 136 |
-| Sharding & Partitioning | aegis-replication | ✅ Complete | - |
-| Distributed Transactions | aegis-replication | ✅ Complete | - |
-| CRDTs & Vector Clocks | aegis-replication | ✅ Complete | - |
-| Monitoring & Tracing | aegis-monitoring | ✅ Complete | 35 |
-| Client SDK | aegis-client | ✅ Complete | 45 |
-| Web Dashboard | aegis-dashboard | ✅ Complete | - |
-| E2E Integration Tests | aegis-server | ✅ Complete | 23 |
-
-**Total: 463 tests passing**
+| Raft Consensus | aegis-replication | Complete | 165 |
+| Sharding & Partitioning | aegis-replication | Complete | - |
+| Distributed Transactions | aegis-replication | Complete | - |
+| CRDTs & Vector Clocks | aegis-replication | Complete | - |
+| Monitoring & Tracing | aegis-monitoring | Complete | 35 |
+| Client SDK | aegis-client | Complete | 42 |
+| Web Dashboard | aegis-dashboard | Complete | - |
+| E2E Integration Tests | aegis-server | Complete | 54 |
 
 ### Phase 4-5: Enterprise Features - COMPLETE
-- Enterprise Authentication (LDAP, OAuth2, OIDC)
-- Role-Based Access Control (RBAC)
-- Audit Logging & Compliance
-- Python & JavaScript SDKs
-- Grafana Data Source Plugin
 
-### Phase 6: Security Hardening - COMPLETE
-- **TLS/HTTPS**: Native TLS support via axum-server with rustls
-- **Password Security**: Argon2id hashing with unique random salts
-- **Rate Limiting**: Token bucket algorithm for API protection
+| Component | Crate/Location | Status | Tests |
+|-----------|---------------|--------|-------|
+| Enterprise Auth (LDAP, OAuth2, OIDC) | aegis-server | Complete | - |
+| Role-Based Access Control (RBAC) | aegis-server | Complete | - |
+| Audit Logging & Compliance | aegis-server | Complete | - |
+| Multi-database Support | aegis-server | Complete | - |
+| Bulk Data Import (CSV/JSON) | aegis-server | Complete | - |
+| VACUUM/Compaction | aegis-server | Complete | - |
+| Python & JavaScript SDKs | sdks/ | Complete | - |
+| Grafana Data Source Plugin | - | Complete | - |
+
+### Phase 6: Security & Compliance Hardening - COMPLETE
+
+- **TLS/HTTPS**: Native TLS support via axum-server with rustls (TLSv1.2/1.3)
+- **Password Security**: Argon2id hashing (19 MiB memory, 2 iterations, unique random salts)
+- **Rate Limiting**: Token bucket algorithm (1000/min API, 30/min login)
 - **Secrets Management**: HashiCorp Vault integration (AppRole, Kubernetes auth)
 - **Secure Tokens**: Cryptographically secure random token generation
+- **Breach Detection**: Real-time monitoring with webhook notifications
+- **Consent Management**: 11 consent purposes with full audit trail
+- **PHI/Data Classification**: 6-level system (Public, Internal, Confidential, PHI, PII, Restricted)
+- **Query Safety Limits**: max_result_rows (default 100K), query_timeout_secs (default 30)
+- **Log Rotation**: Daily rotating log files via tracing-appender
+- **GDPR Right to Erasure**: Data subject deletion with cryptographic deletion certificates
+- **CCPA Do Not Sell**: Opt-out tracking and compliance
+
+### Phase 7: Edge Deployment & OTA Updates - COMPLETE
+
+| Component | Crate | Status | Tests |
+|-----------|-------|--------|-------|
+| OTA Rolling Updates | aegis-updates | Complete | 14 |
+
+- **Edge Runtime**: Runs on Raspberry Pi 4/5 (ARM64) alongside other workloads
+- **OTA Rolling Updates**: Binary download, checksum verify, follower-first deploy, health check, auto-rollback
+- **CRDT Replication**: GCounter, PNCounter, ORSet, LWWRegister, LWWMap for conflict-free edge sync
+- **Production Deployment**: 50+ Raspberry Pi nodes across commercial facilities reporting to central NexusBMS server
+
+**Total: 634 tests passing across all crates**
 
 ---
 
@@ -162,7 +191,7 @@ export AEGIS_ADMIN_PASSWORD=your_secure_password
 
 ## Executive Summary
 
-Aegis is a unified database platform that combines multiple database paradigms (relational, time series, document, real-time) into a single, high-performance system built in Rust. The architecture emphasizes performance, safety, scalability, and developer experience while supporting cloud, on-premise, and embedded deployment models.
+Aegis is a unified database platform that combines multiple database paradigms (relational, time series, document, graph, real-time streaming) into a single, high-performance system built in Rust. The architecture emphasizes performance, safety, scalability, and developer experience while supporting cloud, on-premise, and embedded deployment models.
 
 ### Core Design Principles
 
@@ -171,6 +200,7 @@ Aegis is a unified database platform that combines multiple database paradigms (
 - **Safety**: Memory safety without garbage collection overhead
 - **Scalability**: Horizontal scaling from single nodes to 1000+ clusters
 - **Flexibility**: Multiple deployment models with consistent APIs
+- **Multi-Database Isolation**: Per-application database instances with auto-provisioning
 
 ---
 
@@ -181,64 +211,75 @@ Aegis is a unified database platform that combines multiple database paradigms (
 ## High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Aegis Database Platform                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                              Client Layer                                   │
-├───────────────┬─────────────────┬─────────────────┬─────────────────────────┤
-│   Web UI      │   CLI Tools     │   SDKs          │   Third-party Tools     │
-│   Dashboard   │   aegis-cli     │   Rust/Python   │   Grafana/Tableau      │
-├───────────────┴─────────────────┴─────────────────┴─────────────────────────┤
-│                              API Gateway                                    │
-├─────────────────┬─────────────────┬─────────────────┬─────────────────────────┤
-│   REST API      │   GraphQL       │   WebSocket     │   gRPC                  │
-├─────────────────┴─────────────────┴─────────────────┴─────────────────────────┤
-│                           Query Processing Layer                            │
-├─────────────────┬─────────────────┬─────────────────┬─────────────────────────┤
-│   SQL Engine    │   Time Series   │   Document      │   Real-time Stream     │
-│   Parser/Exec   │   Processor     │   Processor     │   Event Processor      │
-├─────────────────┴─────────────────┴─────────────────┴─────────────────────────┤
-│                            Storage Engine                                   │
-├─────────────────┬─────────────────┬─────────────────┬─────────────────────────┤
-│   Unified       │   Indexing      │   Replication   │   Consensus            │
-│   Storage       │   System        │   Engine        │   Layer (Raft)         │
-├─────────────────┴─────────────────┴─────────────────┴─────────────────────────┤
-│                          Infrastructure Layer                               │
-├─────────────────┬─────────────────┬─────────────────┬─────────────────────────┤
-│   Monitoring    │   Security      │   Backup/       │   Resource             │
-│   & Metrics     │   & Auth        │   Recovery      │   Management           │
-└─────────────────┴─────────────────┴─────────────────┴─────────────────────────┘
++-----------------------------------------------------------------------------+
+|                           Aegis Database Platform                           |
++-----------------------------------------------------------------------------+
+|                              Client Layer                                   |
++---------------+-----------------+-----------------+-------------------------+
+|   Web UI      |   CLI Tools     |   SDKs          |   Third-party Tools     |
+|   Dashboard   |   aegis-cli     |   Rust/Python   |   Grafana/Tableau      |
++---------------+-----------------+-----------------+-------------------------+
+|                              API Gateway (port 9090)                        |
++-----------------+-----------------+-----------------+-----------------------+
+|   REST API      |   WebSocket     |   Bulk Import   |   OTA Updates         |
++-----------------+-----------------+-----------------+-----------------------+
+|                           Query Processing Layer                            |
++---------+-----------+-----------+-----------+-----------+-------------------+
+|   SQL   | TimeSeries| Document  | Graph     | Streaming | Plan Cache (LRU)  |
+|  Engine | Processor | Processor | Engine    | Processor | B-tree/Hash Index |
++---------+-----------+-----------+-----------+-----------+-------------------+
+|                            Storage Engine                                   |
++-----------------+-----------------+-----------------+-----------------------+
+|   Unified       |   Indexing      |   Replication   |   Consensus           |
+|   Storage       |   (B-tree/Hash) |   Engine        |   Layer (Raft)        |
++-----------------+-----------------+-----------------+-----------------------+
+|                          Infrastructure Layer                               |
++-----------------+-----------------+-----------------+-----------------------+
+|   Monitoring    |   Security      |   Backup/       |   Resource            |
+|   & Metrics     |   & Compliance  |   Recovery      |   Management          |
++-----------------+-----------------+-----------------+-----------------------+
 ```
 
 ## Component Responsibilities
 
 **Client Layer:**
 - User interfaces and developer tools
-- SDK libraries for multiple programming languages
-- Third-party tool integrations
+- SDK libraries for multiple programming languages (Rust, Python, JavaScript)
+- Third-party tool integrations (Grafana data source plugin)
 
-**API Gateway:**
-- Protocol translation and routing
-- Authentication and authorization
-- Rate limiting and request validation
-- Load balancing and service discovery
+**API Gateway (port 9090):**
+- REST API protocol translation and routing
+- Authentication and authorization (Local, LDAP, OAuth2/OIDC)
+- Rate limiting (token bucket) and request validation
+- Bulk data import (CSV/JSON for SQL, documents, KV)
+- OTA update management
 
 **Query Processing Layer:**
-- SQL parsing, optimization, and execution
-- Time series query processing and aggregation
+- SQL parsing, optimization, and execution with B-tree and Hash index acceleration
+- Plan cache (LRU, 1024 entries) for query plan reuse
+- Direct execution API (closure-based updates bypassing SQL parsing)
+- Time series query processing and aggregation (Gorilla compression)
 - Document query execution (JSONPath, full-text search)
+- Graph traversal (nodes, edges, adjacency lists with O(degree) traversal)
 - Real-time stream processing and event handling
+- Query safety limits (max_result_rows: 100K, query_timeout_secs: 30)
 
 **Storage Engine:**
 - Unified storage abstraction across data models
-- Advanced indexing for multiple access patterns
-- Distributed replication and consensus
-- Transaction management and ACID guarantees
+- Multi-algorithm compression (LZ4, Zstd, Snappy)
+- Advanced indexing for multiple access patterns (B-tree, Hash, inverted)
+- Distributed replication and Raft consensus
+- Transaction management with MVCC and ACID guarantees
+- VACUUM/Compaction (dead row removal, index rebuild)
 
 **Infrastructure Layer:**
 - System monitoring and observability
-- Security enforcement and audit logging
+- Security enforcement, audit logging, and compliance (GDPR, HIPAA, CCPA, SOC 2, FERPA)
+- PHI/Data classification (6-level: Public, Internal, Confidential, PHI, PII, Restricted)
+- Breach detection and notification
+- Consent management with audit trail
 - Backup, recovery, and disaster management
+- Log rotation (daily rotating files via tracing-appender)
 - Resource allocation and performance optimization
 
 ---
@@ -259,12 +300,12 @@ pub trait StorageBackend {
     fn write_block(&mut self, block: Block) -> Result<BlockId>;
     fn read_block(&self, id: BlockId) -> Result<Block>;
     fn delete_block(&mut self, id: BlockId) -> Result<()>;
-    
+
     // Transaction support
     fn begin_transaction(&mut self) -> Result<TransactionId>;
     fn commit_transaction(&mut self, tx_id: TransactionId) -> Result<()>;
     fn rollback_transaction(&mut self, tx_id: TransactionId) -> Result<()>;
-    
+
     // Replication hooks
     fn replicate_block(&self, block: Block, replicas: &[NodeId]) -> Result<()>;
     fn receive_replicated_block(&mut self, block: Block) -> Result<()>;
@@ -275,18 +316,24 @@ pub trait StorageBackend {
 
 **Relational Tables:**
 - Row-oriented storage with columnar optimization
-- B+ tree indexes for primary and foreign keys
+- B-tree and Hash indexes for primary and foreign keys
+- Index-accelerated SELECT, UPDATE, and DELETE operations
 - Compression using dictionary encoding and delta compression
 
 **Time Series Data:**
 - Time-partitioned storage with automatic aging
-- Specialized compression (Gorilla algorithm for floating point)
+- Specialized compression (Gorilla algorithm for floating point, delta-of-delta for timestamps)
 - Downsampling policies with configurable retention
 
 **Document Collections:**
 - Schema-flexible JSON/BSON storage
 - Inverted indexes for full-text search
 - Nested object indexing with JSONPath optimization
+
+**Graph Data:**
+- Node and edge storage with adjacency lists
+- O(degree) traversal performance
+- Relationship-type filtering and property queries
 
 **Real-time Streams:**
 - Write-ahead log (WAL) based storage
@@ -319,16 +366,28 @@ pub enum BlockType {
     LogEntry,
     Metadata,
 }
+
+pub enum CompressionType {
+    None,
+    Lz4,
+    Zstd,
+    Snappy,
+}
 ```
 
 ## Indexing System
 
 ### Multi-Model Indexing Strategy
 
-**B+ Tree Indexes:**
+**B-tree Indexes:**
 - Primary indexes for relational data
 - Range queries and exact matches
+- Index-accelerated SELECT, UPDATE, and DELETE
 - Bulk loading and incremental updates
+
+**Hash Indexes:**
+- O(1) exact-match lookups
+- Optimal for equality predicates on high-cardinality columns
 
 **LSM Tree Indexes:**
 - Write-optimized for high-throughput ingestion
@@ -350,6 +409,7 @@ pub enum BlockType {
 ```rust
 pub struct IndexManager {
     btree_indexes: HashMap<String, BTreeIndex>,
+    hash_indexes: HashMap<String, HashIndex>,
     lsm_indexes: HashMap<String, LSMIndex>,
     inverted_indexes: HashMap<String, InvertedIndex>,
     bitmap_indexes: HashMap<String, BitmapIndex>,
@@ -442,7 +502,7 @@ pub enum QueryPlan {
 **Cost-Based Optimizer:**
 - Statistics collection and maintenance
 - Join order optimization
-- Index selection and pushdown predicates
+- Index selection and pushdown predicates (B-tree and Hash index aware)
 - Parallel execution planning
 
 **Rule-Based Transformations:**
@@ -450,6 +510,11 @@ pub enum QueryPlan {
 - Predicate pushdown and projection pruning
 - Join reordering and elimination
 - Constant folding and simplification
+
+**Plan Cache (LRU):**
+- 1024-entry LRU cache for compiled query plans
+- Eliminates repeated parse/plan overhead for frequent queries
+- Automatic invalidation on schema changes
 
 ### Execution Engine
 
@@ -469,6 +534,27 @@ pub trait Operator {
     fn close(&mut self) -> Result<()>;
 }
 ```
+
+### Direct Execution API
+
+Bypass SQL parsing for programmatic updates using closure-based execution:
+
+```rust
+// Closure-based direct execution - no SQL parsing overhead
+engine.execute_direct(|table| {
+    table.update_where(
+        |row| row.get("status") == "pending",
+        |row| row.set("status", "processed"),
+    )
+});
+```
+
+### Query Safety Limits
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_result_rows` | 100,000 | Maximum rows returned per query |
+| `query_timeout_secs` | 30 | Query execution timeout in seconds |
 
 ## Time Series Processing
 
@@ -554,6 +640,25 @@ pub struct SearchQuery {
     boost_fields: HashMap<String, f64>,
 }
 ```
+
+## Graph Database
+
+### Graph Storage and Traversal
+
+Graph data is stored using adjacency lists for O(degree) traversal performance. The graph engine supports:
+
+- **Nodes**: Typed vertices with arbitrary JSON properties
+- **Edges**: Directed relationships with type labels and properties
+- **Traversal**: BFS/DFS traversal with relationship-type filtering
+- **Adjacency Lists**: O(degree) neighbor lookup
+
+### Graph API
+
+Accessible via REST endpoints at `/api/v1/graph/*`:
+- Create, read, and delete nodes
+- Create edges between nodes with typed relationships
+- Query full graph data (nodes + edges)
+- Adjacency list queries for neighbor discovery
 
 ## Real-Time Stream Processing
 
@@ -663,6 +768,20 @@ pub enum CommitPhase {
 }
 ```
 
+## Multi-Database Support
+
+Each application gets its own isolated database instance with independent tables, KV store, documents, and graph data. Databases are auto-provisioned on first connection.
+
+```
+Cluster
+  +-- Dashboard (port 9090, Leader)
+  |     +-- tables, kv, documents, graph (isolated)
+  +-- NexusScribe (port 9091, Follower)
+  |     +-- tables, kv, documents, graph (isolated)
+  +-- AxonML (port 7001, Follower)
+        +-- tables, kv, documents, graph (isolated)
+```
+
 ## Sharding and Partitioning
 
 ### Consistent Hashing
@@ -738,6 +857,18 @@ pub enum ConflictResolutionStrategy {
 }
 ```
 
+## OTA Rolling Updates (aegis-updates)
+
+The `aegis-updates` crate provides zero-downtime rolling update capability for clustered deployments:
+
+1. **Binary Download**: Fetch new release binary from configured update server
+2. **Checksum Verification**: SHA-256 integrity check before deployment
+3. **Follower-First Deploy**: Update follower nodes before the leader to maintain availability
+4. **Health Check**: Verify each updated node passes health checks before proceeding
+5. **Auto-Rollback**: Automatic rollback if health checks fail after update
+
+Managed via `/api/v1/updates/*` REST endpoints (authenticated).
+
 ---
 
 # =============================================================================
@@ -746,82 +877,152 @@ pub enum ConflictResolutionStrategy {
 
 ## API Gateway Design
 
-### Implemented REST API Endpoints (aegis-server)
+### Complete REST API Endpoints (aegis-server, port 9090)
 
-**Core Endpoints:**
+**Health & Core:**
 - `GET /health` - Health check
 - `POST /api/v1/query` - Execute SQL query
 - `GET /api/v1/tables` - List tables
 - `GET /api/v1/tables/:name` - Get table info
 - `GET /api/v1/metrics` - Server metrics
 
-**Admin API:**
-- `GET /api/v1/admin/cluster` - Cluster information
-- `GET /api/v1/admin/dashboard` - Dashboard summary
-- `GET /api/v1/admin/nodes` - Node list with metrics
-- `GET /api/v1/admin/storage` - Storage information
-- `GET /api/v1/admin/stats` - Query statistics
-- `GET /api/v1/admin/alerts` - Active alerts
-- `GET /api/v1/admin/activities` - Recent activity log
-
 **Authentication API:**
-- `POST /api/v1/auth/login` - User login
-- `POST /api/v1/auth/mfa/verify` - MFA verification
+- `POST /api/v1/auth/login` - User login (rate limited: 30/min)
+- `POST /api/v1/auth/mfa/verify` - MFA verification (rate limited: 30/min)
 - `POST /api/v1/auth/logout` - User logout
 - `GET /api/v1/auth/session` - Validate session
 - `GET /api/v1/auth/me` - Current user info
 
+**Admin API (authenticated):**
+- `GET /api/v1/admin/cluster` - Cluster information
+- `GET /api/v1/admin/dashboard` - Dashboard summary
+- `GET /api/v1/admin/nodes` - Node list with metrics
+- `POST /api/v1/admin/nodes/:node_id/restart` - Restart a node
+- `POST /api/v1/admin/nodes/:node_id/drain` - Drain a node
+- `GET /api/v1/admin/nodes/:node_id/logs` - Get node logs
+- `DELETE /api/v1/admin/nodes/:node_id` - Remove a node
+- `GET /api/v1/admin/storage` - Storage information
+- `GET /api/v1/admin/stats` - Query statistics
+- `GET /api/v1/admin/database` - Database statistics
+- `GET /api/v1/admin/alerts` - Active alerts
+- `GET /api/v1/admin/activities` - Recent activity log
+- `GET /api/v1/admin/settings` - Get server settings
+- `PUT /api/v1/admin/settings` - Update server settings
+- `GET /api/v1/admin/users` - List users
+- `POST /api/v1/admin/users` - Create user
+- `PUT /api/v1/admin/users/:username` - Update user
+- `DELETE /api/v1/admin/users/:username` - Delete user
+- `GET /api/v1/admin/roles` - List roles
+- `POST /api/v1/admin/roles` - Create role
+- `DELETE /api/v1/admin/roles/:name` - Delete role
+- `POST /api/v1/admin/metrics/timeseries` - Metrics time series data
+- `POST /api/v1/admin/backup` - Create backup
+- `GET /api/v1/admin/backups` - List backups
+- `POST /api/v1/admin/restore` - Restore backup
+- `DELETE /api/v1/admin/backup/:id` - Delete backup
+
 **Key-Value Store API:**
 - `GET /api/v1/kv/keys` - List all keys
 - `POST /api/v1/kv/keys` - Create/update key
+- `GET /api/v1/kv/keys/:key` - Get key value
 - `DELETE /api/v1/kv/keys/:key` - Delete key
 
 **Document Store API:**
 - `GET /api/v1/documents/collections` - List collections
-- `GET /api/v1/documents/collections/:name` - Get documents
+- `POST /api/v1/documents/collections` - Create collection
+- `GET /api/v1/documents/collections/:name` - Get collection documents
+- `GET /api/v1/documents/collections/:name/documents` - List documents
+- `POST /api/v1/documents/collections/:name/documents` - Insert document
+- `GET /api/v1/documents/collections/:name/documents/:id` - Get document
+- `PUT /api/v1/documents/collections/:name/documents/:id` - Update document
+- `PATCH /api/v1/documents/collections/:name/documents/:id` - Patch document
+- `DELETE /api/v1/documents/collections/:name/documents/:id` - Delete document
+- `POST /api/v1/documents/collections/:name/query` - Query documents
+
+**Time Series API:**
+- `GET /api/v1/timeseries/metrics` - List metrics
+- `POST /api/v1/timeseries/metrics` - Register metric
+- `POST /api/v1/timeseries/write` - Write time series data
+- `POST /api/v1/timeseries/query` - Query time series data
+
+**Streaming API:**
+- `GET /api/v1/streaming/channels` - List channels
+- `POST /api/v1/streaming/channels` - Create channel
+- `POST /api/v1/streaming/publish` - Publish event
+- `GET /api/v1/streaming/channels/:channel/history` - Channel history
 
 **Graph Database API:**
 - `GET /api/v1/graph/data` - Get nodes and edges
+- `POST /api/v1/graph/nodes` - Create graph node
+- `DELETE /api/v1/graph/nodes/:node_id` - Delete graph node
+- `POST /api/v1/graph/edges` - Create graph edge
 
 **Query Builder API:**
-- `POST /api/v1/query-builder/execute` - Execute query
+- `POST /api/v1/query-builder/execute` - Execute builder query
 
-### Protocol Support
+**OTA Update API (authenticated):**
+- `GET /api/v1/updates/version` - Get current version
+- `POST /api/v1/updates/plan` - Create update plan
+- `POST /api/v1/updates/execute` - Execute update plan
+- `GET /api/v1/updates/status/:plan_id` - Get update status
+- `GET /api/v1/updates/history` - List update history
 
-```rust
-pub struct ApiGateway {
-    rest_handler: RestHandler,
-    graphql_handler: GraphqlHandler,
-    websocket_handler: WebSocketHandler,
-    grpc_handler: GrpcHandler,
-    load_balancer: LoadBalancer,
-}
+**Bulk Import API:**
+- `POST /api/v1/import/sql` - Bulk import rows into SQL table (CSV or JSON)
+- `POST /api/v1/import/documents` - Bulk import documents into collection (JSON)
+- `POST /api/v1/import/kv` - Bulk import key-value pairs (JSON)
 
-pub trait ProtocolHandler {
-    fn handle_request(&self, request: Request) -> Result<Response>;
-    fn authenticate(&self, credentials: Credentials) -> Result<Session>;
-    fn authorize(&self, session: &Session, resource: &Resource) -> Result<bool>;
-}
-```
+**GDPR/CCPA Compliance API (authenticated):**
+- `DELETE /api/v1/compliance/data-subject/:identifier` - Delete data subject (GDPR Art. 17 right to erasure)
+- `POST /api/v1/compliance/export` - Export data subject data (GDPR Art. 20 portability)
+- `GET /api/v1/compliance/certificates` - List deletion certificates
+- `GET /api/v1/compliance/certificates/:cert_id` - Get deletion certificate
+- `GET /api/v1/compliance/certificates/:cert_id/verify` - Verify deletion certificate
+- `GET /api/v1/compliance/audit/:subject_id` - Get deletion audit trail
+- `GET /api/v1/compliance/audit/verify` - Verify audit integrity
+- `POST /api/v1/compliance/consent` - Record consent
+- `GET /api/v1/compliance/consent/stats` - Get consent statistics
+- `GET /api/v1/compliance/consent/:subject_id` - Get consent status
+- `DELETE /api/v1/compliance/consent/:subject_id` - Delete consent data
+- `GET /api/v1/compliance/consent/:subject_id/history` - Consent history
+- `GET /api/v1/compliance/consent/:subject_id/export` - Export consent data
+- `GET /api/v1/compliance/consent/:subject_id/check/:purpose` - Check consent for purpose
+- `DELETE /api/v1/compliance/consent/:subject_id/:purpose` - Withdraw consent
+- `GET /api/v1/compliance/do-not-sell` - CCPA Do Not Sell list
+- `GET /api/v1/compliance/breaches` - List breaches
+- `GET /api/v1/compliance/breaches/stats` - Breach statistics
+- `POST /api/v1/compliance/breaches/cleanup` - Trigger breach cleanup
+- `GET /api/v1/compliance/breaches/:id` - Get breach details
+- `POST /api/v1/compliance/breaches/:id/acknowledge` - Acknowledge breach
+- `POST /api/v1/compliance/breaches/:id/resolve` - Resolve breach
+- `GET /api/v1/compliance/breaches/:id/report` - Get breach report
+- `GET /api/v1/compliance/security-events` - List security events
+
+**Cluster Peer Management (internal):**
+- `GET /api/v1/cluster/info` - Node info
+- `POST /api/v1/cluster/join` - Join cluster
+- `POST /api/v1/cluster/heartbeat` - Heartbeat
+- `GET /api/v1/cluster/peers` - List peers
+- `POST /api/v1/cluster/shutdown` - Graceful shutdown
 
 ### Rate Limiting and Throttling
 
 ```rust
 pub struct RateLimiter {
-    algorithms: HashMap<String, Box<dyn RateLimitAlgorithm>>,
-    counters: Arc<DashMap<String, Counter>>,
+    entries: Arc<RwLock<HashMap<String, RateLimitEntry>>>,
+    max_requests: u32,
+    window_secs: u64,
 }
 
-pub trait RateLimitAlgorithm {
-    fn is_allowed(&self, key: &str, timestamp: u64) -> bool;
-    fn record_request(&self, key: &str, timestamp: u64);
+pub struct RateLimitEntry {
+    count: u32,
+    window_start: Instant,
 }
 
-pub struct TokenBucket {
-    capacity: u32,
-    refill_rate: u32,
-    refill_period: Duration,
-}
+// Token bucket algorithm implementation
+// Default limits:
+// - Login endpoints: 30 requests/minute/IP
+// - General API: 1000 requests/minute/IP
 ```
 
 ## SDK Architecture
@@ -851,7 +1052,7 @@ impl AegisClient {
 # Python interface example
 import aegis
 
-client = await aegis.connect("aegis://localhost:5432/mydb")
+client = await aegis.connect("aegis://localhost:9090/mydb")
 result = await client.execute("SELECT * FROM users WHERE age > 18")
 async for row in result:
     print(row)
@@ -862,7 +1063,7 @@ async for row in result:
 // Node.js interface example
 const aegis = require('aegis-db');
 
-const client = await aegis.connect('aegis://localhost:5432/mydb');
+const client = await aegis.connect('aegis://localhost:9090/mydb');
 const result = await client.execute('SELECT * FROM users WHERE age > 18');
 for await (const row of result) {
     console.log(row);
@@ -994,6 +1195,45 @@ pub enum Effect {
 }
 ```
 
+## PHI/Data Classification
+
+Aegis supports a 6-level data classification system for regulatory compliance:
+
+| Level | Classification | Description |
+|-------|---------------|-------------|
+| 1 | Public | Freely distributable data |
+| 2 | Internal | Internal-use only |
+| 3 | Confidential | Business-sensitive data |
+| 4 | PHI | Protected Health Information (HIPAA) |
+| 5 | PII | Personally Identifiable Information |
+| 6 | Restricted | Highest security classification |
+
+Classification levels drive access control policies, audit logging verbosity, encryption requirements, and retention rules.
+
+## Compliance Framework
+
+### GDPR Right to Erasure (Article 17)
+
+- Full data subject deletion across all paradigms (SQL, KV, documents, graph)
+- Cryptographic deletion certificates with SHA-256 verification
+- Complete audit trail with integrity verification
+- Data portability export (Article 20)
+
+### Consent Management
+
+- 11 consent purposes with full audit trail
+- Per-subject consent status tracking and history
+- Consent withdrawal and data deletion
+- CCPA Do Not Sell list management
+
+### Breach Detection and Notification
+
+- Real-time security event monitoring
+- Automated breach detection with configurable thresholds
+- Breach acknowledgment and resolution workflow
+- Compliance reporting (HIPAA 72-hour, GDPR 72-hour notification requirements)
+- Webhook notifications for security events
+
 ## Encryption and Key Management
 
 ### Data Encryption
@@ -1037,26 +1277,6 @@ pub struct TlsConfig {
 // Native TLS support via axum-server with rustls
 // Supports TLSv1.2 and TLSv1.3
 // Modern cipher suites: ECDHE-RSA-AES128-GCM-SHA256, etc.
-```
-
-### Rate Limiting
-
-```rust
-pub struct RateLimiter {
-    entries: Arc<RwLock<HashMap<String, RateLimitEntry>>>,
-    max_requests: u32,
-    window_secs: u64,
-}
-
-pub struct RateLimitEntry {
-    count: u32,
-    window_start: Instant,
-}
-
-// Token bucket algorithm implementation
-// Default limits:
-// - Login endpoints: 30 requests/minute/IP
-// - General API: 1000 requests/minute/IP
 ```
 
 ---
@@ -1112,6 +1332,15 @@ pub struct Span {
 }
 ```
 
+### Log Rotation
+
+Server logs use daily rotating files via `tracing-appender`:
+
+```rust
+// Daily rotating log files
+let file_appender = tracing_appender::rolling::daily("/var/log/aegis", "aegis-server.log");
+```
+
 ## Alerting System
 
 ### Alert Management
@@ -1137,6 +1366,63 @@ pub enum AlertCondition {
     Composite(CompositeCondition),
 }
 ```
+
+---
+
+# =============================================================================
+# Performance Benchmarks
+# =============================================================================
+
+## Benchmark Results
+
+| Benchmark | Result | Notes |
+|-----------|--------|-------|
+| Fund Transfer TPS (0% contention) | 758,000 TPS | MVCC transaction throughput |
+| High Contention TPS | 2,500,000 TPS | Concurrent transaction processing |
+| KV Read Throughput | 12,300,000 reads/sec | In-memory key-value lookups |
+| SQL Insert Throughput | 223,000 inserts/sec | Batched row insertion |
+| KV over HTTP | 203,000 ops/sec | Key-value operations via REST API |
+
+## Storage Optimization
+
+### Compression Algorithms
+
+Three compression algorithms are supported, selectable per block or globally:
+
+| Algorithm | Use Case | Ratio | Speed |
+|-----------|----------|-------|-------|
+| LZ4 | Default, balanced speed/ratio | Moderate | Very Fast |
+| Zstd | Archival, cold data | High | Moderate |
+| Snappy | Hot data, low latency | Lower | Fastest |
+
+```rust
+pub enum CompressionType {
+    None,
+    Lz4,
+    Zstd,
+    Snappy,
+}
+
+pub trait CompressionAlgorithm {
+    fn compress(&self, data: &[u8]) -> Result<Vec<u8>>;
+    fn decompress(&self, data: &[u8]) -> Result<Vec<u8>>;
+    fn compression_ratio(&self) -> f64;
+}
+```
+
+### VACUUM/Compaction
+
+Dead row removal and index rebuild for reclaiming storage space:
+
+```
+POST /api/v1/admin/vacuum
+```
+
+Operations performed:
+- Remove rows marked as deleted by MVCC
+- Rebuild fragmented indexes
+- Reclaim disk space from deleted blocks
+- Update storage statistics
 
 ---
 
@@ -1169,8 +1455,7 @@ spec:
       - name: aegis
         image: aegis:latest
         ports:
-        - containerPort: 5432
-        - containerPort: 8080
+        - containerPort: 9090
         env:
         - name: AEGIS_NODE_ID
           valueFrom:
@@ -1223,7 +1508,7 @@ pub struct SystemRequirements {
     min_memory_gb: u32,
     min_storage_gb: u64,
     supported_os: Vec<OperatingSystem>,
-    required_ports: Vec<u16>,
+    required_ports: Vec<u16>,   // Default: [9090]
 }
 ```
 
@@ -1233,17 +1518,17 @@ pub struct SystemRequirements {
 # aegis.toml configuration example
 [cluster]
 node_id = "node-001"
-bind_address = "0.0.0.0:5432"
-advertise_address = "192.168.1.100:5432"
+bind_address = "0.0.0.0:9090"
+advertise_address = "192.168.1.100:9090"
 data_directory = "/var/lib/aegis"
 
 [cluster.peers]
-"node-002" = "192.168.1.101:5432"
-"node-003" = "192.168.1.102:5432"
+"node-002" = "192.168.1.101:9090"
+"node-003" = "192.168.1.102:9090"
 
 [storage]
 backend = "local"
-compression = "lz4"
+compression = "lz4"          # lz4, zstd, or snappy
 encryption_at_rest = true
 backup_directory = "/var/lib/aegis/backups"
 
@@ -1258,6 +1543,8 @@ max_connections = 1000
 query_cache_size = "1GB"
 buffer_pool_size = "4GB"
 worker_threads = 8
+max_result_rows = 100000
+query_timeout_secs = 30
 ```
 
 ## Embedded/Edge Deployment
@@ -1306,89 +1593,29 @@ pub enum SyncDirection {
 ---
 
 # =============================================================================
-# Performance and Optimization
-# =============================================================================
-
-## Query Optimization
-
-### Cost-Based Optimizer
-
-```rust
-pub struct CostBasedOptimizer {
-    statistics: StatisticsCollector,
-    cost_model: CostModel,
-    optimization_rules: Vec<OptimizationRule>,
-}
-
-pub struct Statistics {
-    table_cardinalities: HashMap<String, u64>,
-    column_histograms: HashMap<String, Histogram>,
-    index_selectivity: HashMap<String, f64>,
-}
-
-pub trait OptimizationRule {
-    fn apply(&self, plan: QueryPlan) -> Result<QueryPlan>;
-    fn cost_reduction(&self, plan: &QueryPlan) -> f64;
-}
-```
-
-### Caching Strategy
-
-```rust
-pub struct QueryCache {
-    cache_store: Box<dyn CacheStore>,
-    eviction_policy: EvictionPolicy,
-    cache_statistics: CacheStatistics,
-}
-
-pub enum EvictionPolicy {
-    LRU,
-    LFU,
-    FIFO,
-    TTL(Duration),
-    Adaptive,
-}
-```
-
-## Storage Optimization
-
-### Compression Algorithms
-
-```rust
-pub trait CompressionAlgorithm {
-    fn compress(&self, data: &[u8]) -> Result<Vec<u8>>;
-    fn decompress(&self, data: &[u8]) -> Result<Vec<u8>>;
-    fn compression_ratio(&self) -> f64;
-}
-
-pub struct CompressionManager {
-    algorithms: HashMap<String, Box<dyn CompressionAlgorithm>>,
-    selection_policy: CompressionSelectionPolicy,
-}
-```
-
-### Memory Optimization
-
-```rust
-pub struct MemoryManager {
-    arenas: Vec<MemoryArena>,
-    buffer_pools: HashMap<String, BufferPool>,
-    memory_pressure_monitor: MemoryPressureMonitor,
-}
-
-pub struct MemoryPressureMonitor {
-    thresholds: MemoryThresholds,
-    callbacks: Vec<Box<dyn MemoryPressureCallback>>,
-}
-```
-
----
-
-# =============================================================================
 # Development and Testing Strategy
 # =============================================================================
 
 ## Testing Architecture
+
+### Test Distribution by Crate
+
+| Crate | Tests | Category |
+|-------|-------|----------|
+| aegis-replication | 165 | Raft, sharding, CRDTs, 2PC |
+| aegis-server (unit) | 116 | Handlers, middleware, auth |
+| aegis-server (integration) | 54 | E2E API tests |
+| aegis-storage | 48 | Backends, WAL, MVCC |
+| aegis-client | 42 | SDK, connection management |
+| aegis-query | 41 | Parser, planner, executor, indexes |
+| aegis-document | 36 | Collections, JSONPath, search |
+| aegis-timeseries | 36 | Gorilla compression, aggregation |
+| aegis-monitoring | 35 | Metrics, tracing, alerts |
+| aegis-streaming | 31 | Channels, pub/sub, CDC |
+| aegis-updates | 14 | OTA updates, rollback |
+| aegis-memory | 5 | Arena allocator, buffer pool |
+| aegis-common | 4 | Shared types, errors |
+| **Total** | **634** | |
 
 ### Multi-Level Testing
 
@@ -1447,8 +1674,33 @@ pub struct Migration {
 
 ---
 
-**Architecture Status**: v1.5.0 - Phase 3 Complete
-**Next Review**: Phase 4 Enterprise Features
-**Maintainers**: Andrew Jewell Sr / AutomataNexus LLC  
+## Crate Dependency Graph
+
+```
+aegis-dashboard (WASM, built separately with Trunk)
+aegis-cli
+aegis-server (REST API - Axum on port 9090)
+    |
+    v
+aegis-client
+aegis-query (SQL parser/planner/executor, B-tree/Hash indexes, plan cache)
+aegis-timeseries, aegis-document, aegis-streaming
+aegis-replication (Raft, sharding, 2PC, CRDTs)
+aegis-updates (OTA rolling updates)
+aegis-monitoring
+    |
+    v
+aegis-storage (backends, WAL, MVCC, LZ4/Zstd/Snappy compression)
+aegis-memory (arena allocators, buffer pool)
+    |
+    v
+aegis-common (shared types, errors, config)
+```
+
+---
+
+**Architecture Status**: v2.2.0 - All Phases Complete (Phase 1-7)
+**Production**: 50+ edge nodes (Raspberry Pi 4/5) + central NexusBMS server
+**Maintainers**: Andrew Jewell Sr / AutomataNexus LLC
 
 *This document provides the comprehensive technical architecture for Aegis database platform. All implementation should follow this architectural specification and maintain consistency with the design principles outlined herein.*

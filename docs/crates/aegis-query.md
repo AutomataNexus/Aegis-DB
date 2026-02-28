@@ -43,6 +43,7 @@ impl Parser {
 - CREATE INDEX
 - DROP INDEX
 - BEGIN, COMMIT, ROLLBACK
+- VACUUM
 
 ### ast.rs
 Internal AST representation:
@@ -120,6 +121,31 @@ Cost-based query planner:
 - Operation cost modeling
 - Join strategy selection
 
+### cache.rs
+LRU plan cache:
+- `PlanCache` - LRU cache with configurable capacity (default 1024 entries)
+- Caches compiled query plans keyed by SQL text
+- Automatic eviction of least recently used plans
+
+### limits.rs
+Query safety limits:
+- `QueryLimits` - Configurable `max_result_rows` and `query_timeout_secs`
+- Enforced at execution time to prevent runaway queries
+
+### classification.rs
+Data classification:
+- `DataClassification` enum - Public, Internal, Confidential, PHI, PII, Restricted
+- Column-level classification tagging for compliance
+
+### Direct Execution API
+- `execute_update_direct()` - Execute UPDATE/INSERT/DELETE bypassing the full planner pipeline
+- `execute_update_indexed_fn()` - Execute with index-aware optimizations
+
+### Index Support
+- B-tree indexes for range predicates and ordered scans
+- Hash indexes for exact-match equality lookups
+- Index selection integrated into the query planner
+
 ### executor.rs
 Volcano-style query executor:
 
@@ -166,4 +192,4 @@ let result = executor.execute(&plan)?;
 
 ## Tests
 
-27 tests covering parsing, analysis, planning, and execution.
+634 tests (workspace total) covering parsing, analysis, planning, execution, plan caching, query limits, data classification, VACUUM, and index support.

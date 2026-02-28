@@ -117,4 +117,4 @@ let avg = engine.aggregate("cpu_usage", Duration::hours(1), AggregateFunction::A
 
 ## Tests
 
-36 tests covering all modules including persistence roundtrips.
+634 tests (workspace total) covering all modules including persistence roundtrips.

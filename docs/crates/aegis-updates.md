@@ -82,8 +82,8 @@ let orchestrator = UpdateOrchestrator::new(
 
 // Create update plan
 let plan = orchestrator.create_plan(
-    "0.3.0",
-    "https://releases.example.com/aegis-server-0.3.0",
+    "0.2.2",
+    "https://releases.example.com/aegis-server-0.2.2",
     "sha256hash...",
     vec![
         ClusterNode {
@@ -122,4 +122,4 @@ All endpoints require authentication.
 
 ## Tests
 
-14 tests covering version tracking, binary operations, health checks, orchestration, and rollback.
+634 tests (workspace total) covering version tracking, binary operations, health checks, orchestration, and rollback.

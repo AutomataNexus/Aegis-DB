@@ -8,7 +8,7 @@
 | RAM | 55 GB |
 | OS | WSL2 (Linux 6.6.87.2-microsoft-standard-WSL2) |
 | Rust | 1.92.0 |
-| Aegis-DB | v0.2.1 |
+| Aegis-DB | v0.2.2 |
 
 ---
 

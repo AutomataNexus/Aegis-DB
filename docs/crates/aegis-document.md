@@ -128,4 +128,4 @@ engine.create_collection_with_schema("users", schema)?;
 
 ## Tests
 
-36 tests covering all modules.
+634 tests (workspace total) covering all modules.

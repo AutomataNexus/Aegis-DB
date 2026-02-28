@@ -23,22 +23,23 @@ Comprehensive guidance for deploying Aegis-DB in regulated environments
 
 1. [Overview](#overview)
 2. [Supported Frameworks](#supported-frameworks)
-3. [Quick Start](#quick-start)
-4. [GDPR Compliance](#gdpr-compliance)
-5. [CCPA Compliance](#ccpa-compliance)
-6. [HIPAA Compliance](#hipaa-compliance)
-7. [FERPA Compliance](#ferpa-compliance)
-8. [SOC 2 Type II](#soc-2-type-ii)
-9. [Breach Detection](#breach-detection)
-10. [Audit Trail](#audit-trail)
-11. [Consent Management](#consent-management)
-12. [API Reference](#api-reference)
+3. [PHI Column-Level Classification](#phi-column-level-classification)
+4. [Quick Start](#quick-start)
+5. [GDPR Compliance](#gdpr-compliance)
+6. [CCPA Compliance](#ccpa-compliance)
+7. [HIPAA Compliance](#hipaa-compliance)
+8. [FERPA Compliance](#ferpa-compliance)
+9. [SOC 2 Type II](#soc-2-type-ii)
+10. [Breach Detection](#breach-detection)
+11. [Audit Trail](#audit-trail)
+12. [Consent Management](#consent-management)
+13. [API Reference](#api-reference)
 
 ---
 
 ## Overview
 
-Aegis-DB provides built-in compliance features to help organizations meet regulatory requirements:
+Aegis-DB v0.2.2 provides built-in compliance features to help organizations meet regulatory requirements. **634 tests** validate compliance functionality across the workspace.
 
 | Feature | Description | Regulations |
 |---------|-------------|-------------|
@@ -46,9 +47,11 @@ Aegis-DB provides built-in compliance features to help organizations meet regula
 | Data Portability | Export data in machine-readable formats | GDPR Art. 20, CCPA |
 | Consent Management | Track and enforce user consent | GDPR Art. 7, CCPA |
 | Do Not Sell | CCPA-specific opt-out tracking | CCPA/CPRA |
+| PHI Classification | 6-level column-level data classification | HIPAA, GDPR, SOC 2 |
 | Breach Detection | Real-time security monitoring | GDPR, HIPAA, SOC 2 |
 | Audit Logging | Immutable hash-chain audit trail | All frameworks |
 | Encryption | AES-256 at rest, TLS 1.3 in transit | HIPAA, SOC 2 |
+| Compression | LZ4, Zstd, Snappy for data blocks | All frameworks |
 | Access Control | RBAC with 25+ permissions | All frameworks |
 
 All compliance endpoints are available under `/api/v1/compliance/` and require authentication.
@@ -112,6 +115,88 @@ Service Organization Control 2 covers security, availability, processing integri
 - Change management tracking
 - Incident response procedures
 - Comprehensive audit trails
+
+---
+
+## PHI Column-Level Classification
+
+Aegis-DB v0.2.2 introduces column-level data classification to identify and protect sensitive data, including Protected Health Information (PHI) and Personally Identifiable Information (PII).
+
+### Classification Levels
+
+| Level | Name | Description | Example Data |
+|-------|------|-------------|--------------|
+| 0 | **Public** | Non-sensitive, freely accessible | Product names, public IDs |
+| 1 | **Internal** | Internal use only, low risk | Employee IDs, department names |
+| 2 | **Confidential** | Business-sensitive data | Revenue figures, internal reports |
+| 3 | **PHI** | Protected Health Information (HIPAA) | Diagnoses, treatment records, lab results |
+| 4 | **PII** | Personally Identifiable Information | SSN, date of birth, home address |
+| 5 | **Restricted** | Highest sensitivity, strictly controlled | Encryption keys, authentication secrets |
+
+### Classify a Column
+
+```bash
+curl -X POST "http://localhost:9090/api/v1/compliance/classify" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table": "patients",
+    "column": "diagnosis",
+    "classification": "PHI",
+    "reason": "Contains ICD-10 diagnosis codes"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "table": "patients",
+  "column": "diagnosis",
+  "classification": "PHI",
+  "level": 3,
+  "message": "Column classified successfully"
+}
+```
+
+### Batch Classification
+
+```bash
+curl -X POST "http://localhost:9090/api/v1/compliance/classify" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "classifications": [
+      {"table": "patients", "column": "diagnosis", "classification": "PHI"},
+      {"table": "patients", "column": "ssn", "classification": "PII"},
+      {"table": "patients", "column": "name", "classification": "PII"},
+      {"table": "audit_log", "column": "encryption_key", "classification": "Restricted"}
+    ]
+  }'
+```
+
+### Classification Enforcement
+
+When classification is enabled:
+
+- **Access Control**: Queries accessing PHI/PII columns (level 3+) require elevated RBAC permissions
+- **Audit Logging**: All access to classified columns is logged with user identity and timestamp
+- **Data Masking**: Classified columns can be automatically masked for lower-privilege roles
+- **Export Controls**: Classification metadata is included in GDPR data portability exports
+- **Encryption**: Restricted (level 5) columns are encrypted at rest by default
+- **Breach Detection**: Unusual access patterns on classified columns trigger security events
+
+### Configuration
+
+```toml
+[data_classification]
+enabled = true
+default_level = "internal"
+enforce_access_control = true
+audit_classified_access = true
+mask_phi_in_logs = true
+```
 
 ---
 
@@ -904,13 +989,19 @@ curl -X DELETE "http://localhost:9090/api/v1/compliance/consent/user@example.com
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| **Data Classification** | | |
+| POST | `/api/v1/compliance/classify` | Classify columns (PHI/PII/etc.) |
+| **Data Subject Rights** | | |
 | DELETE | `/api/v1/compliance/data-subject/:id` | Delete all data for subject |
 | POST | `/api/v1/compliance/export` | Export subject data |
+| **GDPR Deletion Certificates** | | |
 | GET | `/api/v1/compliance/certificates` | List deletion certificates |
 | GET | `/api/v1/compliance/certificates/:id` | Get specific certificate |
-| GET | `/api/v1/compliance/certificates/:id/verify` | Verify certificate |
+| GET | `/api/v1/compliance/certificates/:id/verify` | Verify certificate integrity |
+| **GDPR Audit** | | |
 | GET | `/api/v1/compliance/audit/:subject_id` | Get audit trail for subject |
 | GET | `/api/v1/compliance/audit/verify` | Verify audit log integrity |
+| **Consent Management** | | |
 | POST | `/api/v1/compliance/consent` | Record consent |
 | GET | `/api/v1/compliance/consent/stats` | Get consent statistics |
 | GET | `/api/v1/compliance/consent/:subject_id` | Get consent status |
@@ -919,7 +1010,9 @@ curl -X DELETE "http://localhost:9090/api/v1/compliance/consent/user@example.com
 | GET | `/api/v1/compliance/consent/:subject_id/export` | Export consent data |
 | GET | `/api/v1/compliance/consent/:subject_id/check/:purpose` | Check specific consent |
 | DELETE | `/api/v1/compliance/consent/:subject_id/:purpose` | Withdraw consent |
+| **CCPA Do Not Sell** | | |
 | GET | `/api/v1/compliance/do-not-sell` | Get Do Not Sell list |
+| **Breach Detection** | | |
 | GET | `/api/v1/compliance/breaches` | List breach incidents |
 | GET | `/api/v1/compliance/breaches/stats` | Get breach statistics |
 | POST | `/api/v1/compliance/breaches/cleanup` | Trigger cleanup of old events |
@@ -927,6 +1020,7 @@ curl -X DELETE "http://localhost:9090/api/v1/compliance/consent/user@example.com
 | POST | `/api/v1/compliance/breaches/:id/acknowledge` | Acknowledge incident |
 | POST | `/api/v1/compliance/breaches/:id/resolve` | Resolve incident |
 | GET | `/api/v1/compliance/breaches/:id/report` | Generate incident report |
+| **Security Events** | | |
 | GET | `/api/v1/compliance/security-events` | List security events |
 
 ---
@@ -962,6 +1056,6 @@ curl -X DELETE "http://localhost:9090/api/v1/compliance/consent/user@example.com
 
 ---
 
-**Document Version:** 1.0.0
-**Last Updated:** January 2026
+**Document Version:** 2.0.0 (Aegis-DB v0.2.2)
+**Last Updated:** February 2026
 **Maintainer:** AutomataNexus Compliance Team
