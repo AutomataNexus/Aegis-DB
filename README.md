@@ -13,6 +13,8 @@
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/tests-634%20passing-brightgreen.svg" alt="Tests">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
+  <img src="https://img.shields.io/badge/paradigms-6-blueviolet.svg" alt="6 Data Paradigms">
+  <img src="https://img.shields.io/badge/LOC-60K%2B-informational.svg" alt="Lines of Code">
 </p>
 
 <p align="center">
@@ -351,3 +353,9 @@ Full API docs: [docs/USER_GUIDE.md](docs/USER_GUIDE.md)
 See [LICENSE.md](LICENSE.md) for details. Commercial licensing: Devops@automatanexus.com
 
 Copyright 2024-2026 Andrew Jewell Sr / AutomataNexus LLC
+
+---
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=AutomataNexus/Aegis-DB&type=Date)](https://star-history.com/#AutomataNexus/Aegis-DB&Date)
