@@ -53,7 +53,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Bytes and memory
-bytes = "1.5"
+bytes = "1.11.1"
 zerocopy = "0.7"
 memmap2 = "0.9"
 
