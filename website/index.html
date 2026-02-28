@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Aegis-DB - Multi-paradigm database built for regulated industries. SQL, Document, TimeSeries, Graph, and Streaming in one platform.">
+  <meta name="keywords" content="database, SQL, document store, time series, graph database, HIPAA, GDPR, compliance, Rust">
+  <meta name="author" content="AutomataNexus">
+  <meta property="og:title" content="Aegis-DB - Multi-paradigm Database">
+  <meta property="og:description" content="Enterprise database platform with SQL, Document, TimeSeries, Graph, and Streaming capabilities. Built for regulated industries.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://aegis-db.com">
+  <title>Aegis-DB - Multi-paradigm Database for Regulated Industries</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --background: #faf9f6;
+      --card-bg: #f5ebe0;
+      --highlight: #fff7ed;
+      --teal-bg: #f0fdfa;
+      --terracotta: #c4a484;
+      --terracotta-dark: #a08060;
+      --teal: #14b8a6;
+      --teal-dark: #0d9488;
+      --text-primary: #111827;
+      --text-secondary: #6b7280;
+      --text-muted: #9ca3af;
+      --border: #e5e7eb;
+      --success: #10b981;
+      --white: #ffffff;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--background);
+      color: var(--text-primary);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a {
+      color: var(--teal);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    a:hover {
+      color: var(--teal-dark);
+    }
+
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      background: #f3f4f6;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+
+    /* Navigation */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: rgba(250, 249, 246, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      z-index: 1000;
+      padding: 0 2rem;
+    }
+
+    .nav-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 70px;
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 600;
+      font-size: 1.25rem;
+      color: var(--text-primary);
+    }
+
+    .nav-logo img {
+      height: 40px;
+      width: auto;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 2rem;
+      align-items: center;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      font-weight: 500;
+      font-size: 0.95rem;
+    }
+
+    .nav-links a:hover {
+      color: var(--teal);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-weight: 500;
+      font-size: 0.95rem;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--teal);
+      color: var(--white);
+    }
+
+    .btn-primary:hover {
+      background: var(--teal-dark);
+      color: var(--white);
+    }
+
+    .btn-secondary {
+      background: var(--card-bg);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: var(--terracotta);
+      color: var(--white);
+      border-color: var(--terracotta);
+    }
+
+    /* Hero Section */
+    .hero {
+      padding: 140px 2rem 80px;
+      text-align: center;
+      background: linear-gradient(180deg, var(--background) 0%, var(--teal-bg) 100%);
+    }
+
+    .hero-content {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .hero-badge {
+      display: inline-block;
+      background: var(--teal-bg);
+      color: var(--teal-dark);
+      padding: 6px 16px;
+      border-radius: 20px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 1.5rem;
+      border: 1px solid #ccfbf1;
+    }
+
+    .hero h1 {
+      font-size: 3.5rem;
+      font-weight: 700;
+      line-height: 1.1;
+      margin-bottom: 1.5rem;
+      color: var(--text-primary);
+    }
+
+    .hero h1 span {
+      background: linear-gradient(135deg, var(--teal) 0%, var(--terracotta) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero p {
+      font-size: 1.25rem;
+      color: var(--text-secondary);
+      max-width: 700px;
+      margin: 0 auto 2rem;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .hero-stats {
+      display: flex;
+      justify-content: center;
+      gap: 4rem;
+      margin-top: 4rem;
+      padding-top: 3rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .stat {
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 2.5rem;
+      font-weight: 700;
+      color: var(--teal);
+    }
+
+    .stat-label {
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    /* Features Section */
+    .features {
+      padding: 80px 2rem;
+      background: var(--white);
+    }
+
+    .section-header {
+      text-align: center;
+      max-width: 700px;
+      margin: 0 auto 4rem;
+    }
+
+    .section-header h2 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+
+    .section-header p {
+      font-size: 1.1rem;
+      color: var(--text-secondary);
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .feature-card {
+      background: var(--card-bg);
+      border-radius: 16px;
+      padding: 2rem;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.08);
+    }
+
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--teal-bg);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.25rem;
+      font-size: 1.5rem;
+    }
+
+    .feature-card h3 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+    }
+
+    /* Paradigms Section */
+    .paradigms {
+      padding: 80px 2rem;
+      background: var(--background);
+    }
+
+    .paradigms-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1.5rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .paradigm-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      text-align: center;
+      transition: all 0.2s;
+    }
+
+    .paradigm-card:hover {
+      border-color: var(--teal);
+      background: var(--teal-bg);
+    }
+
+    .paradigm-icon {
+      font-size: 2rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .paradigm-card h4 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .paradigm-card p {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    /* Code Section */
+    .code-section {
+      padding: 80px 2rem;
+      background: var(--text-primary);
+      color: var(--white);
+    }
+
+    .code-section .section-header h2,
+    .code-section .section-header p {
+      color: var(--white);
+    }
+
+    .code-section .section-header p {
+      opacity: 0.8;
+    }
+
+    .code-examples {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .code-block {
+      background: #1f2937;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .code-header {
+      background: #374151;
+      padding: 0.75rem 1.25rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .code-header::before {
+      content: '';
+      display: flex;
+      gap: 6px;
+    }
+
+    .code-dots {
+      display: flex;
+      gap: 6px;
+      margin-right: 12px;
+    }
+
+    .code-dots span {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .code-dots span:nth-child(1) { background: #ef4444; }
+    .code-dots span:nth-child(2) { background: #f59e0b; }
+    .code-dots span:nth-child(3) { background: #10b981; }
+
+    .code-content {
+      padding: 1.5rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.875rem;
+      line-height: 1.7;
+      overflow-x: auto;
+    }
+
+    .code-content pre {
+      margin: 0;
+    }
+
+    .keyword { color: #c084fc; }
+    .string { color: #86efac; }
+    .comment { color: #6b7280; }
+    .function { color: #60a5fa; }
+    .number { color: #fbbf24; }
+
+    /* Compliance Section */
+    .compliance {
+      padding: 80px 2rem;
+      background: var(--white);
+    }
+
+    .compliance-badges {
+      display: flex;
+      justify-content: center;
+      gap: 3rem;
+      flex-wrap: wrap;
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    .compliance-badge {
+      text-align: center;
+      padding: 1.5rem 2rem;
+      background: var(--card-bg);
+      border-radius: 12px;
+      min-width: 140px;
+    }
+
+    .compliance-badge h4 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--teal);
+      margin-bottom: 0.25rem;
+    }
+
+    .compliance-badge p {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    /* CTA Section */
+    .cta {
+      padding: 80px 2rem;
+      background: linear-gradient(135deg, var(--teal) 0%, var(--terracotta-dark) 100%);
+      text-align: center;
+      color: var(--white);
+    }
+
+    .cta h2 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+
+    .cta p {
+      font-size: 1.1rem;
+      opacity: 0.9;
+      margin-bottom: 2rem;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .cta .btn-primary {
+      background: var(--white);
+      color: var(--teal-dark);
+    }
+
+    .cta .btn-primary:hover {
+      background: var(--card-bg);
+    }
+
+    .cta .btn-secondary {
+      background: transparent;
+      color: var(--white);
+      border-color: rgba(255, 255, 255, 0.4);
+    }
+
+    .cta .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: var(--white);
+    }
+
+    /* Footer */
+    footer {
+      background: var(--text-primary);
+      color: var(--white);
+      padding: 60px 2rem 30px;
+    }
+
+    .footer-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 4rem;
+    }
+
+    .footer-brand p {
+      color: var(--text-muted);
+      margin-top: 1rem;
+      font-size: 0.95rem;
+    }
+
+    .footer-column h4 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1.25rem;
+      color: var(--text-muted);
+    }
+
+    .footer-column ul {
+      list-style: none;
+    }
+
+    .footer-column li {
+      margin-bottom: 0.75rem;
+    }
+
+    .footer-column a {
+      color: #d1d5db;
+      font-size: 0.95rem;
+    }
+
+    .footer-column a:hover {
+      color: var(--teal);
+    }
+
+    .footer-bottom {
+      max-width: 1200px;
+      margin: 3rem auto 0;
+      padding-top: 2rem;
+      border-top: 1px solid #374151;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 2rem;
+    }
+
+    .footer-links a {
+      color: var(--text-muted);
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .paradigms-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+
+      .footer-content {
+        grid-template-columns: 1fr 1fr;
+        gap: 3rem;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .nav-links {
+        display: none;
+      }
+
+      .hero h1 {
+        font-size: 2.5rem;
+      }
+
+      .hero-stats {
+        flex-direction: column;
+        gap: 2rem;
+      }
+
+      .paradigms-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .code-examples {
+        grid-template-columns: 1fr;
+      }
+
+      .compliance-badges {
+        gap: 1.5rem;
+      }
+
+      .footer-content {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+      }
+
+      .footer-bottom {
+        flex-direction: column;
+        gap: 1rem;
+        text-align: center;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .paradigms-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-buttons {
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .btn {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Navigation -->
+  <nav>
+    <div class="nav-container">
+      <a href="/" class="nav-logo">
+        <img src="logo.png" alt="Aegis-DB">
+        <span>Aegis-DB</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#paradigms">Data Models</a>
+        <a href="#compliance">Compliance</a>
+        <a href="https://automatanexus.github.io/Aegis-DB/">Documentation</a>
+        <a href="https://github.com/AutomataNexus/Aegis-DB" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-content">
+      <div class="hero-badge">v0.2.1 - Multi-Database Support</div>
+      <h1>The <span>Multi-paradigm</span> Database<br>for Regulated Industries</h1>
+      <p>SQL, Document, TimeSeries, Graph, and Streaming in one unified platform. Built in Rust for performance, security, and compliance.</p>
+      <div class="hero-buttons">
+        <a href="https://automatanexus.github.io/Aegis-DB/getting-started.html" class="btn btn-primary">Get Started</a>
+        <a href="https://github.com/AutomataNexus/Aegis-DB" class="btn btn-secondary">View on GitHub</a>
+      </div>
+      <div class="hero-stats">
+        <div class="stat">
+          <div class="stat-value">5</div>
+          <div class="stat-label">Data Paradigms</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">12</div>
+          <div class="stat-label">Rust Crates</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">5</div>
+          <div class="stat-label">Compliance Frameworks</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="features" id="features">
+    <div class="section-header">
+      <h2>Enterprise-Ready Features</h2>
+      <p>Built from the ground up for organizations that demand security, performance, and regulatory compliance.</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🔐</div>
+        <h3>Enterprise Security</h3>
+        <p>TLS 1.3, Argon2id password hashing, MFA/TOTP, RBAC with 25+ permissions, and HashiCorp Vault integration.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3>High Performance</h3>
+        <p>MVCC with snapshot isolation, vectorized query execution, LZ4/Zstd compression, and async I/O throughout.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔄</div>
+        <h3>Multi-Database</h3>
+        <p>Isolated databases per application with shared infrastructure. Perfect for multi-tenant deployments.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <h3>Real-time Dashboard</h3>
+        <p>WebAssembly-powered dashboard for cluster monitoring, query building, and database management.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🌐</div>
+        <h3>Clustering & Replication</h3>
+        <p>Raft consensus, 2-phase commit, CRDTs for conflict resolution, and consistent hashing for sharding.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📝</div>
+        <h3>Comprehensive Audit</h3>
+        <p>Immutable hash-chain audit trail, breach detection, and full activity logging for compliance.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Paradigms Section -->
+  <section class="paradigms" id="paradigms">
+    <div class="section-header">
+      <h2>Five Data Models, One Platform</h2>
+      <p>Use the right model for each use case without managing multiple databases.</p>
+    </div>
+    <div class="paradigms-grid">
+      <div class="paradigm-card">
+        <div class="paradigm-icon">📋</div>
+        <h4>SQL/Relational</h4>
+        <p>ANSI SQL with joins, transactions, and indexes</p>
+      </div>
+      <div class="paradigm-card">
+        <div class="paradigm-icon">📄</div>
+        <h4>Document</h4>
+        <p>JSON/BSON storage with nested queries</p>
+      </div>
+      <div class="paradigm-card">
+        <div class="paradigm-icon">📈</div>
+        <h4>TimeSeries</h4>
+        <p>Gorilla compression, downsampling, retention</p>
+      </div>
+      <div class="paradigm-card">
+        <div class="paradigm-icon">🔗</div>
+        <h4>Graph</h4>
+        <p>Nodes, edges, traversals, path queries</p>
+      </div>
+      <div class="paradigm-card">
+        <div class="paradigm-icon">🌊</div>
+        <h4>Streaming</h4>
+        <p>Real-time data streams with windowing</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Code Section -->
+  <section class="code-section">
+    <div class="section-header">
+      <h2>Simple, Powerful APIs</h2>
+      <p>Connect with Rust, Python, JavaScript, or any HTTP client.</p>
+    </div>
+    <div class="code-examples">
+      <div class="code-block">
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          Rust
+        </div>
+        <div class="code-content">
+<pre><span class="keyword">use</span> aegis_client::AegisClient;
+
+<span class="keyword">let</span> client = AegisClient::connect(<span class="string">"localhost:9090"</span>).<span class="keyword">await</span>?;
+
+client.execute(<span class="string">"CREATE TABLE users (
+    id INT PRIMARY KEY,
+    name TEXT,
+    email TEXT
+)"</span>).<span class="keyword">await</span>?;
+
+<span class="keyword">let</span> rows = client.query(<span class="string">"SELECT * FROM users"</span>).<span class="keyword">await</span>?;</pre>
+        </div>
+      </div>
+      <div class="code-block">
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          Python
+        </div>
+        <div class="code-content">
+<pre><span class="keyword">from</span> aegis_client <span class="keyword">import</span> AegisClient
+
+client = AegisClient(<span class="string">"localhost:9090"</span>)
+
+<span class="comment"># SQL queries</span>
+client.execute(<span class="string">"INSERT INTO users VALUES (1, 'Alice')"</span>)
+rows = client.query(<span class="string">"SELECT * FROM users"</span>)
+
+<span class="comment"># Document store</span>
+client.documents.insert(<span class="string">"users"</span>, {<span class="string">"name"</span>: <span class="string">"Bob"</span>})</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Compliance Section -->
+  <section class="compliance" id="compliance">
+    <div class="section-header">
+      <h2>Built for Compliance</h2>
+      <p>Out-of-the-box support for major regulatory frameworks with built-in APIs for data subject rights.</p>
+    </div>
+    <div class="compliance-badges">
+      <div class="compliance-badge">
+        <h4>HIPAA</h4>
+        <p>Healthcare</p>
+      </div>
+      <div class="compliance-badge">
+        <h4>GDPR</h4>
+        <p>EU Privacy</p>
+      </div>
+      <div class="compliance-badge">
+        <h4>CCPA</h4>
+        <p>California</p>
+      </div>
+      <div class="compliance-badge">
+        <h4>SOC 2</h4>
+        <p>Type II</p>
+      </div>
+      <div class="compliance-badge">
+        <h4>FERPA</h4>
+        <p>Education</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="cta">
+    <h2>Ready to Get Started?</h2>
+    <p>Deploy Aegis-DB in minutes. Self-hosted, open source, and built for the enterprise.</p>
+    <div class="hero-buttons">
+      <a href="https://automatanexus.github.io/Aegis-DB/getting-started.html" class="btn btn-primary">Read the Docs</a>
+      <a href="https://github.com/AutomataNexus/Aegis-DB/releases" class="btn btn-secondary">Download Release</a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-content">
+      <div class="footer-brand">
+        <div class="nav-logo" style="color: white;">
+          <img src="logo.png" alt="Aegis-DB" style="height: 32px; filter: brightness(0) invert(1);">
+          <span>Aegis-DB</span>
+        </div>
+        <p>Multi-paradigm database built for regulated industries. Open source under BSL-1.1.</p>
+      </div>
+      <div class="footer-column">
+        <h4>Product</h4>
+        <ul>
+          <li><a href="https://automatanexus.github.io/Aegis-DB/">Documentation</a></li>
+          <li><a href="https://github.com/AutomataNexus/Aegis-DB/releases">Releases</a></li>
+          <li><a href="https://automatanexus.github.io/Aegis-DB/AegisQL.html">AegisQL</a></li>
+        </ul>
+      </div>
+      <div class="footer-column">
+        <h4>Resources</h4>
+        <ul>
+          <li><a href="https://automatanexus.github.io/Aegis-DB/getting-started.html">Getting Started</a></li>
+          <li><a href="https://automatanexus.github.io/Aegis-DB/SECURITY.html">Security</a></li>
+          <li><a href="https://automatanexus.github.io/Aegis-DB/COMPLIANCE.html">Compliance</a></li>
+        </ul>
+      </div>
+      <div class="footer-column">
+        <h4>Company</h4>
+        <ul>
+          <li><a href="https://automatanexus.com">AutomataNexus</a></li>
+          <li><a href="https://github.com/AutomataNexus">GitHub</a></li>
+          <li><a href="https://gitlab.com/automatanexus">GitLab</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <div>&copy; 2024-2026 AutomataNexus LLC. Licensed under BSL-1.1.</div>
+      <div class="footer-links">
+        <a href="mailto:devops@automatanexus.com">Contact</a>
+        <a href="https://github.com/AutomataNexus/Aegis-DB/blob/main/LICENSING.md">License</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
