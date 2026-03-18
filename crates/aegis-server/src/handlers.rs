@@ -867,6 +867,7 @@ pub async fn delete_document(
     let doc_id = DocumentId::new(&id);
     match state.document_engine.delete(&collection, &doc_id) {
         Ok(doc) => {
+            state.flush_collection(&collection);
             let response = DocumentResponse {
                 id: doc.id.to_string(),
                 collection: collection.clone(),
@@ -902,6 +903,7 @@ pub async fn update_document(
 
     match state.document_engine.update(&collection, &doc_id, doc) {
         Ok(()) => {
+            state.flush_collection(&collection);
             // Fetch the updated document to return it
             match state.document_engine.get(&collection, &doc_id) {
                 Ok(Some(updated_doc)) => {
@@ -952,6 +954,7 @@ pub async fn patch_document(
 
     match state.document_engine.update(&collection, &doc_id, updated_doc) {
         Ok(()) => {
+            state.flush_collection(&collection);
             // Fetch the updated document to return it
             match state.document_engine.get(&collection, &doc_id) {
                 Ok(Some(final_doc)) => {
@@ -1019,7 +1022,10 @@ pub async fn insert_document(
 
     let doc = json_to_doc(doc_json);
     match state.document_engine.insert(&collection, doc) {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"success": true, "id": id.to_string()}))),
+        Ok(id) => {
+            state.flush_collection(&collection);
+            (StatusCode::CREATED, Json(serde_json::json!({"success": true, "id": id.to_string()})))
+        }
         Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"success": false, "error": e.to_string()}))),
     }
 }
@@ -2003,6 +2009,8 @@ pub async fn update_settings(
     state.activity.log_config("Updated server settings", None);
     let mut settings = state.settings.write().await;
     *settings = new_settings.clone();
+    drop(settings);
+    state.save_settings().await;
     (StatusCode::OK, Json(serde_json::json!({"success": true, "settings": new_settings})))
 }
 
