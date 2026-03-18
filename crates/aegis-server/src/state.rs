@@ -206,7 +206,7 @@ impl AppState {
             kv_store,
             metrics: Arc::new(RwLock::new(Metrics::default())),
             admin,
-            auth: Arc::new(AuthService::new()),
+            auth: Arc::new(AuthService::with_data_dir(data_dir.clone())),
             activity,
             settings: Arc::new(RwLock::new(ServerSettings::default())),
             metrics_history,
