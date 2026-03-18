@@ -13,6 +13,7 @@ use parking_lot::RwLock;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // =============================================================================
@@ -306,6 +307,7 @@ pub struct AuthService {
     pending_mfa: RwLock<HashMap<String, PendingMfaSession>>,
     session_duration: Duration,
     mfa_timeout: Duration,
+    data_dir: Option<PathBuf>,
 }
 
 impl AuthService {
@@ -316,50 +318,100 @@ impl AuthService {
     /// starts with no users and the first user must be created via the API
     /// or CLI.
     pub fn new() -> Self {
+        Self::with_data_dir(None)
+    }
+
+    /// Create an authentication service with optional persistence to disk.
+    pub fn with_data_dir(data_dir: Option<PathBuf>) -> Self {
         let mut users = HashMap::new();
-        let mut user_count = 0;
+
+        // Load persisted users from disk if data_dir is configured
+        if let Some(ref dir) = data_dir {
+            let users_path = dir.join("users.json");
+            if users_path.exists() {
+                match std::fs::read_to_string(&users_path) {
+                    Ok(data) => match serde_json::from_str::<HashMap<String, User>>(&data) {
+                        Ok(loaded) => {
+                            tracing::info!("Loaded {} users from {}", loaded.len(), users_path.display());
+                            users = loaded;
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to parse users file {}: {}", users_path.display(), e);
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to read users file {}: {}", users_path.display(), e);
+                    }
+                }
+            }
+        }
 
         // Check for initial admin user from environment variables
+        // Only create if the admin user doesn't already exist (from disk)
         if let (Ok(username), Ok(password)) = (
             std::env::var("AEGIS_ADMIN_USERNAME"),
             std::env::var("AEGIS_ADMIN_PASSWORD"),
         ) {
-            // Validate password meets security requirements
-            if password.len() >= 12 {
-                let email = std::env::var("AEGIS_ADMIN_EMAIL")
-                    .unwrap_or_else(|_| format!("{}@localhost", username));
+            if !users.contains_key(&username) {
+                if password.len() >= 12 {
+                    let email = std::env::var("AEGIS_ADMIN_EMAIL")
+                        .unwrap_or_else(|_| format!("{}@localhost", username));
 
-                user_count += 1;
-                let admin = User {
-                    id: format!("user-{:03}", user_count),
-                    username: username.clone(),
-                    email,
-                    password_hash: hash_password(&password),
-                    role: UserRole::Admin,
-                    mfa_enabled: false,
-                    mfa_secret: None,
-                    created_at: now_timestamp(),
-                    last_login: None,
-                };
-                tracing::info!("Created initial admin user '{}' from environment", username);
-                users.insert(admin.username.clone(), admin);
-            } else {
-                tracing::warn!(
-                    "AEGIS_ADMIN_PASSWORD must be at least 12 characters. Initial admin user not created."
-                );
+                    let user_count = users.len() + 1;
+                    let admin = User {
+                        id: format!("user-{:03}", user_count),
+                        username: username.clone(),
+                        email,
+                        password_hash: hash_password(&password),
+                        role: UserRole::Admin,
+                        mfa_enabled: false,
+                        mfa_secret: None,
+                        created_at: now_timestamp(),
+                        last_login: None,
+                    };
+                    tracing::info!("Created initial admin user '{}' from environment", username);
+                    users.insert(admin.username.clone(), admin);
+                } else {
+                    tracing::warn!(
+                        "AEGIS_ADMIN_PASSWORD must be at least 12 characters. Initial admin user not created."
+                    );
+                }
             }
-        } else {
+        } else if users.is_empty() {
             tracing::info!(
                 "No initial admin configured. Set AEGIS_ADMIN_USERNAME and AEGIS_ADMIN_PASSWORD to create one."
             );
         }
 
-        Self {
+        let service = Self {
             users: RwLock::new(users),
             sessions: RwLock::new(HashMap::new()),
             pending_mfa: RwLock::new(HashMap::new()),
             session_duration: Duration::from_secs(24 * 60 * 60), // 24 hours
             mfa_timeout: Duration::from_secs(5 * 60), // 5 minutes
+            data_dir,
+        };
+
+        // Persist initial state (env-created admin) to disk
+        service.flush_users_to_disk();
+
+        service
+    }
+
+    /// Flush users HashMap to disk as JSON. No-op if data_dir is None.
+    fn flush_users_to_disk(&self) {
+        let Some(ref dir) = self.data_dir else { return };
+        let users_path = dir.join("users.json");
+        let users = self.users.read();
+        match serde_json::to_string_pretty(&*users) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&users_path, json) {
+                    tracing::error!("Failed to write users to {}: {}", users_path.display(), e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to serialize users: {}", e);
+            }
         }
     }
 
@@ -542,6 +594,8 @@ impl AuthService {
 
         // Note: Role assignment should be handled by RbacManager separately
         tracing::info!("Created user '{}' with role '{}'", username, role);
+        drop(users);
+        self.flush_users_to_disk();
 
         Ok(user_info)
     }
@@ -569,7 +623,11 @@ impl AuthService {
             user.password_hash = hash_password(&new_password);
         }
 
-        Ok(UserInfo::from(user as &User))
+        let info = UserInfo::from(user as &User);
+        drop(users);
+        self.flush_users_to_disk();
+
+        Ok(info)
     }
 
     /// Delete a user.
@@ -586,6 +644,8 @@ impl AuthService {
         }
 
         users.remove(username);
+        drop(users);
+        self.flush_users_to_disk();
         Ok(())
     }
 
@@ -607,6 +667,8 @@ impl AuthService {
         user.mfa_enabled = true;
 
         tracing::info!("Enabled MFA for user '{}'", username);
+        drop(users);
+        self.flush_users_to_disk();
 
         Ok(secret)
     }
@@ -626,6 +688,8 @@ impl AuthService {
         user.mfa_enabled = false;
 
         tracing::info!("Disabled MFA for user '{}'", username);
+        drop(users);
+        self.flush_users_to_disk();
 
         Ok(())
     }
