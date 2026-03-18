@@ -74,14 +74,25 @@ pub struct ExecutionContext {
     /// Actual index data structures
     table_indexes: HashMap<String, Arc<TableIndexManager>>,
     batch_size: usize,
+    /// Global version clock — incremented on every mutation.
+    version_clock: u64,
+    /// Snapshot version for the current transaction (0 = no active transaction, see all live rows).
+    snapshot_version: Option<u64>,
 }
 
-/// In-memory table data for execution.
+/// In-memory table data for execution with row-level versioning.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TableData {
     pub name: String,
     pub columns: Vec<String>,
     pub rows: Vec<Row>,
+    /// Version at which each row was created (parallel to `rows`).
+    /// Readers with a snapshot version < created_version won't see the row.
+    #[serde(default)]
+    pub row_created_version: Vec<u64>,
+    /// Version at which each row was deleted (0 = alive).
+    #[serde(default)]
+    pub row_deleted_version: Vec<u64>,
 }
 
 /// Stored table constraint.
@@ -147,6 +158,43 @@ impl ExecutionContext {
             indexes: HashMap::new(),
             table_indexes: HashMap::new(),
             batch_size: 1024,
+            version_clock: 1,
+            snapshot_version: None,
+        }
+    }
+
+    /// Take an MVCC snapshot — subsequent reads will only see rows visible at this version.
+    pub fn begin_snapshot(&mut self) {
+        self.snapshot_version = Some(self.version_clock);
+    }
+
+    /// Release the MVCC snapshot and advance the clock.
+    pub fn commit_snapshot(&mut self) {
+        self.version_clock += 1;
+        self.snapshot_version = None;
+    }
+
+    /// Release the MVCC snapshot without advancing.
+    pub fn rollback_snapshot(&mut self) {
+        self.snapshot_version = None;
+    }
+
+    /// Current version clock value.
+    pub fn current_version(&self) -> u64 {
+        self.version_clock
+    }
+
+    /// Check if a row at index `i` is visible given the current snapshot.
+    fn is_row_visible(&self, table: &TableData, i: usize) -> bool {
+        let created = table.row_created_version.get(i).copied().unwrap_or(0);
+        let deleted = table.row_deleted_version.get(i).copied().unwrap_or(0);
+
+        if let Some(snap) = self.snapshot_version {
+            // Snapshot isolation: row must have been created before snapshot and not deleted before snapshot
+            created <= snap && (deleted == 0 || deleted > snap)
+        } else {
+            // No active snapshot: row is visible if alive
+            deleted == 0
         }
     }
 
@@ -206,6 +254,8 @@ impl ExecutionContext {
             name: name.clone(),
             columns: column_names,
             rows: Vec::new(),
+            row_created_version: Vec::new(),
+            row_deleted_version: Vec::new(),
         };
         self.tables.insert(name, Arc::new(RwLock::new(table_data)));
 
@@ -579,6 +629,32 @@ impl ExecutionContext {
         ctx
     }
 
+    /// Restore this context in-place from a snapshot (used for ROLLBACK).
+    pub fn restore_from_snapshot(&mut self, snapshot: ExecutionContextSnapshot) {
+        self.tables.clear();
+        self.table_schemas.clear();
+        self.indexes.clear();
+        self.table_indexes.clear();
+
+        for schema in snapshot.schemas {
+            self.table_schemas.insert(schema.name.clone(), schema);
+        }
+        for table in snapshot.tables {
+            self.tables.insert(table.name.clone(), Arc::new(RwLock::new(table)));
+        }
+        self.indexes = snapshot.indexes.clone();
+        for (table_name, index_schemas) in snapshot.indexes {
+            for index_schema in index_schemas {
+                let _ = self.rebuild_index(
+                    &index_schema.name,
+                    &table_name,
+                    &index_schema.columns,
+                    index_schema.unique,
+                );
+            }
+        }
+    }
+
     /// Rebuild an index from existing table data.
     fn rebuild_index(
         &mut self,
@@ -724,6 +800,8 @@ impl ExecutionContext {
             }
 
             table_data.rows.push(Row { values: new_row });
+            table_data.row_created_version.push(self.version_clock);
+            table_data.row_deleted_version.push(0);
             inserted += 1;
         }
 
@@ -754,11 +832,14 @@ impl ExecutionContext {
 
         let mut updated = 0u64;
 
-        for row in &mut table_data.rows {
-            let should_update = predicate.map(|p| p(row, &columns)).unwrap_or(true);
+        for i in 0..table_data.rows.len() {
+            if !self.is_row_visible(&table_data, i) {
+                continue;
+            }
+            let should_update = predicate.map(|p| p(&table_data.rows[i], &columns)).unwrap_or(true);
             if should_update {
                 for (col_idx, value) in &assignment_indices {
-                    row.values[*col_idx] = value.clone();
+                    table_data.rows[i].values[*col_idx] = value.clone();
                 }
                 updated += 1;
             }
@@ -779,16 +860,55 @@ impl ExecutionContext {
         let mut table_data = table.write()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
         let columns = table_data.columns.clone();
+        let ver = self.version_clock;
 
-        let original_len = table_data.rows.len();
+        let mut deleted = 0u64;
 
         if let Some(pred) = predicate {
-            table_data.rows.retain(|row| !pred(row, &columns));
+            for i in 0..table_data.rows.len() {
+                // Only consider visible rows
+                if !self.is_row_visible(&table_data, i) {
+                    continue;
+                }
+                if pred(&table_data.rows[i], &columns) {
+                    // Mark as deleted at current version
+                    if i < table_data.row_deleted_version.len() {
+                        table_data.row_deleted_version[i] = ver;
+                    }
+                    deleted += 1;
+                }
+            }
         } else {
-            table_data.rows.clear();
+            for i in 0..table_data.rows.len() {
+                if self.is_row_visible(&table_data, i) {
+                    if i < table_data.row_deleted_version.len() {
+                        table_data.row_deleted_version[i] = ver;
+                    }
+                    deleted += 1;
+                }
+            }
         }
 
-        Ok((original_len - table_data.rows.len()) as u64)
+        // If no active snapshot, physically remove deleted rows (compaction)
+        if self.snapshot_version.is_none() {
+            let mut i = 0;
+            while i < table_data.rows.len() {
+                let del_ver = table_data.row_deleted_version.get(i).copied().unwrap_or(0);
+                if del_ver > 0 {
+                    table_data.rows.remove(i);
+                    if i < table_data.row_created_version.len() {
+                        table_data.row_created_version.remove(i);
+                    }
+                    if i < table_data.row_deleted_version.len() {
+                        table_data.row_deleted_version.remove(i);
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        Ok(deleted)
     }
 }
 
@@ -906,6 +1026,23 @@ impl Executor {
             PlanNode::Insert(node) => self.execute_insert(node),
             PlanNode::Update(node) => self.execute_update(node),
             PlanNode::Delete(node) => self.execute_delete(node),
+
+            // Transaction control — return status message, actual logic in QueryEngine
+            PlanNode::BeginTransaction => Ok(QueryResult {
+                columns: vec!["status".to_string()],
+                rows: vec![Row { values: vec![Value::String("BEGIN".to_string())] }],
+                rows_affected: 0,
+            }),
+            PlanNode::CommitTransaction => Ok(QueryResult {
+                columns: vec!["status".to_string()],
+                rows: vec![Row { values: vec![Value::String("COMMIT".to_string())] }],
+                rows_affected: 0,
+            }),
+            PlanNode::RollbackTransaction => Ok(QueryResult {
+                columns: vec!["status".to_string()],
+                rows: vec![Row { values: vec![Value::String("ROLLBACK".to_string())] }],
+                rows_affected: 0,
+            }),
 
             // Query operations (SELECT)
             _ => self.execute_query(root),
@@ -1250,8 +1387,9 @@ impl Executor {
             // DDL and DML nodes are handled in execute(), not here
             PlanNode::CreateTable(_) | PlanNode::DropTable(_) | PlanNode::AlterTable(_) |
             PlanNode::CreateIndex(_) | PlanNode::DropIndex(_) |
-            PlanNode::Insert(_) | PlanNode::Update(_) | PlanNode::Delete(_) => {
-                Err(ExecutorError::Internal("DDL/DML nodes should not be in operator tree".to_string()))
+            PlanNode::Insert(_) | PlanNode::Update(_) | PlanNode::Delete(_) |
+            PlanNode::BeginTransaction | PlanNode::CommitTransaction | PlanNode::RollbackTransaction => {
+                Err(ExecutorError::Internal("DDL/DML/transaction nodes should not be in operator tree".to_string()))
             }
         }
     }
@@ -1279,8 +1417,10 @@ struct ScanOperator {
     columns: Vec<String>,
     position: usize,
     batch_size: usize,
-    // Cache the rows to avoid repeated locking
+    // Cache the visible rows to avoid repeated locking
     cached_rows: Option<Vec<Row>>,
+    /// MVCC snapshot version (None = see all live rows)
+    snapshot_version: Option<u64>,
 }
 
 impl ScanOperator {
@@ -1305,19 +1445,32 @@ impl ScanOperator {
             position: 0,
             batch_size: context.batch_size(),
             cached_rows: None,
+            snapshot_version: context.snapshot_version,
         })
     }
 }
 
 impl Operator for ScanOperator {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
-        // Cache rows on first access
+        // Cache visible rows on first access
         if self.cached_rows.is_none() {
             let table_data = self.table.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
-            self.cached_rows = Some(table_data.rows.clone());
+            let mut visible = Vec::new();
+            for i in 0..table_data.rows.len() {
+                let created = table_data.row_created_version.get(i).copied().unwrap_or(0);
+                let deleted = table_data.row_deleted_version.get(i).copied().unwrap_or(0);
+                let vis = if let Some(snap) = self.snapshot_version {
+                    created <= snap && (deleted == 0 || deleted > snap)
+                } else {
+                    deleted == 0
+                };
+                if vis {
+                    visible.push(table_data.rows[i].clone());
+                }
+            }
+            self.cached_rows = Some(visible);
         }
 
-        // Safe to use expect: we just set cached_rows to Some above if it was None
         let rows = self.cached_rows.as_ref().expect("cached_rows was just set to Some");
 
         if self.position >= rows.len() {
@@ -2154,7 +2307,10 @@ fn substitute_parameters(node: &PlanNode, params: &[Value]) -> ExecutorResult<Pl
         PlanNode::AlterTable(_) |
         PlanNode::CreateIndex(_) |
         PlanNode::DropIndex(_) |
-        PlanNode::Empty => Ok(node.clone()),
+        PlanNode::Empty |
+        PlanNode::BeginTransaction |
+        PlanNode::CommitTransaction |
+        PlanNode::RollbackTransaction => Ok(node.clone()),
     }
 }
 
@@ -2766,6 +2922,8 @@ mod tests {
                     ],
                 },
             ],
+            row_created_version: vec![0, 0, 0],
+            row_deleted_version: vec![0, 0, 0],
         });
 
         context

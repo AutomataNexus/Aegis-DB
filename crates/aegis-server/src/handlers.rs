@@ -74,11 +74,20 @@ pub struct QueryResponse {
 /// Execute a SQL query.
 pub async fn execute_query(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<QueryRequest>,
 ) -> impl IntoResponse {
     let start = Instant::now();
+    let is_replicated = headers.get("x-aegis-replicated").is_some();
 
-    let result = state.execute_query(&request.sql, request.database.as_deref()).await;
+    let result = if is_replicated {
+        // Replicated query — execute locally, don't re-replicate
+        state.execute_query_replicated(&request.sql, request.database.as_deref()).await
+    } else if !request.params.is_empty() {
+        state.execute_query_with_params(&request.sql, request.database.as_deref(), &request.params).await
+    } else {
+        state.execute_query(&request.sql, request.database.as_deref()).await
+    };
     let duration_ms = start.elapsed().as_millis() as u64;
 
     match result {
