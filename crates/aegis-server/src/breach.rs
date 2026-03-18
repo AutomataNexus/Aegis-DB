@@ -548,20 +548,71 @@ pub struct BreachDetector {
     event_counter: AtomicU64,
     /// Registered notifiers.
     notifiers: RwLock<Vec<Box<dyn BreachNotifier>>>,
+    /// Optional data directory for persisting incidents to disk.
+    data_dir: Option<PathBuf>,
 }
 
 impl BreachDetector {
-    /// Create a new breach detector with default configuration.
+    /// Create a new breach detector with default configuration (no persistence).
     pub fn new() -> Self {
+        Self::with_data_dir(None)
+    }
+
+    /// Create a new breach detector with optional disk persistence for incidents.
+    ///
+    /// If `data_dir` is `Some`, incidents are loaded from `{data_dir}/breach_incidents.json`
+    /// on startup and flushed back after every new incident.
+    pub fn with_data_dir(data_dir: Option<PathBuf>) -> Self {
+        let mut incidents = VecDeque::with_capacity(MAX_INCIDENTS_IN_MEMORY);
+        let mut counter: u64 = 1;
+
+        if let Some(ref dir) = data_dir {
+            let path = dir.join("breach_incidents.json");
+            if path.exists() {
+                match std::fs::read_to_string(&path) {
+                    Ok(contents) => {
+                        match serde_json::from_str::<Vec<BreachIncident>>(&contents) {
+                            Ok(loaded) => {
+                                let count = loaded.len();
+                                for inc in loaded {
+                                    incidents.push_back(inc);
+                                }
+                                counter = (count as u64).saturating_add(1);
+                                tracing::info!(
+                                    "Loaded {} breach incidents from disk",
+                                    count
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to parse breach incidents from {}: {}",
+                                    path.display(),
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to read breach incidents from {}: {}",
+                            path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
         Self {
             config: RwLock::new(DetectionConfig::default()),
             events: RwLock::new(HashMap::new()),
             failed_logins: RwLock::new(HashMap::new()),
             access_patterns: RwLock::new(HashMap::new()),
-            incidents: RwLock::new(VecDeque::with_capacity(MAX_INCIDENTS_IN_MEMORY)),
-            incident_counter: AtomicU64::new(1),
+            incidents: RwLock::new(incidents),
+            incident_counter: AtomicU64::new(counter),
             event_counter: AtomicU64::new(1),
             notifiers: RwLock::new(Vec::new()),
+            data_dir,
         }
     }
 
@@ -576,6 +627,27 @@ impl BreachDetector {
             incident_counter: AtomicU64::new(1),
             event_counter: AtomicU64::new(1),
             notifiers: RwLock::new(Vec::new()),
+            data_dir: None,
+        }
+    }
+
+    /// Flush all incidents to disk (if data_dir is configured).
+    fn flush_incidents_to_disk(&self) {
+        let Some(ref dir) = self.data_dir else {
+            return;
+        };
+        let path = dir.join("breach_incidents.json");
+        let incidents = self.incidents.read();
+        let vec: Vec<&BreachIncident> = incidents.iter().collect();
+        match serde_json::to_string_pretty(&vec) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    tracing::error!("Failed to write breach incidents to {}: {}", path.display(), e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to serialize breach incidents: {}", e);
+            }
         }
     }
 
@@ -1080,6 +1152,9 @@ impl BreachDetector {
             }
             incidents.push_back(incident.clone());
         }
+
+        // Persist incidents to disk for compliance
+        self.flush_incidents_to_disk();
 
         tracing::warn!(
             "Breach incident detected: {} (severity: {})",

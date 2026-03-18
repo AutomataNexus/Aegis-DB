@@ -16,6 +16,7 @@ use axum::{
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // =============================================================================
@@ -280,16 +281,91 @@ pub struct ConsentManager {
     do_not_sell_list: RwLock<std::collections::HashSet<String>>,
     /// Record counter for ID generation
     record_counter: RwLock<u64>,
+    /// Optional data directory for disk persistence
+    data_dir: Option<PathBuf>,
+}
+
+/// Serializable snapshot of all consent data for disk persistence.
+#[derive(Serialize, Deserialize)]
+struct ConsentSnapshot {
+    records: HashMap<String, HashMap<Purpose, ConsentRecord>>,
+    history: HashMap<String, Vec<ConsentHistoryEntry>>,
+    do_not_sell_list: std::collections::HashSet<String>,
+    record_counter: u64,
 }
 
 impl ConsentManager {
-    /// Create a new consent manager.
+    /// Create a new consent manager with no disk persistence.
     pub fn new() -> Self {
+        Self::with_data_dir(None)
+    }
+
+    /// Create a new consent manager with optional disk persistence.
+    /// If `data_dir` is provided, attempts to load existing data from `{data_dir}/consent.json`.
+    pub fn with_data_dir(data_dir: Option<PathBuf>) -> Self {
+        if let Some(ref dir) = data_dir {
+            let path = dir.join("consent.json");
+            if path.exists() {
+                match std::fs::read_to_string(&path) {
+                    Ok(contents) => match serde_json::from_str::<ConsentSnapshot>(&contents) {
+                        Ok(snapshot) => {
+                            tracing::info!("Loaded consent data from {}", path.display());
+                            return Self {
+                                records: RwLock::new(snapshot.records),
+                                history: RwLock::new(snapshot.history),
+                                do_not_sell_list: RwLock::new(snapshot.do_not_sell_list),
+                                record_counter: RwLock::new(snapshot.record_counter),
+                                data_dir,
+                            };
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to deserialize consent data from {}: {}", path.display(), e);
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to read consent data from {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+
         Self {
             records: RwLock::new(HashMap::new()),
             history: RwLock::new(HashMap::new()),
             do_not_sell_list: RwLock::new(std::collections::HashSet::new()),
             record_counter: RwLock::new(0),
+            data_dir,
+        }
+    }
+
+    /// Flush all consent data to disk if a data directory is configured.
+    fn flush_to_disk(&self) {
+        let Some(ref dir) = self.data_dir else {
+            return;
+        };
+
+        let snapshot = ConsentSnapshot {
+            records: self.records.read().clone(),
+            history: self.history.read().clone(),
+            do_not_sell_list: self.do_not_sell_list.read().clone(),
+            record_counter: *self.record_counter.read(),
+        };
+
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::error!("Failed to create consent data directory {}: {}", dir.display(), e);
+            return;
+        }
+
+        let path = dir.join("consent.json");
+        match serde_json::to_string_pretty(&snapshot) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    tracing::error!("Failed to write consent data to {}: {}", path.display(), e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to serialize consent data: {}", e);
+            }
         }
     }
 
@@ -375,6 +451,8 @@ impl ConsentManager {
             granted,
             action
         );
+
+        self.flush_to_disk();
 
         record
     }
@@ -478,6 +556,8 @@ impl ConsentManager {
             actor
         );
 
+        self.flush_to_disk();
+
         Ok(record)
     }
 
@@ -549,6 +629,7 @@ impl ConsentManager {
                 subject_id,
                 actor
             );
+            self.flush_to_disk();
         }
 
         had_records || had_history

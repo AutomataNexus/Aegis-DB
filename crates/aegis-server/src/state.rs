@@ -91,23 +91,10 @@ impl AppState {
 
         // Initialize engines
         let document_engine = Arc::new(DocumentEngine::new());
-        let kv_store = Arc::new(KvStore::new());
+        let kv_store = Arc::new(KvStore::with_data_dir(data_dir.clone()));
 
         // Load persisted data if data directory is specified
         if let Some(ref dir) = data_dir {
-            // Load KV store
-            let kv_path = dir.join("kv_store.json");
-            if kv_path.exists() {
-                if let Ok(data) = std::fs::read_to_string(&kv_path) {
-                    if let Ok(entries) = serde_json::from_str::<Vec<KvEntry>>(&data) {
-                        for entry in entries {
-                            kv_store.set(entry.key, entry.value, entry.ttl);
-                        }
-                        tracing::info!("Loaded {} KV entries from disk", kv_store.count());
-                    }
-                }
-            }
-
             // Load document collections
             let docs_dir = dir.join("documents");
             if docs_dir.exists() {
@@ -140,8 +127,8 @@ impl AppState {
         let node_name_display = config.node_name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default();
         activity.log_system(&format!("Aegis DB server started - Node: {}{}", config.node_id, node_name_display));
 
-        // Create empty graph store (no sample data)
-        let graph_store = Arc::new(GraphStore::new());
+        // Create graph store with persistence
+        let graph_store = Arc::new(GraphStore::with_data_dir(data_dir.clone()));
 
         // Initialize metrics history with some data points
         let metrics_history = Arc::new(RwLock::new(VecDeque::new()));
@@ -172,7 +159,7 @@ impl AppState {
         };
 
         // Create breach detector with optional webhook notifier
-        let breach_detector = Arc::new(BreachDetector::new());
+        let breach_detector = Arc::new(BreachDetector::with_data_dir(data_dir.clone()));
         if let Ok(webhook_url) = std::env::var("AEGIS_BREACH_WEBHOOK_URL") {
             if !webhook_url.is_empty() {
                 tracing::info!("Breach webhook notification enabled: {}", webhook_url);
@@ -208,17 +195,94 @@ impl AppState {
             admin,
             auth: Arc::new(AuthService::with_data_dir(data_dir.clone())),
             activity,
-            settings: Arc::new(RwLock::new(ServerSettings::default())),
+            settings: Arc::new(RwLock::new({
+                let mut loaded_settings = ServerSettings::default();
+                if let Some(ref dir) = data_dir {
+                    let settings_path = dir.join("settings.json");
+                    if settings_path.exists() {
+                        match std::fs::read_to_string(&settings_path) {
+                            Ok(contents) => {
+                                match serde_json::from_str::<ServerSettings>(&contents) {
+                                    Ok(s) => {
+                                        tracing::info!("Loaded server settings from disk");
+                                        loaded_settings = s;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to parse settings from {}: {}",
+                                            settings_path.display(),
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to read settings from {}: {}",
+                                    settings_path.display(),
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+                loaded_settings
+            })),
             metrics_history,
             graph_store,
-            rbac: Arc::new(RbacManager::new()),
+            rbac: Arc::new(RbacManager::with_data_dir(data_dir.clone())),
             rate_limiter,
             login_rate_limiter,
             gdpr: Arc::new(GdprService::new()),
-            consent_manager: Arc::new(ConsentManager::new()),
+            consent_manager: Arc::new(ConsentManager::with_data_dir(data_dir.clone())),
             breach_detector,
             update_orchestrator,
             data_dir,
+        }
+    }
+
+    /// Save server settings to disk (if data_dir is configured).
+    pub async fn save_settings(&self) {
+        let Some(ref dir) = self.data_dir else {
+            return;
+        };
+        let path = dir.join("settings.json");
+        let settings = self.settings.read().await;
+        match serde_json::to_string_pretty(&*settings) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    tracing::error!("Failed to write settings to {}: {}", path.display(), e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to serialize settings: {}", e);
+            }
+        }
+    }
+
+    /// Flush a single document collection to disk (if data_dir is configured).
+    pub fn flush_collection(&self, collection_name: &str) {
+        let Some(ref dir) = self.data_dir else { return };
+        let docs_dir = dir.join("documents");
+        if let Err(e) = std::fs::create_dir_all(&docs_dir) {
+            tracing::error!("Failed to create documents dir: {}", e);
+            return;
+        }
+        let query = aegis_document::Query::new();
+        if let Ok(result) = self.document_engine.find(collection_name, &query) {
+            let docs: Vec<serde_json::Value> = result.documents
+                .iter()
+                .map(document_to_json)
+                .collect();
+            let path = docs_dir.join(format!("{}.json", collection_name));
+            match serde_json::to_string_pretty(&docs) {
+                Ok(json) => {
+                    if let Err(e) = std::fs::write(&path, json) {
+                        tracing::error!("Failed to write collection '{}': {}", collection_name, e);
+                    }
+                }
+                Err(e) => tracing::error!("Failed to serialize collection '{}': {}", collection_name, e),
+            }
         }
     }
 
@@ -415,6 +479,7 @@ pub struct DatabaseStats {
 /// In-memory key-value store with real persistence.
 pub struct KvStore {
     data: SyncRwLock<HashMap<String, KvEntry>>,
+    data_dir: Option<PathBuf>,
 }
 
 /// Key-value entry with metadata.
@@ -429,8 +494,48 @@ pub struct KvEntry {
 
 impl KvStore {
     pub fn new() -> Self {
+        Self::with_data_dir(None)
+    }
+
+    pub fn with_data_dir(data_dir: Option<PathBuf>) -> Self {
+        let mut entries = HashMap::new();
+
+        if let Some(ref dir) = data_dir {
+            let kv_path = dir.join("kv_store.json");
+            if kv_path.exists() {
+                if let Ok(data) = std::fs::read_to_string(&kv_path) {
+                    if let Ok(loaded) = serde_json::from_str::<Vec<KvEntry>>(&data) {
+                        for entry in loaded {
+                            entries.insert(entry.key.clone(), entry);
+                        }
+                        tracing::info!("Loaded {} KV entries from disk", entries.len());
+                    }
+                }
+            }
+        }
+
         Self {
-            data: SyncRwLock::new(HashMap::new()),
+            data: SyncRwLock::new(entries),
+            data_dir,
+        }
+    }
+
+    /// Flush all KV entries to disk as JSON.
+    fn flush_to_disk(&self) {
+        if let Some(ref dir) = self.data_dir {
+            let kv_path = dir.join("kv_store.json");
+            let data = self.data.read();
+            let entries: Vec<&KvEntry> = data.values().collect();
+            match serde_json::to_string_pretty(&entries) {
+                Ok(json) => {
+                    if let Err(e) = std::fs::write(&kv_path, json) {
+                        tracing::error!("Failed to flush KV store to {:?}: {}", kv_path, e);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to serialize KV store: {}", e);
+                }
+            }
         }
     }
 
@@ -458,6 +563,8 @@ impl KvStore {
         };
 
         data.insert(key, entry.clone());
+        drop(data);
+        self.flush_to_disk();
         entry
     }
 
@@ -470,7 +577,12 @@ impl KvStore {
     /// Delete a key.
     pub fn delete(&self, key: &str) -> Option<KvEntry> {
         let mut data = self.data.write();
-        data.remove(key)
+        let removed = data.remove(key);
+        drop(data);
+        if removed.is_some() {
+            self.flush_to_disk();
+        }
+        removed
     }
 
     /// List all keys with optional prefix filter.
@@ -527,15 +639,70 @@ pub struct GraphStore {
     edges: SyncRwLock<HashMap<String, GraphEdge>>,
     node_counter: AtomicU64,
     edge_counter: AtomicU64,
+    data_dir: Option<PathBuf>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct GraphSnapshot {
+    nodes: HashMap<String, GraphNode>,
+    edges: HashMap<String, GraphEdge>,
+    node_counter: u64,
+    edge_counter: u64,
 }
 
 impl GraphStore {
     pub fn new() -> Self {
+        Self::with_data_dir(None)
+    }
+
+    pub fn with_data_dir(data_dir: Option<PathBuf>) -> Self {
+        if let Some(ref dir) = data_dir {
+            let graph_path = dir.join("graph_store.json");
+            if graph_path.exists() {
+                if let Ok(data) = std::fs::read_to_string(&graph_path) {
+                    if let Ok(snapshot) = serde_json::from_str::<GraphSnapshot>(&data) {
+                        tracing::info!("Loaded {} graph nodes and {} edges from disk", snapshot.nodes.len(), snapshot.edges.len());
+                        return Self {
+                            nodes: SyncRwLock::new(snapshot.nodes),
+                            edges: SyncRwLock::new(snapshot.edges),
+                            node_counter: AtomicU64::new(snapshot.node_counter),
+                            edge_counter: AtomicU64::new(snapshot.edge_counter),
+                            data_dir,
+                        };
+                    }
+                }
+            }
+        }
+
         Self {
             nodes: SyncRwLock::new(HashMap::new()),
             edges: SyncRwLock::new(HashMap::new()),
             node_counter: AtomicU64::new(1),
             edge_counter: AtomicU64::new(1),
+            data_dir,
+        }
+    }
+
+    /// Flush graph data to disk as JSON.
+    fn flush_to_disk(&self) {
+        if let Some(ref dir) = self.data_dir {
+            let graph_path = dir.join("graph_store.json");
+            let snapshot = GraphSnapshot {
+                nodes: self.nodes.read().clone(),
+                edges: self.edges.read().clone(),
+                node_counter: self.node_counter.load(Ordering::SeqCst),
+                edge_counter: self.edge_counter.load(Ordering::SeqCst),
+            };
+            match serde_json::to_string_pretty(&snapshot) {
+                Ok(json) => {
+                    if let Err(e) = std::fs::write(&graph_path, json) {
+                        tracing::error!("Failed to flush graph store to {:?}: {}", graph_path, e);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to serialize graph store: {}", e);
+                }
+            }
         }
     }
 
@@ -548,6 +715,7 @@ impl GraphStore {
             properties,
         };
         self.nodes.write().insert(id, node.clone());
+        self.flush_to_disk();
         node
     }
 
@@ -570,6 +738,7 @@ impl GraphStore {
             relationship: relationship.to_string(),
         };
         self.edges.write().insert(id, edge.clone());
+        self.flush_to_disk();
         Ok(edge)
     }
 
@@ -589,6 +758,8 @@ impl GraphStore {
         // Remove edges connected to this node
         let mut edges = self.edges.write();
         edges.retain(|_, e| e.source != id && e.target != id);
+        drop(edges);
+        self.flush_to_disk();
         Ok(())
     }
 
@@ -597,6 +768,7 @@ impl GraphStore {
         if self.edges.write().remove(id).is_none() {
             return Err(format!("Edge '{}' not found", id));
         }
+        self.flush_to_disk();
         Ok(())
     }
 

@@ -979,11 +979,53 @@ pub struct RbacManager {
     roles: RwLock<HashMap<String, Role>>,
     user_roles: RwLock<HashMap<String, HashSet<String>>>,
     row_policies: RwLock<Vec<RowLevelPolicy>>,
+    data_dir: Option<PathBuf>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RbacSnapshot {
+    roles: HashMap<String, Role>,
+    user_roles: HashMap<String, HashSet<String>>,
+    row_policies: Vec<RowLevelPolicy>,
 }
 
 impl RbacManager {
-    /// Create a new RBAC manager with default roles.
+    /// Create a new RBAC manager with default roles (no persistence).
     pub fn new() -> Self {
+        Self::with_data_dir(None)
+    }
+
+    /// Create a new RBAC manager, loading state from disk if `data_dir` is provided.
+    pub fn with_data_dir(data_dir: Option<PathBuf>) -> Self {
+        // Try to load from disk
+        if let Some(ref dir) = data_dir {
+            let path = dir.join("rbac.json");
+            if path.exists() {
+                match std::fs::read_to_string(&path) {
+                    Ok(contents) => {
+                        match serde_json::from_str::<RbacSnapshot>(&contents) {
+                            Ok(snapshot) => {
+                                tracing::info!("Loaded RBAC state from {}", path.display());
+                                return Self {
+                                    roles: RwLock::new(snapshot.roles),
+                                    user_roles: RwLock::new(snapshot.user_roles),
+                                    row_policies: RwLock::new(snapshot.row_policies),
+                                    data_dir,
+                                };
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to parse RBAC snapshot from {}: {}", path.display(), e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to read RBAC snapshot from {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+
+        // Fall back to default roles
         let mut roles = HashMap::new();
 
         // Create admin role with all permissions
@@ -1035,6 +1077,30 @@ impl RbacManager {
             roles: RwLock::new(roles),
             user_roles: RwLock::new(user_roles),
             row_policies: RwLock::new(Vec::new()),
+            data_dir,
+        }
+    }
+
+    /// Persist current RBAC state to disk (if data_dir is configured).
+    fn flush_to_disk(&self) {
+        let Some(ref dir) = self.data_dir else {
+            return;
+        };
+        let snapshot = RbacSnapshot {
+            roles: self.roles.read().clone(),
+            user_roles: self.user_roles.read().clone(),
+            row_policies: self.row_policies.read().clone(),
+        };
+        let path = dir.join("rbac.json");
+        match serde_json::to_string_pretty(&snapshot) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    tracing::error!("Failed to write RBAC snapshot to {}: {}", path.display(), e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to serialize RBAC snapshot: {}", e);
+            }
         }
     }
 
@@ -1048,6 +1114,8 @@ impl RbacManager {
         let mut role = Role::new(name, description, permissions);
         role.created_by = created_by.to_string();
         roles.insert(name.to_string(), role);
+        drop(roles);
+        self.flush_to_disk();
         Ok(())
     }
 
@@ -1061,6 +1129,8 @@ impl RbacManager {
             return Err("Cannot delete built-in roles".to_string());
         }
         roles.remove(name);
+        drop(roles);
+        self.flush_to_disk();
         Ok(())
     }
 
@@ -1085,6 +1155,8 @@ impl RbacManager {
             .entry(user_id.to_string())
             .or_default()
             .insert(role_name.to_string());
+        drop(user_roles);
+        self.flush_to_disk();
         Ok(())
     }
 
@@ -1093,6 +1165,8 @@ impl RbacManager {
         let mut user_roles = self.user_roles.write();
         if let Some(roles) = user_roles.get_mut(user_id) {
             roles.remove(role_name);
+            drop(user_roles);
+            self.flush_to_disk();
             Ok(())
         } else {
             Err(format!("User '{}' has no roles assigned", user_id))
@@ -1144,6 +1218,7 @@ impl RbacManager {
     /// Add a row-level security policy.
     pub fn add_row_policy(&self, policy: RowLevelPolicy) {
         self.row_policies.write().push(policy);
+        self.flush_to_disk();
     }
 
     /// Get row-level policies for a table.
