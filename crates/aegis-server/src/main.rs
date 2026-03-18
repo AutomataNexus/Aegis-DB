@@ -7,6 +7,7 @@
 //! @author AutomataNexus Development Team
 
 use aegis_server::{create_router, AppState, ServerConfig, ClusterTlsConfig};
+use aegis_server::backup::BackupManager;
 use aegis_server::secrets::{self, SecretsProvider};
 use axum_server::tls_rustls::RustlsConfig;
 use clap::Parser;
@@ -207,6 +208,65 @@ async fn main() {
                 interval.tick().await;
                 if let Err(e) = state_for_save.save_to_disk() {
                     tracing::error!("Failed to save data: {}", e);
+                }
+            }
+        });
+    }
+
+    // Start automatic backup scheduler if persistence is enabled
+    if args.data_dir.is_some() {
+        let state_for_backup = state_for_shutdown.clone();
+        tokio::spawn(async move {
+            // Wait 60 seconds before first check
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+
+            // Check every hour if auto-backups are enabled
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
+
+            loop {
+                interval.tick().await;
+
+                let settings = state_for_backup.settings.read().await;
+                if !settings.auto_backups_enabled {
+                    continue;
+                }
+                let retention_days = settings.retention_days;
+                drop(settings);
+
+                // Save current state to disk before backup
+                if let Err(e) = state_for_backup.save_to_disk() {
+                    tracing::warn!("Pre-backup save failed: {}", e);
+                }
+
+                if let Some(ref dir) = state_for_backup.config.data_dir {
+                    let data_dir = std::path::PathBuf::from(dir);
+                    let manager = BackupManager::new(data_dir);
+
+                    match manager.create_backup(true, Some("auto-scheduler"), false, None) {
+                        Ok(info) => {
+                            tracing::info!("Auto-backup created: {} ({} files)", info.id, info.files_count);
+
+                            // Clean up old backups beyond retention count
+                            if let Ok(mut backups) = manager.list_backups() {
+                                // Keep only the newest N backups (retention_days worth of hourly backups)
+                                let max_backups = (retention_days as usize) * 24;
+                                if backups.len() > max_backups {
+                                    // Sort by timestamp descending
+                                    backups.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                                    for old in &backups[max_backups..] {
+                                        if let Err(e) = manager.delete_backup(&old.id) {
+                                            tracing::warn!("Failed to delete old backup {}: {}", old.id, e);
+                                        } else {
+                                            tracing::info!("Deleted expired backup: {}", old.id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Auto-backup failed: {}", e);
+                        }
+                    }
                 }
             }
         });

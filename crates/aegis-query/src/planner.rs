@@ -75,6 +75,10 @@ pub enum PlanNode {
     Insert(InsertNode),
     Update(UpdateNode),
     Delete(DeleteNode),
+    // Transaction control
+    BeginTransaction,
+    CommitTransaction,
+    RollbackTransaction,
 }
 
 // =============================================================================
@@ -520,14 +524,21 @@ impl Planner {
             Statement::AlterTable(alter) => self.plan_alter_table(alter),
             Statement::CreateIndex(create) => self.plan_create_index(create),
             Statement::DropIndex(drop) => self.plan_drop_index(drop),
-            Statement::Begin | Statement::Commit | Statement::Rollback => {
-                // Transaction control statements return empty plan
-                Ok(QueryPlan {
-                    root: PlanNode::Empty,
-                    estimated_cost: 0.0,
-                    estimated_rows: 0,
-                })
-            }
+            Statement::Begin => Ok(QueryPlan {
+                root: PlanNode::BeginTransaction,
+                estimated_cost: 0.0,
+                estimated_rows: 0,
+            }),
+            Statement::Commit => Ok(QueryPlan {
+                root: PlanNode::CommitTransaction,
+                estimated_cost: 0.0,
+                estimated_rows: 0,
+            }),
+            Statement::Rollback => Ok(QueryPlan {
+                root: PlanNode::RollbackTransaction,
+                estimated_cost: 0.0,
+                estimated_rows: 0,
+            }),
         }
     }
 
@@ -1331,6 +1342,9 @@ impl Planner {
                     .unwrap_or(100);
                 (rows as f64, rows)
             }
+
+            // Transaction control
+            PlanNode::BeginTransaction | PlanNode::CommitTransaction | PlanNode::RollbackTransaction => (0.0, 0),
         }
     }
 }

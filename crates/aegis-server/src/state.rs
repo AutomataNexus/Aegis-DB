@@ -16,9 +16,9 @@ use crate::gdpr::GdprService;
 use crate::handlers::{MetricsDataPoint, ServerSettings};
 use crate::middleware::RateLimiter;
 use aegis_document::{Document, DocumentEngine};
-use aegis_query::{Executor, Parser, Planner};
-use aegis_query::planner::PlannerSchema;
-use aegis_query::executor::ExecutionContext;
+use aegis_query::{Executor, Parser, Planner, Statement};
+use aegis_query::planner::{PlanNode, PlannerSchema};
+use aegis_query::executor::{ExecutionContext, ExecutionContextSnapshot};
 use aegis_streaming::StreamingEngine;
 use aegis_timeseries::TimeSeriesEngine;
 use aegis_updates::orchestrator::UpdateOrchestrator;
@@ -157,6 +157,11 @@ impl AppState {
             Some(dir) => Arc::new(QueryEngine::with_persistence(dir)),
             None => Arc::new(QueryEngine::new()),
         };
+
+        // Set peer addresses for mutation replication
+        if !config.peers.is_empty() {
+            query_engine.set_peers(config.peers.clone());
+        }
 
         // Create breach detector with optional webhook notifier
         let breach_detector = Arc::new(BreachDetector::with_data_dir(data_dir.clone()));
@@ -336,7 +341,81 @@ impl AppState {
 
     /// Execute a SQL query against the specified database.
     pub async fn execute_query(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
+        let result = self.query_engine.execute(sql, database)?;
+        let db_name = database.unwrap_or("default");
+        // Replicate mutations to peers and emit CDC events
+        if QueryEngine::is_mutation(sql) {
+            self.query_engine.replicate_to_peers(sql, db_name);
+            self.emit_cdc_event(sql, db_name, result.rows_affected);
+        }
+        Ok(result)
+    }
+
+    /// Emit a CDC event to the streaming engine for a SQL mutation.
+    fn emit_cdc_event(&self, sql: &str, database: &str, rows_affected: u64) {
+        use aegis_streaming::cdc::{ChangeEvent, ChangeSource, ChangeType};
+
+        // Extract table name and change type from SQL
+        let sql_trimmed = sql.trim();
+        let (change_type, table_name) = if sql_trimmed.len() > 6 {
+            let upper = sql_trimmed[..12.min(sql_trimmed.len())].to_uppercase();
+            if upper.starts_with("INSERT") {
+                (ChangeType::Insert, extract_table_after(sql_trimmed, "INTO"))
+            } else if upper.starts_with("UPDATE") {
+                (ChangeType::Update, extract_table_after(sql_trimmed, "UPDATE"))
+            } else if upper.starts_with("DELETE") {
+                (ChangeType::Delete, extract_table_after(sql_trimmed, "FROM"))
+            } else if upper.starts_with("TRUNCATE") {
+                (ChangeType::Truncate, extract_table_after(sql_trimmed, "TRUNCATE"))
+            } else {
+                return; // DDL — skip CDC
+            }
+        } else {
+            return;
+        };
+
+        let source = ChangeSource::new(database, &table_name);
+        let change = ChangeEvent {
+            change_type,
+            source,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            key: None,
+            before: None,
+            after: Some(serde_json::json!({
+                "sql": sql,
+                "rows_affected": rows_affected,
+            })),
+            metadata: std::collections::HashMap::new(),
+        };
+
+        // Publish to a CDC channel named "cdc.{database}.{table}"
+        let channel_name = format!("cdc.{}.{}", database, table_name);
+        let channel_id = aegis_streaming::channel::ChannelId::new(&channel_name);
+
+        // Auto-create channel if it doesn't exist
+        let _ = self.streaming_engine.create_channel(channel_name.clone());
+
+        if let Err(e) = self.streaming_engine.publish_change(&channel_id, change) {
+            tracing::debug!("CDC publish to {}: {}", channel_name, e);
+        }
+    }
+
+    /// Execute a query that was received via replication (skip re-replication).
+    pub async fn execute_query_replicated(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
         self.query_engine.execute(sql, database)
+    }
+
+    /// Execute a SQL query with bound parameters.
+    pub async fn execute_query_with_params(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        params: &[serde_json::Value],
+    ) -> Result<QueryResult, QueryError> {
+        self.query_engine.execute_with_params(sql, database, params)
     }
 
     /// Record a request metric.
@@ -826,6 +905,10 @@ pub struct QueryEngine {
     contexts: Arc<std::sync::RwLock<HashMap<String, Arc<std::sync::RwLock<ExecutionContext>>>>>,
     /// Path to persist SQL tables (if set, enables persistence)
     data_path: Option<PathBuf>,
+    /// Peer addresses for mutation replication (e.g. ["127.0.0.1:9091", "127.0.0.1:7001"])
+    peers: Arc<std::sync::RwLock<Vec<String>>>,
+    /// Write-ahead log for crash recovery
+    wal: Option<Arc<aegis_storage::wal::WriteAheadLog>>,
 }
 
 impl QueryEngine {
@@ -839,6 +922,8 @@ impl QueryEngine {
             planner: Planner::new(schema),
             contexts: Arc::new(std::sync::RwLock::new(contexts)),
             data_path: None,
+            peers: Arc::new(std::sync::RwLock::new(Vec::new())),
+            wal: None,
         }
     }
 
@@ -879,12 +964,77 @@ impl QueryEngine {
             contexts.insert("default".to_string(), Arc::new(std::sync::RwLock::new(ExecutionContext::new())));
         }
 
+        // Initialize WAL for crash recovery
+        let wal_dir = data_dir.join("wal");
+        let wal = match aegis_storage::wal::WriteAheadLog::new(wal_dir, true) {
+            Ok(w) => {
+                tracing::info!("WAL initialized for crash recovery");
+                Some(Arc::new(w))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize WAL: {}. Continuing without WAL.", e);
+                None
+            }
+        };
+
         Self {
             parser: Parser::new(),
             planner: Planner::new(schema),
             contexts: Arc::new(std::sync::RwLock::new(contexts)),
             data_path: Some(db_dir),
+            peers: Arc::new(std::sync::RwLock::new(Vec::new())),
+            wal,
         }
+    }
+
+    /// Set peer addresses for mutation replication.
+    pub fn set_peers(&self, peers: Vec<String>) {
+        *self.peers.write().unwrap() = peers;
+    }
+
+    /// Asynchronously replicate a SQL mutation to all peer nodes.
+    fn replicate_to_peers(&self, sql: &str, database: &str) {
+        let peers = self.peers.read().unwrap().clone();
+        if peers.is_empty() {
+            return;
+        }
+
+        let sql = sql.to_string();
+        let db = database.to_string();
+
+        tokio::spawn(async move {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+
+            for peer in &peers {
+                let url = format!("http://{}/api/v1/query", peer);
+                let body = serde_json::json!({
+                    "sql": sql,
+                    "database": db,
+                });
+
+                let resp = client
+                    .post(&url)
+                    .header("X-Aegis-Replicated", "true")
+                    .json(&body)
+                    .send()
+                    .await;
+
+                match resp {
+                    Ok(r) if r.status().is_success() => {
+                        tracing::debug!("Replicated to {}: {}", peer, &sql[..sql.len().min(80)]);
+                    }
+                    Ok(r) => {
+                        tracing::warn!("Replication to {} returned {}", peer, r.status());
+                    }
+                    Err(e) => {
+                        tracing::warn!("Replication to {} failed: {}", peer, e);
+                    }
+                }
+            }
+        });
     }
 
     /// Get or create an ExecutionContext for the specified database.
@@ -918,6 +1068,25 @@ impl QueryEngine {
             let db_name = if database.is_empty() { "default" } else { database };
             let path = base_path.join(format!("{}.json", db_name));
 
+            // Write to WAL before persisting snapshot (write-ahead guarantee)
+            if let Some(ref wal) = self.wal {
+                use aegis_storage::wal::{LogRecord, LogRecordType};
+                use aegis_common::{Lsn, TransactionId};
+
+                let lsn = wal.next_lsn();
+                let record = LogRecord {
+                    lsn,
+                    prev_lsn: None,
+                    tx_id: TransactionId(0),
+                    record_type: LogRecordType::Checkpoint,
+                    page_id: None,
+                    data: ::bytes::Bytes::from(format!("persist:{}", db_name)),
+                };
+                if let Err(e) = wal.append(record) {
+                    tracing::warn!("WAL append failed: {}", e);
+                }
+            }
+
             let contexts = self.contexts.read().unwrap();
             if let Some(ctx) = contexts.get(db_name) {
                 if let Ok(ctx_guard) = ctx.read() {
@@ -930,7 +1099,7 @@ impl QueryEngine {
     }
 
     /// Check if a SQL statement is a mutation (DDL/DML that modifies data).
-    fn is_mutation(sql: &str) -> bool {
+    pub fn is_mutation(sql: &str) -> bool {
         let sql_upper = sql.trim().to_uppercase();
         sql_upper.starts_with("CREATE") ||
         sql_upper.starts_with("DROP") ||
@@ -941,7 +1110,26 @@ impl QueryEngine {
         sql_upper.starts_with("TRUNCATE")
     }
 
+    /// Check if a parsed statement is a mutation (DDL/DML).
+    fn is_mutation_stmt(stmt: &Statement) -> bool {
+        matches!(
+            stmt,
+            Statement::Insert(_)
+                | Statement::Update(_)
+                | Statement::Delete(_)
+                | Statement::CreateTable(_)
+                | Statement::DropTable(_)
+                | Statement::AlterTable(_)
+                | Statement::CreateIndex(_)
+                | Statement::DropIndex(_)
+        )
+    }
+
     /// Execute a SQL query against the specified database.
+    /// Supports multi-statement input with transaction control:
+    /// `BEGIN; INSERT ...; INSERT ...; COMMIT;` executes atomically.
+    /// On ROLLBACK (explicit or on error inside a transaction), all
+    /// changes since BEGIN are undone.
     pub fn execute(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
         let db_name = database.unwrap_or("default");
 
@@ -956,17 +1144,169 @@ impl QueryEngine {
             });
         }
 
+        let context = self.get_or_create_context(db_name);
+        let executor = Executor::with_shared_context(context.clone());
+
+        let mut last_result = QueryResult {
+            columns: vec![],
+            rows: vec![],
+            rows_affected: 0,
+        };
+        let mut in_transaction = false;
+        let mut txn_snapshot: Option<ExecutionContextSnapshot> = None;
+        let mut had_mutation = false;
+
+        for statement in &statements {
+            let plan = self.planner.plan(statement)
+                .map_err(|e| QueryError::Plan(e.to_string()))?;
+
+            match &plan.root {
+                PlanNode::BeginTransaction => {
+                    if in_transaction {
+                        return Err(QueryError::Execute("Already in a transaction".to_string()));
+                    }
+                    // Snapshot current state for rollback + MVCC snapshot isolation
+                    let mut ctx = context.write()
+                        .map_err(|_| QueryError::Execute("Lock poisoned".to_string()))?;
+                    txn_snapshot = Some(ctx.to_snapshot());
+                    ctx.begin_snapshot();
+                    drop(ctx);
+                    in_transaction = true;
+                    last_result = QueryResult {
+                        columns: vec!["status".to_string()],
+                        rows: vec![vec![serde_json::Value::String("BEGIN".to_string())]],
+                        rows_affected: 0,
+                    };
+                }
+                PlanNode::CommitTransaction => {
+                    if !in_transaction {
+                        return Err(QueryError::Execute("No transaction in progress".to_string()));
+                    }
+                    // Commit: release MVCC snapshot, advance version, discard rollback snapshot, persist
+                    {
+                        let mut ctx = context.write()
+                            .map_err(|_| QueryError::Execute("Lock poisoned".to_string()))?;
+                        ctx.commit_snapshot();
+                    }
+                    txn_snapshot = None;
+                    in_transaction = false;
+                    if had_mutation {
+                        self.persist(db_name);
+                        had_mutation = false;
+                    }
+                    last_result = QueryResult {
+                        columns: vec!["status".to_string()],
+                        rows: vec![vec![serde_json::Value::String("COMMIT".to_string())]],
+                        rows_affected: 0,
+                    };
+                }
+                PlanNode::RollbackTransaction => {
+                    if !in_transaction {
+                        return Err(QueryError::Execute("No transaction in progress".to_string()));
+                    }
+                    // Rollback: restore snapshot and release MVCC snapshot
+                    if let Some(snapshot) = txn_snapshot.take() {
+                        let mut ctx = context.write()
+                            .map_err(|_| QueryError::Execute("Lock poisoned".to_string()))?;
+                        ctx.restore_from_snapshot(snapshot);
+                        ctx.rollback_snapshot();
+                    }
+                    in_transaction = false;
+                    had_mutation = false;
+                    last_result = QueryResult {
+                        columns: vec!["status".to_string()],
+                        rows: vec![vec![serde_json::Value::String("ROLLBACK".to_string())]],
+                        rows_affected: 0,
+                    };
+                }
+                _ => {
+                    // Regular statement — execute it
+                    let result = match executor.execute(&plan) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            // If inside a transaction, auto-rollback on error
+                            if let Some(snapshot) = txn_snapshot.take() {
+                                if let Ok(mut ctx) = context.write() {
+                                    ctx.restore_from_snapshot(snapshot);
+                                    ctx.rollback_snapshot();
+                                }
+                                tracing::warn!("Transaction rolled back due to error: {}", e);
+                            }
+                            return Err(QueryError::Execute(e.to_string()));
+                        }
+                    };
+
+                    let is_mut = Self::is_mutation_stmt(statement);
+                    if is_mut {
+                        had_mutation = true;
+                    }
+
+                    last_result = QueryResult {
+                        columns: result.columns,
+                        rows: result.rows.into_iter().map(|r| {
+                            r.values.into_iter().map(value_to_json).collect()
+                        }).collect(),
+                        rows_affected: result.rows_affected,
+                    };
+
+                    // Persist immediately if not inside a transaction
+                    if is_mut && !in_transaction {
+                        self.persist(db_name);
+                    }
+                }
+            }
+        }
+
+        // If transaction was started but never committed, auto-rollback
+        if in_transaction {
+            if let Some(snapshot) = txn_snapshot.take() {
+                if let Ok(mut ctx) = context.write() {
+                    ctx.restore_from_snapshot(snapshot);
+                    ctx.rollback_snapshot();
+                }
+            }
+            return Err(QueryError::Execute(
+                "Transaction was not committed (missing COMMIT). Changes rolled back.".to_string()
+            ));
+        }
+
+        Ok(last_result)
+    }
+
+    /// List all tables in the specified database.
+    /// Execute a parameterized SQL query.
+    /// Params are JSON values that replace $1, $2, ... placeholders.
+    pub fn execute_with_params(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        params: &[serde_json::Value],
+    ) -> Result<QueryResult, QueryError> {
+        if params.is_empty() {
+            return self.execute(sql, database);
+        }
+
+        let db_name = database.unwrap_or("default");
+
+        let statements = self.parser.parse(sql)
+            .map_err(|e| QueryError::Parse(e.to_string()))?;
+
+        if statements.is_empty() {
+            return Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 0 });
+        }
+
+        // Convert JSON params to aegis Values
+        let values: Vec<aegis_common::Value> = params.iter().map(json_param_to_value).collect();
+
         let statement = &statements[0];
         let plan = self.planner.plan(statement)
             .map_err(|e| QueryError::Plan(e.to_string()))?;
 
-        // Get the context for this database
         let context = self.get_or_create_context(db_name);
         let executor = Executor::with_shared_context(context);
-        let result = executor.execute(&plan)
+        let result = executor.execute_with_params(&plan, &values)
             .map_err(|e| QueryError::Execute(e.to_string()))?;
 
-        // Persist to disk if this was a mutation
         if Self::is_mutation(sql) {
             self.persist(db_name);
         }
@@ -980,7 +1320,6 @@ impl QueryEngine {
         })
     }
 
-    /// List all tables in the specified database.
     pub fn list_tables(&self, database: Option<&str>) -> Vec<String> {
         let db_name = database.unwrap_or("default");
         let contexts = self.contexts.read().unwrap();
@@ -1069,6 +1408,39 @@ pub struct QueryResult {
 }
 
 /// Convert aegis Value to JSON.
+/// Convert a JSON parameter value to an aegis Value for query binding.
+fn json_param_to_value(json: &serde_json::Value) -> aegis_common::Value {
+    match json {
+        serde_json::Value::Null => aegis_common::Value::Null,
+        serde_json::Value::Bool(b) => aegis_common::Value::Boolean(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                aegis_common::Value::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                aegis_common::Value::Float(f)
+            } else {
+                aegis_common::Value::Null
+            }
+        }
+        serde_json::Value::String(s) => aegis_common::Value::String(s.clone()),
+        _ => aegis_common::Value::String(json.to_string()),
+    }
+}
+
+/// Extract the table name following a keyword in SQL (e.g., "INTO" in INSERT INTO).
+fn extract_table_after(sql: &str, keyword: &str) -> String {
+    let upper = sql.to_uppercase();
+    if let Some(pos) = upper.find(keyword) {
+        let after = &sql[pos + keyword.len()..].trim_start();
+        after.split(|c: char| c.is_whitespace() || c == '(')
+            .next()
+            .unwrap_or("unknown")
+            .to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
 fn value_to_json(value: aegis_common::Value) -> serde_json::Value {
     match value {
         aegis_common::Value::Null => serde_json::Value::Null,
@@ -1307,5 +1679,146 @@ mod tests {
         let deleted = store.delete("key1");
         assert!(deleted.is_some());
         assert!(store.get("key1").is_none());
+    }
+
+    #[test]
+    fn test_transaction_commit() {
+        let engine = QueryEngine::new();
+        engine.execute("CREATE TABLE txn_test (id INT, name VARCHAR(50))", None).unwrap();
+
+        // Multi-statement transaction with COMMIT
+        let result = engine.execute(
+            "BEGIN; INSERT INTO txn_test VALUES (1, 'Alice'); INSERT INTO txn_test VALUES (2, 'Bob'); COMMIT",
+            None,
+        ).unwrap();
+        assert_eq!(result.rows[0][0], serde_json::Value::String("COMMIT".to_string()));
+
+        // Data should be visible after commit
+        let select = engine.execute("SELECT * FROM txn_test", None).unwrap();
+        assert_eq!(select.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_transaction_rollback() {
+        let engine = QueryEngine::new();
+        engine.execute("CREATE TABLE txn_rb (id INT, name VARCHAR(50))", None).unwrap();
+        engine.execute("INSERT INTO txn_rb VALUES (1, 'Original')", None).unwrap();
+
+        // Transaction with ROLLBACK — inserts should be undone
+        let result = engine.execute(
+            "BEGIN; INSERT INTO txn_rb VALUES (2, 'Should vanish'); INSERT INTO txn_rb VALUES (3, 'Also gone'); ROLLBACK",
+            None,
+        ).unwrap();
+        assert_eq!(result.rows[0][0], serde_json::Value::String("ROLLBACK".to_string()));
+
+        // Only the original row should remain
+        let select = engine.execute("SELECT * FROM txn_rb", None).unwrap();
+        assert_eq!(select.rows.len(), 1);
+    }
+
+    #[test]
+    fn test_transaction_auto_rollback_on_missing_commit() {
+        let engine = QueryEngine::new();
+        engine.execute("CREATE TABLE txn_nocommit (id INT)", None).unwrap();
+        engine.execute("INSERT INTO txn_nocommit VALUES (1)", None).unwrap();
+
+        // BEGIN without COMMIT should error and auto-rollback
+        let result = engine.execute(
+            "BEGIN; INSERT INTO txn_nocommit VALUES (2)",
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not committed"));
+
+        // Original row should still be there, uncommitted row should not
+        let select = engine.execute("SELECT * FROM txn_nocommit", None).unwrap();
+        assert_eq!(select.rows.len(), 1);
+    }
+
+    #[test]
+    fn test_transaction_auto_rollback_on_error() {
+        let engine = QueryEngine::new();
+        engine.execute("CREATE TABLE txn_err (id INT, name VARCHAR(50))", None).unwrap();
+        engine.execute("INSERT INTO txn_err VALUES (1, 'Keep')", None).unwrap();
+
+        // Transaction with an error mid-way — should auto-rollback
+        let result = engine.execute(
+            "BEGIN; INSERT INTO txn_err VALUES (2, 'Lose'); INSERT INTO nonexistent VALUES (3, 'Fail'); COMMIT",
+            None,
+        );
+        assert!(result.is_err());
+
+        // Only the pre-transaction row should remain
+        let select = engine.execute("SELECT * FROM txn_err", None).unwrap();
+        assert_eq!(select.rows.len(), 1);
+    }
+
+    #[test]
+    fn test_single_statement_still_works() {
+        let engine = QueryEngine::new();
+        engine.execute("CREATE TABLE single (id INT)", None).unwrap();
+        engine.execute("INSERT INTO single VALUES (1)", None).unwrap();
+        engine.execute("INSERT INTO single VALUES (2)", None).unwrap();
+
+        let select = engine.execute("SELECT * FROM single", None).unwrap();
+        assert_eq!(select.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_parameterized_insert() {
+        let engine = QueryEngine::new();
+        engine.execute("CREATE TABLE param_test (id INT, name VARCHAR(50))", None).unwrap();
+
+        // Insert with $1, $2 placeholders
+        engine.execute_with_params(
+            "INSERT INTO param_test VALUES ($1, $2)",
+            None,
+            &[serde_json::json!(1), serde_json::json!("Alice")],
+        ).unwrap();
+
+        engine.execute_with_params(
+            "INSERT INTO param_test VALUES ($1, $2)",
+            None,
+            &[serde_json::json!(2), serde_json::json!("Bob")],
+        ).unwrap();
+
+        let select = engine.execute("SELECT * FROM param_test", None).unwrap();
+        assert_eq!(select.rows.len(), 2);
+        assert_eq!(select.rows[0][1], serde_json::Value::String("Alice".to_string()));
+        assert_eq!(select.rows[1][1], serde_json::Value::String("Bob".to_string()));
+    }
+
+    #[test]
+    fn test_parameterized_select() {
+        let engine = QueryEngine::new();
+        engine.execute("CREATE TABLE param_sel (id INT, name VARCHAR(50))", None).unwrap();
+        engine.execute("INSERT INTO param_sel VALUES (1, 'Alice')", None).unwrap();
+        engine.execute("INSERT INTO param_sel VALUES (2, 'Bob')", None).unwrap();
+        engine.execute("INSERT INTO param_sel VALUES (3, 'Charlie')", None).unwrap();
+
+        // SELECT with parameterized WHERE
+        let result = engine.execute_with_params(
+            "SELECT * FROM param_sel WHERE id = $1",
+            None,
+            &[serde_json::json!(2)],
+        ).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][1], serde_json::Value::String("Bob".to_string()));
+    }
+
+    #[test]
+    fn test_parameterized_update() {
+        let engine = QueryEngine::new();
+        engine.execute("CREATE TABLE param_upd (id INT, name VARCHAR(50))", None).unwrap();
+        engine.execute("INSERT INTO param_upd VALUES (1, 'Alice')", None).unwrap();
+
+        engine.execute_with_params(
+            "UPDATE param_upd SET name = $1 WHERE id = $2",
+            None,
+            &[serde_json::json!("Alicia"), serde_json::json!(1)],
+        ).unwrap();
+
+        let result = engine.execute("SELECT * FROM param_upd WHERE id = 1", None).unwrap();
+        assert_eq!(result.rows[0][1], serde_json::Value::String("Alicia".to_string()));
     }
 }

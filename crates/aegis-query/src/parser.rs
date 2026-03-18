@@ -351,6 +351,11 @@ impl Parser {
                 }
             }
             sp::Value::SingleQuotedString(s) | sp::Value::DoubleQuotedString(s) => Literal::String(s),
+            sp::Value::Placeholder(s) if s.starts_with('$') => {
+                let idx: usize = s[1..].parse()
+                    .map_err(|_| AegisError::Parse(format!("Invalid placeholder: {}", s)))?;
+                return Ok(Expression::Placeholder(idx));
+            }
             _ => return Err(AegisError::Parse("Unsupported literal value".to_string())),
         };
         Ok(Expression::Literal(literal))
