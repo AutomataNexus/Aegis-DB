@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://crates.io/crates/aegis-server"><img src="https://img.shields.io/crates/v/aegis-server.svg" alt="crates.io"></a>
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/tests-634%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-635%20passing-brightgreen.svg" alt="Tests">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/paradigms-6-blueviolet.svg" alt="6 Data Paradigms">
   <img src="https://img.shields.io/badge/LOC-60K%2B-informational.svg" alt="Lines of Code">
@@ -157,6 +157,27 @@ Each application gets its own isolated database:
 
 Different apps, different schemas, same server. Databases are auto-provisioned on first query.
 
+### Transactions
+
+```sql
+BEGIN;
+INSERT INTO accounts VALUES (1, 'Alice', 1000);
+INSERT INTO accounts VALUES (2, 'Bob', 500);
+COMMIT;
+-- Atomic: both rows inserted or neither. ROLLBACK undoes all changes.
+```
+
+Multi-statement transactions with snapshot isolation. Auto-rollback on errors.
+
+### Parameterized Queries
+
+```bash
+curl -X POST localhost:9090/api/v1/query \
+  -d '{"sql": "SELECT * FROM users WHERE id = $1", "params": [42]}'
+```
+
+Bind `$1, $2, ...` placeholders to prevent SQL injection and enable plan reuse.
+
 ### Distributed Clustering
 
 ```bash
@@ -166,10 +187,11 @@ aegis-server --port 9091 --node-name Replica1 --peers 127.0.0.1:9090,127.0.0.1:9
 aegis-server --port 9092 --node-name Replica2 --peers 127.0.0.1:9090,127.0.0.1:9091
 ```
 
+- **Mutation replication** — SQL writes forwarded to all peers automatically
 - Raft consensus with leader election
 - Consistent hashing for data distribution
 - 2-phase commit for distributed transactions
-- CRDTs for conflict-free replication
+- CRDTs for conflict-free replication (8 types)
 - OTA rolling updates across nodes
 
 ### Enterprise Security
@@ -199,10 +221,12 @@ Built-in support for HIPAA, GDPR, CCPA, SOC 2, and FERPA:
 
 - Pluggable backends (Memory, Local filesystem)
 - Block compression (LZ4, Zstd, Snappy)
-- MVCC with snapshot isolation
-- Write-ahead logging
+- **MVCC with snapshot isolation** — row-level versioning, readers never block writers
+- **Write-ahead logging (WAL)** — crash recovery with checkpoint records
 - B-tree and hash indexes
 - Buffer pool with LRU eviction
+- **CDC (Change Data Capture)** — SQL mutations emit events to streaming channels
+- **Automatic backups** — scheduled hourly with configurable retention
 
 ### Web Dashboard
 
@@ -240,6 +264,8 @@ cargo build --release
 ```bash
 aegis-server --data-dir /var/lib/aegis/data
 ```
+
+All data stores (SQL, KV, documents, graph, users, RBAC, settings, consent, breach incidents) are persisted to disk on every mutation and reloaded on startup. WAL provides crash recovery.
 
 ### With TLS
 
@@ -306,7 +332,7 @@ aegis-server (REST API - Axum)
         └── aegis-common (shared types, errors)
 ```
 
-13 crates, ~50,000 lines of Rust code, 634 tests.
+13 crates, ~60,000 lines of Rust code, 635 tests.
 
 ---
 
