@@ -619,12 +619,28 @@ impl AuthService {
             };
         }
 
-        if let Some(new_password) = password {
+        let password_changed = if let Some(new_password) = password {
             user.password_hash = hash_password(&new_password);
-        }
+            true
+        } else {
+            false
+        };
 
         let info = UserInfo::from(user as &User);
         drop(users);
+
+        // Revoke all sessions for this user on password change
+        if password_changed {
+            let user_id = info.id.clone();
+            let mut sessions = self.sessions.write();
+            let before = sessions.len();
+            sessions.retain(|_, s| s.user_id != user_id);
+            let revoked = before - sessions.len();
+            if revoked > 0 {
+                tracing::info!("Revoked {} session(s) for user '{}' due to password change", revoked, username);
+            }
+        }
+
         self.flush_users_to_disk();
 
         Ok(info)

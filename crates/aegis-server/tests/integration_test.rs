@@ -75,6 +75,47 @@ async fn post_json(app: &mut axum::Router, uri: &str, body: Value) -> (StatusCod
     (status, json)
 }
 
+/// Helper to make a POST request with auth token and JSON body.
+async fn post_json_auth(app: &mut axum::Router, uri: &str, body: Value, token: &str) -> (StatusCode, Value) {
+    let response = app
+        .call(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", token))
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    (status, json)
+}
+
+/// Helper to make a DELETE request with auth token.
+async fn delete_auth(app: &mut axum::Router, uri: &str, token: &str) -> (StatusCode, Value) {
+    let response = app
+        .call(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .header("Authorization", format!("Bearer {}", token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    (status, json)
+}
+
 /// Create a shared app state for tests that need state persistence.
 /// Creates test users: testadmin (admin), testdemo (viewer), testoperator (operator)
 fn shared_state() -> Arc<AppState> {
@@ -87,6 +128,12 @@ fn shared_state() -> Arc<AppState> {
     let _ = state.auth.create_user("testoperator", "operator@test.local", "TestOperator123!", "operator");
 
     state
+}
+
+/// Create app state without users — auth middleware is bypassed (open access mode).
+/// Use for data operation tests that don't need authentication.
+fn shared_state_open() -> Arc<AppState> {
+    Arc::new(AppState::new(ServerConfig::default()))
 }
 
 /// Helper to login and get an auth token for a test user.
@@ -140,6 +187,16 @@ fn generate_totp(secret: &str) -> String {
 /// Create router with shared state.
 fn app_with_state(state: Arc<AppState>) -> axum::Router {
     create_router((*state).clone())
+}
+
+/// Create an app, login as testadmin, and return (app, token).
+async fn app_with_auth() -> (axum::Router, String) {
+    let state = shared_state();
+    let mut app = app_with_state(state);
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .expect("testadmin login should succeed");
+    (app, token)
 }
 
 // =============================================================================
@@ -574,9 +631,9 @@ async fn test_activities_logged_after_login_e2e() {
 
 #[tokio::test]
 async fn test_list_tables_e2e() {
-    let state = shared_state();
-    let mut app = app_with_state(state);
-    let (status, json) = get_json(&mut app, "/api/v1/tables").await;
+    let (mut app, token) = app_with_auth().await;
+    
+    let (status, json) = get_json_auth(&mut app, "/api/v1/tables", &token).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(json["tables"].is_array());
@@ -588,7 +645,7 @@ async fn test_list_tables_e2e() {
 
 #[tokio::test]
 async fn test_not_found_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
     let (status, json) = get_json(&mut app, "/api/v1/nonexistent").await;
 
@@ -598,9 +655,9 @@ async fn test_not_found_e2e() {
 
 #[tokio::test]
 async fn test_metrics_endpoint_e2e() {
-    let state = shared_state();
-    let mut app = app_with_state(state);
-    let (status, json) = get_json(&mut app, "/api/v1/metrics").await;
+    let (mut app, token) = app_with_auth().await;
+    
+    let (status, json) = get_json_auth(&mut app, "/api/v1/metrics", &token).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(json["total_requests"].is_number());
@@ -793,7 +850,7 @@ async fn test_invalid_session_e2e() {
 
 #[tokio::test]
 async fn test_kv_crud_operations_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // CREATE - Set a key (returns KvEntry with key, value, ttl, created_at, updated_at)
@@ -833,7 +890,7 @@ async fn test_kv_crud_operations_e2e() {
 
 #[tokio::test]
 async fn test_kv_list_with_prefix_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // List keys with prefix filter (GET /api/v1/kv/keys?prefix=user:)
@@ -849,7 +906,7 @@ async fn test_kv_list_with_prefix_e2e() {
 
 #[tokio::test]
 async fn test_kv_multiple_keys_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // Insert multiple keys and verify each returns the correct entry
@@ -877,7 +934,7 @@ async fn test_kv_multiple_keys_e2e() {
 
 #[tokio::test]
 async fn test_kv_json_value_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // Store JSON object directly as value (handler accepts serde_json::Value)
@@ -910,7 +967,7 @@ async fn test_kv_json_value_e2e() {
 
 #[tokio::test]
 async fn test_document_collections_list_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // First create a collection
@@ -938,7 +995,7 @@ async fn test_document_collections_list_e2e() {
 
 #[tokio::test]
 async fn test_document_get_collection_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // First create the 'users' collection
@@ -981,7 +1038,7 @@ async fn test_document_get_collection_e2e() {
 
 #[tokio::test]
 async fn test_document_get_products_collection_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // First create the 'products' collection
@@ -1029,7 +1086,7 @@ async fn test_document_get_products_collection_e2e() {
 
 #[tokio::test]
 async fn test_sql_select_query_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // POST /api/v1/query expects {"sql": "...", "params": []}
@@ -1050,7 +1107,7 @@ async fn test_sql_select_query_e2e() {
 
 #[tokio::test]
 async fn test_sql_create_table_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     let (status, json) = post_json(
@@ -1070,7 +1127,7 @@ async fn test_sql_create_table_e2e() {
 
 #[tokio::test]
 async fn test_sql_insert_and_select_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // Execute simple SELECT first to verify query endpoint works
@@ -1089,7 +1146,7 @@ async fn test_sql_insert_and_select_e2e() {
 
 #[tokio::test]
 async fn test_sql_syntax_error_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     let (status, json) = post_json(
@@ -1109,7 +1166,7 @@ async fn test_sql_syntax_error_e2e() {
 
 #[tokio::test]
 async fn test_sql_with_params_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     let (status, json) = post_json(
@@ -1133,7 +1190,7 @@ async fn test_sql_with_params_e2e() {
 
 #[tokio::test]
 async fn test_query_builder_execute_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // Query builder endpoint returns ExecuteQueryResponse with columns, rows, row_count
@@ -1156,7 +1213,7 @@ async fn test_query_builder_execute_e2e() {
 
 #[tokio::test]
 async fn test_query_builder_users_table_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // First create a users table
@@ -1202,7 +1259,7 @@ async fn test_query_builder_users_table_e2e() {
 
 #[tokio::test]
 async fn test_graph_data_endpoint_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // First, create some graph nodes
@@ -1263,7 +1320,7 @@ async fn test_graph_data_endpoint_e2e() {
 
 #[tokio::test]
 async fn test_detailed_metrics_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     let (status, json) = get_json(&mut app, "/api/v1/metrics").await;
@@ -1278,7 +1335,7 @@ async fn test_detailed_metrics_e2e() {
 
 #[tokio::test]
 async fn test_metrics_after_queries_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // Make SQL query requests to generate metrics (queries go through execute_query)
@@ -1307,7 +1364,7 @@ async fn test_metrics_after_queries_e2e() {
 
 #[tokio::test]
 async fn test_concurrent_reads_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
 
     // Spawn multiple concurrent read tasks
     let mut handles = Vec::new();
@@ -1330,7 +1387,7 @@ async fn test_concurrent_reads_e2e() {
 
 #[tokio::test]
 async fn test_concurrent_kv_writes_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
 
     // Spawn multiple concurrent write tasks
     let mut handles = Vec::new();
@@ -1461,7 +1518,7 @@ async fn test_multiple_failed_logins_e2e() {
 
 #[tokio::test]
 async fn test_kv_write_response_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // Write data and verify response contains the data
@@ -1485,7 +1542,7 @@ async fn test_kv_write_response_e2e() {
 
 #[tokio::test]
 async fn test_special_characters_in_data_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // Test special characters in value
@@ -1506,7 +1563,7 @@ async fn test_special_characters_in_data_e2e() {
 
 #[tokio::test]
 async fn test_unicode_data_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // Test unicode characters
@@ -1527,7 +1584,7 @@ async fn test_unicode_data_e2e() {
 
 #[tokio::test]
 async fn test_large_value_storage_e2e() {
-    let state = shared_state();
+    let state = shared_state_open();
     let mut app = app_with_state(state);
 
     // Test large value (1MB of data)
@@ -1573,14 +1630,14 @@ async fn test_api_v1_prefix_e2e() {
             "Endpoint {} returned unexpected status: {}", endpoint, status);
     }
 
-    // Public v1 endpoints (no auth required)
-    let public_endpoints = vec![
+    // Data v1 endpoints (require auth)
+    let data_endpoints = vec![
         "/api/v1/tables",
         "/api/v1/metrics",
     ];
 
-    for endpoint in public_endpoints {
-        let (status, _) = get_json(&mut app, endpoint).await;
+    for endpoint in data_endpoints {
+        let (status, _) = get_json_auth(&mut app, endpoint, &token).await;
         assert!(status == StatusCode::OK || status == StatusCode::NOT_FOUND,
             "Endpoint {} returned unexpected status: {}", endpoint, status);
     }
@@ -1615,13 +1672,14 @@ async fn test_complete_system_flow_e2e() {
 
     // 3. Store data in KV (returns the created entry)
     let test_key = format!("system_test_{}", uuid::Uuid::new_v4());
-    let (status, json) = post_json(
+    let (status, json) = post_json_auth(
         &mut app,
         "/api/v1/kv/keys",
         json!({
             "key": test_key.clone(),
             "value": "system_test_value"
         }),
+        &token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1629,12 +1687,13 @@ async fn test_complete_system_flow_e2e() {
     assert_eq!(json["value"], "system_test_value");
 
     // 4. Execute SQL query (uses "sql" field)
-    let (status, json) = post_json(
+    let (status, json) = post_json_auth(
         &mut app,
         "/api/v1/query",
         json!({
             "sql": "SELECT 1 AS test"
         }),
+        &token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1651,7 +1710,7 @@ async fn test_complete_system_flow_e2e() {
     assert!(json["cluster"].is_object());
 
     // 7. Check metrics (SQL queries increment metrics)
-    let (status, json) = get_json(&mut app, "/api/v1/metrics").await;
+    let (status, json) = get_json_auth(&mut app, "/api/v1/metrics", &token).await;
     assert_eq!(status, StatusCode::OK);
     assert!(json["total_requests"].is_number());
 
@@ -1660,13 +1719,13 @@ async fn test_complete_system_flow_e2e() {
     assert_eq!(status, StatusCode::OK);
     assert!(json.as_array().unwrap().len() > 0);
 
-    // 9. Get graph data
-    let (status, json) = get_json(&mut app, "/api/v1/graph/data").await;
+    // 9. Get graph data (with auth)
+    let (status, json) = get_json_auth(&mut app, "/api/v1/graph/data", &token).await;
     assert_eq!(status, StatusCode::OK);
     assert!(json["nodes"].is_array());
 
-    // 10. Get document collections
-    let (status, json) = get_json(&mut app, "/api/v1/documents/collections").await;
+    // 10. Get document collections (with auth)
+    let (status, json) = get_json_auth(&mut app, "/api/v1/documents/collections", &token).await;
     assert_eq!(status, StatusCode::OK);
     assert!(json.is_array());
 }
