@@ -250,6 +250,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/compliance", compliance_routes)
         .fallback(handlers::not_found)
         .layer(axum::extract::DefaultBodyLimit::max(state.config.body_limit_bytes))
+        .layer(tower::limit::ConcurrencyLimitLayer::new(state.config.max_connections))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::security_headers))

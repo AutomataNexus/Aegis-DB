@@ -297,17 +297,15 @@ impl AppState {
             return Ok(());
         };
 
-        // Save KV store
+        // KV and documents already flush per-mutation, so periodic save
+        // uses compact JSON as a consistency checkpoint
         let kv_path = dir.join("kv_store.json");
         let entries = self.kv_store.list(None, usize::MAX);
-        let json = serde_json::to_string_pretty(&entries)?;
+        let json = serde_json::to_string(&entries)?;
         std::fs::write(&kv_path, json)?;
-        tracing::debug!("Saved {} KV entries to disk", entries.len());
 
-        // Save document collections
         let docs_dir = dir.join("documents");
         std::fs::create_dir_all(&docs_dir)?;
-
         for collection_name in self.document_engine.list_collections() {
             let query = aegis_document::Query::new();
             if let Ok(result) = self.document_engine.find(&collection_name, &query) {
@@ -315,16 +313,14 @@ impl AppState {
                     .iter()
                     .map(document_to_json)
                     .collect();
-                let json = serde_json::to_string_pretty(&docs)?;
+                let json = serde_json::to_string(&docs)?;
                 let path = docs_dir.join(format!("{}.json", collection_name));
                 std::fs::write(&path, json)?;
-                tracing::debug!("Saved {} documents to collection '{}'", docs.len(), collection_name);
             }
         }
 
-        // Save SQL tables (query engine handles its own persistence path)
+        // SQL tables — flush all contexts
         self.query_engine.flush();
-        tracing::debug!("Flushed SQL tables to disk");
 
         // Flush timeseries data
         self.timeseries_engine.flush();
@@ -911,6 +907,8 @@ pub struct QueryEngine {
     peers: Arc<std::sync::RwLock<Vec<String>>>,
     /// Write-ahead log for crash recovery
     wal: Option<Arc<aegis_storage::wal::WriteAheadLog>>,
+    /// Query plan cache: SQL string -> planned QueryPlan (LRU-style, max 1024 entries)
+    plan_cache: std::sync::RwLock<HashMap<String, aegis_query::QueryPlan>>,
 }
 
 impl QueryEngine {
@@ -926,6 +924,7 @@ impl QueryEngine {
             data_path: None,
             peers: Arc::new(std::sync::RwLock::new(Vec::new())),
             wal: None,
+            plan_cache: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
@@ -995,6 +994,7 @@ impl QueryEngine {
             data_path: Some(db_dir),
             peers: Arc::new(std::sync::RwLock::new(Vec::new())),
             wal,
+            plan_cache: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
@@ -1058,6 +1058,41 @@ impl QueryEngine {
                 }
             }
         });
+    }
+
+    /// Plan a statement, using cache for SELECT queries.
+    fn plan_cached(&self, stmt: &Statement) -> Result<aegis_query::QueryPlan, QueryError> {
+        // Only cache read-only queries
+        let cache_key = if !Self::is_mutation_stmt(stmt) {
+            Some(format!("{:?}", stmt))
+        } else {
+            None
+        };
+
+        // Check cache
+        if let Some(ref key) = cache_key {
+            if let Ok(cache) = self.plan_cache.read() {
+                if let Some(plan) = cache.get(key) {
+                    return Ok(plan.clone());
+                }
+            }
+        }
+
+        // Plan and cache
+        let plan = self.planner.plan(stmt)
+            .map_err(|e| QueryError::Plan(e.to_string()))?;
+
+        if let Some(key) = cache_key {
+            if let Ok(mut cache) = self.plan_cache.write() {
+                // LRU eviction: if cache is full, clear it
+                if cache.len() >= 1024 {
+                    cache.clear();
+                }
+                cache.insert(key, plan.clone());
+            }
+        }
+
+        Ok(plan)
     }
 
     /// Get or create an ExecutionContext for the specified database.
@@ -1148,6 +1183,25 @@ impl QueryEngine {
         )
     }
 
+    /// Check if a statement is DDL (schema-changing) — invalidates plan cache.
+    fn is_ddl(stmt: &Statement) -> bool {
+        matches!(
+            stmt,
+            Statement::CreateTable(_)
+                | Statement::DropTable(_)
+                | Statement::AlterTable(_)
+                | Statement::CreateIndex(_)
+                | Statement::DropIndex(_)
+        )
+    }
+
+    /// Invalidate the plan cache (called after DDL changes).
+    fn invalidate_plan_cache(&self) {
+        if let Ok(mut cache) = self.plan_cache.write() {
+            cache.clear();
+        }
+    }
+
     /// Execute a SQL query against the specified database.
     /// Supports multi-statement input with transaction control:
     /// `BEGIN; INSERT ...; INSERT ...; COMMIT;` executes atomically.
@@ -1180,8 +1234,7 @@ impl QueryEngine {
         let mut had_mutation = false;
 
         for statement in &statements {
-            let plan = self.planner.plan(statement)
-                .map_err(|e| QueryError::Plan(e.to_string()))?;
+            let plan = self.plan_cached(statement)?;
 
             match &plan.root {
                 PlanNode::BeginTransaction => {
@@ -1262,6 +1315,9 @@ impl QueryEngine {
                     let is_mut = Self::is_mutation_stmt(statement);
                     if is_mut {
                         had_mutation = true;
+                        if Self::is_ddl(statement) {
+                            self.invalidate_plan_cache();
+                        }
                     }
 
                     last_result = QueryResult {

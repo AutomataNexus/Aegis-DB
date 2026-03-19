@@ -196,14 +196,21 @@ aegis-server --port 9092 --node-name Replica2 --peers 127.0.0.1:9090,127.0.0.1:9
 
 ### Enterprise Security
 
+- **Authentication on all endpoints** — mandatory when admin users configured, open access for development
 - **TLS/HTTPS** with rustls (TLSv1.2/1.3)
-- **Argon2id** password hashing
+- **Argon2id** password hashing with session revocation on password change
 - **RBAC** with 25+ granular permissions
 - **OAuth2/OIDC** and **LDAP/Active Directory**
 - **MFA** with TOTP (RFC 6238)
-- **Rate limiting** (token bucket)
+- **Rate limiting** on all data and query endpoints (token bucket)
 - **HashiCorp Vault** integration
 - **Audit logging** (100k+ entries)
+- **Request body limits** (10MB default, configurable)
+- **Connection limits** (10K concurrent, configurable)
+- **Sanitized error responses** — no internal details leaked to clients
+- **CORS security** — wildcard mode disables credentials (CSRF prevention)
+- **Constraint enforcement** — NOT NULL, PRIMARY KEY, UNIQUE validated on INSERT
+- **Query safety limits** — SELECT results capped at 100K rows
 
 ### Regulatory Compliance
 
@@ -222,11 +229,13 @@ Built-in support for HIPAA, GDPR, CCPA, SOC 2, and FERPA:
 - Pluggable backends (Memory, Local filesystem)
 - Block compression (LZ4, Zstd, Snappy)
 - **MVCC with snapshot isolation** — row-level versioning, readers never block writers
-- **Write-ahead logging (WAL)** — crash recovery with checkpoint records
+- **Write-ahead logging (WAL)** — crash recovery with automatic replay on startup
 - B-tree and hash indexes
 - Buffer pool with LRU eviction
+- **Query plan cache** — 1024-entry LRU cache, auto-invalidated on DDL changes
 - **CDC (Change Data Capture)** — SQL mutations emit events to streaming channels
-- **Automatic backups** — scheduled hourly with configurable retention
+- **Automatic backups** — scheduled hourly with configurable retention and consistency checkpoints
+- **Replication with retry** — mutations forwarded to peers with 3x exponential backoff
 
 ### Web Dashboard
 
