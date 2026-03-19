@@ -233,9 +233,11 @@ async fn main() {
                 let retention_days = settings.retention_days;
                 drop(settings);
 
-                // Save current state to disk before backup
+                // Flush all in-memory state to disk for a consistent backup checkpoint
+                tracing::info!("Creating backup checkpoint...");
                 if let Err(e) = state_for_backup.save_to_disk() {
                     tracing::warn!("Pre-backup save failed: {}", e);
+                    continue; // Skip backup if save fails
                 }
 
                 if let Some(ref dir) = state_for_backup.config.data_dir {
