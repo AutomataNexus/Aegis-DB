@@ -1753,6 +1753,46 @@ WHERE o.status = 'pending'
 ORDER BY o.created_at DESC;
 ```
 
+**Transactions:**
+
+AegisDB supports multi-statement transactions with snapshot isolation:
+
+```sql
+BEGIN;
+INSERT INTO accounts VALUES (1, 'Alice', 1000);
+INSERT INTO accounts VALUES (2, 'Bob', 500);
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+COMMIT;
+```
+
+- `BEGIN` — starts a transaction, takes a snapshot of current state
+- `COMMIT` — makes all changes permanent and persists to disk
+- `ROLLBACK` — discards all changes since BEGIN
+- Auto-rollback on error within a transaction
+- Auto-rollback if BEGIN is sent without a matching COMMIT
+
+Send multi-statement transactions via the API:
+```bash
+curl -X POST localhost:9090/api/v1/query \
+  -d '{"sql": "BEGIN; INSERT INTO t VALUES (1); INSERT INTO t VALUES (2); COMMIT"}'
+```
+
+**Parameterized Queries:**
+
+Use `$1, $2, ...` placeholders with the `params` array to prevent SQL injection:
+```bash
+curl -X POST localhost:9090/api/v1/query \
+  -d '{"sql": "INSERT INTO users VALUES ($1, $2)", "params": [1, "Alice"]}'
+
+curl -X POST localhost:9090/api/v1/query \
+  -d '{"sql": "SELECT * FROM users WHERE id = $1", "params": [1]}'
+```
+
+**MVCC (Multi-Version Concurrency Control):**
+
+Reads within a transaction see a consistent snapshot — they won't see uncommitted changes from other transactions. Each row carries a creation version and deletion version, enabling snapshot isolation without blocking readers.
+
 ### Key-Value Store
 
 Simple key-value storage for fast lookups and caching.

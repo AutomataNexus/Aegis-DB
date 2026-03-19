@@ -1729,6 +1729,30 @@ pub fn create_backend(config: &StorageConfig) -> Box<dyn StorageBackend> {
 
 ### Transaction Implementation
 
+**Query-Layer Transactions (SQL BEGIN/COMMIT/ROLLBACK):**
+
+The query engine supports multi-statement transactions via `QueryEngine::execute()`:
+
+```rust
+// Single API call with multiple statements:
+engine.execute("BEGIN; INSERT INTO t VALUES (1); INSERT INTO t VALUES (2); COMMIT", None)?;
+```
+
+How it works:
+1. `BEGIN` — snapshots the `ExecutionContext` (all table data) and sets an MVCC snapshot version
+2. Mutations execute normally against live data, but reads filter by MVCC visibility
+3. `COMMIT` — discards the snapshot, advances the version clock, persists to disk
+4. `ROLLBACK` — restores the snapshot, discarding all mutations since BEGIN
+5. Auto-rollback on error or missing COMMIT
+
+Row-level MVCC fields in `TableData`:
+- `row_created_version: Vec<u64>` — version when each row was created
+- `row_deleted_version: Vec<u64>` — version when each row was deleted (0 = alive)
+
+`ScanOperator` filters rows: `created_version <= snapshot && (deleted == 0 || deleted > snapshot)`
+
+**Storage-Layer Transactions (MVCC):**
+
 ```rust
 pub struct Transaction {
     pub id: TransactionId,

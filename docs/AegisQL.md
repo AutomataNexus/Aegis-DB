@@ -890,6 +890,46 @@ COMMIT;
 -- ROLLBACK;
 ```
 
+### Multi-Statement Transactions via API
+
+Send all statements in a single request:
+```bash
+curl -X POST localhost:9090/api/v1/query \
+  -d '{"sql": "BEGIN; INSERT INTO orders VALUES (1, 5, 150); INSERT INTO items VALUES (1, 10, 2); COMMIT"}'
+```
+
+Auto-rollback behavior:
+- If any statement within a transaction fails, all changes since BEGIN are automatically rolled back
+- If BEGIN is sent without a matching COMMIT, all changes are rolled back and an error is returned
+
+### Parameterized Queries
+
+Use `$1, $2, ...` placeholders to bind values safely:
+
+```sql
+-- Insert with parameters
+INSERT INTO users VALUES ($1, $2, $3)
+-- params: [1, "Alice", "alice@example.com"]
+
+-- Select with parameters
+SELECT * FROM users WHERE id = $1
+-- params: [42]
+
+-- Update with parameters
+UPDATE users SET name = $1 WHERE id = $2
+-- params: ["Alicia", 1]
+```
+
+API usage:
+```bash
+curl -X POST localhost:9090/api/v1/query \
+  -d '{"sql": "SELECT * FROM users WHERE age > $1 AND city = $2", "params": [21, "NYC"]}'
+```
+
+Benefits:
+- **SQL injection prevention** — values are bound, not interpolated into SQL
+- **Plan reuse** — the same parameterized SQL can be planned once and reused with different values
+
 ---
 
 ## 11. Time Series Extensions
