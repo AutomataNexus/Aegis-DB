@@ -131,6 +131,12 @@ pub async fn require_auth(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
+    // If no users exist, auth cannot be enforced — allow open access
+    // Once an admin user is created (via env vars or API), auth is enforced
+    if state.auth.list_users().is_empty() {
+        return Ok(next.run(request).await);
+    }
+
     // Extract token from Authorization header
     let auth_header = request
         .headers()
@@ -354,6 +360,8 @@ mod tests {
     #[tokio::test]
     async fn test_auth_middleware_no_token() {
         let state = AppState::new(ServerConfig::default());
+        // Create a user so auth middleware is enforced
+        let _ = state.auth.create_user("testuser", "test@test.local", "TestPass123!", "admin");
 
         let app = Router::new()
             .route("/", get(handler))
@@ -371,6 +379,8 @@ mod tests {
     #[tokio::test]
     async fn test_auth_middleware_invalid_token() {
         let state = AppState::new(ServerConfig::default());
+        // Create a user so auth middleware is enforced
+        let _ = state.auth.create_user("testuser", "test@test.local", "TestPass123!", "admin");
 
         let app = Router::new()
             .route("/", get(handler))

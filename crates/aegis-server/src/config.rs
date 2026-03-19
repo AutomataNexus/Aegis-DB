@@ -39,6 +39,8 @@ pub struct ServerConfig {
     pub rate_limit_per_minute: u32,
     /// Rate limit: max login attempts per minute per IP
     pub login_rate_limit_per_minute: u32,
+    /// Whether API endpoints require authentication (default: true when admin user configured)
+    pub auth_required: bool,
 }
 
 impl Default for ServerConfig {
@@ -60,6 +62,7 @@ impl Default for ServerConfig {
             peers: Vec::new(),
             rate_limit_per_minute: 100,
             login_rate_limit_per_minute: 30,
+            auth_required: true,
         }
     }
 }

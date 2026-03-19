@@ -630,11 +630,14 @@ impl ExecutionContext {
     }
 
     /// Restore this context in-place from a snapshot (used for ROLLBACK).
+    /// Resets MVCC version_clock and snapshot_version to ensure consistency.
     pub fn restore_from_snapshot(&mut self, snapshot: ExecutionContextSnapshot) {
         self.tables.clear();
         self.table_schemas.clear();
         self.indexes.clear();
         self.table_indexes.clear();
+        // Reset MVCC state to pre-transaction baseline
+        self.snapshot_version = None;
 
         for schema in snapshot.schemas {
             self.table_schemas.insert(schema.name.clone(), schema);
@@ -788,6 +791,22 @@ impl ExecutionContext {
             .map(|col| col.default.clone().unwrap_or(Value::Null))
             .collect();
 
+        // Identify constraint columns for validation
+        let pk_columns: Vec<usize> = schema.primary_key.as_ref()
+            .map(|pk| pk.iter().filter_map(|c| table_data.columns.iter().position(|tc| tc == c)).collect())
+            .unwrap_or_default();
+        let unique_columns: Vec<Vec<usize>> = schema.constraints.iter()
+            .filter_map(|c| match &c.constraint_type {
+                StoredConstraintType::Unique { columns: cols } =>
+                    Some(cols.iter().filter_map(|c| table_data.columns.iter().position(|tc| tc == c)).collect()),
+                _ => None,
+            })
+            .collect();
+        let not_null_columns: Vec<usize> = schema.columns.iter().enumerate()
+            .filter(|(_, c)| !c.nullable)
+            .map(|(i, _)| i)
+            .collect();
+
         for row_values in rows {
             // Create a new row initialized with defaults (or Null if no default)
             let mut new_row: Vec<Value> = defaults.clone();
@@ -796,6 +815,46 @@ impl ExecutionContext {
             for (i, &col_idx) in column_indices.iter().enumerate() {
                 if let Some(value) = row_values.get(i) {
                     new_row[col_idx] = value.clone();
+                }
+            }
+
+            // Enforce NOT NULL constraints
+            for &col_idx in &not_null_columns {
+                if matches!(new_row.get(col_idx), Some(Value::Null) | None) {
+                    let col_name = table_data.columns.get(col_idx).cloned().unwrap_or_default();
+                    return Err(ExecutorError::InvalidOperation(
+                        format!("NOT NULL constraint violated for column '{}'", col_name),
+                    ));
+                }
+            }
+
+            // Enforce PRIMARY KEY uniqueness
+            if !pk_columns.is_empty() {
+                let pk_vals: Vec<&Value> = pk_columns.iter().map(|&i| &new_row[i]).collect();
+                for (ri, existing) in table_data.rows.iter().enumerate() {
+                    if !self.is_row_visible(&table_data, ri) { continue; }
+                    let existing_pk: Vec<&Value> = pk_columns.iter().map(|&i| &existing.values[i]).collect();
+                    if pk_vals == existing_pk {
+                        return Err(ExecutorError::InvalidOperation(
+                            format!("PRIMARY KEY constraint violated: duplicate key in table '{}'", table_name),
+                        ));
+                    }
+                }
+            }
+
+            // Enforce UNIQUE constraints
+            for unique_cols in &unique_columns {
+                let vals: Vec<&Value> = unique_cols.iter().map(|&i| &new_row[i]).collect();
+                // Skip uniqueness check if any value is NULL (SQL standard)
+                if vals.iter().any(|v| matches!(v, Value::Null)) { continue; }
+                for (ri, existing) in table_data.rows.iter().enumerate() {
+                    if !self.is_row_visible(&table_data, ri) { continue; }
+                    let existing_vals: Vec<&Value> = unique_cols.iter().map(|&i| &existing.values[i]).collect();
+                    if vals == existing_vals {
+                        return Err(ExecutorError::InvalidOperation(
+                            "UNIQUE constraint violated".to_string(),
+                        ));
+                    }
                 }
             }
 
@@ -1050,6 +1109,9 @@ impl Executor {
     }
 
     /// Execute a SELECT query.
+    /// Maximum rows returned by a single SELECT query (safety limit).
+    const MAX_RESULT_ROWS: usize = 100_000;
+
     fn execute_query(&self, root: &PlanNode) -> ExecutorResult<QueryResult> {
         let context = self.context.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
         let mut operator = self.create_operator(root, &context)?;
@@ -1061,6 +1123,10 @@ impl Executor {
                 columns = batch.columns.clone();
             }
             all_rows.extend(batch.rows);
+            if all_rows.len() > Self::MAX_RESULT_ROWS {
+                all_rows.truncate(Self::MAX_RESULT_ROWS);
+                break;
+            }
         }
 
         Ok(QueryResult::new(columns, all_rows))

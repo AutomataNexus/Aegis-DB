@@ -105,17 +105,18 @@ pub async fn execute_query(
         }
         Err(e) => {
             state.record_request(duration_ms, false).await;
-            let status = match &e {
-                QueryError::Parse(_) => StatusCode::BAD_REQUEST,
-                QueryError::Plan(_) => StatusCode::BAD_REQUEST,
-                QueryError::Execute(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            let (status, client_msg) = match &e {
+                QueryError::Parse(_) => (StatusCode::BAD_REQUEST, "Query syntax error"),
+                QueryError::Plan(_) => (StatusCode::BAD_REQUEST, "Query planning error"),
+                QueryError::Execute(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Query execution error"),
             };
+            tracing::warn!("Query failed: {}", e);
             (
                 status,
                 Json(QueryResponse {
                     success: false,
                     data: None,
-                    error: Some(e.to_string()),
+                    error: Some(client_msg.to_string()),
                     execution_time_ms: duration_ms,
                 }),
             )

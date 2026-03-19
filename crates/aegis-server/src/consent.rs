@@ -432,7 +432,7 @@ impl ConsentManager {
             }
         }
 
-        // Add to history
+        // Add to history (capped at 1000 entries per subject)
         {
             let mut history = self.history.write();
             let subject_history = history.entry(subject_id.to_string()).or_default();
@@ -442,6 +442,11 @@ impl ConsentManager {
                 actor: actor.to_string(),
                 reason: None,
             });
+            // Evict oldest entries if over limit
+            if subject_history.len() > 1000 {
+                let excess = subject_history.len() - 1000;
+                subject_history.drain(..excess);
+            }
         }
 
         tracing::info!(

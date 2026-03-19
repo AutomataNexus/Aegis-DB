@@ -605,7 +605,7 @@ impl KvStore {
             let kv_path = dir.join("kv_store.json");
             let data = self.data.read();
             let entries: Vec<&KvEntry> = data.values().collect();
-            match serde_json::to_string_pretty(&entries) {
+            match serde_json::to_string(&entries) {
                 Ok(json) => {
                     if let Err(e) = std::fs::write(&kv_path, json) {
                         tracing::error!("Failed to flush KV store to {:?}: {}", kv_path, e);
@@ -772,7 +772,7 @@ impl GraphStore {
                 node_counter: self.node_counter.load(Ordering::SeqCst),
                 edge_counter: self.edge_counter.load(Ordering::SeqCst),
             };
-            match serde_json::to_string_pretty(&snapshot) {
+            match serde_json::to_string(&snapshot) {
                 Ok(json) => {
                     if let Err(e) = std::fs::write(&graph_path, json) {
                         tracing::error!("Failed to flush graph store to {:?}: {}", graph_path, e);
@@ -827,17 +827,19 @@ impl GraphStore {
     }
 
     /// Delete a node and its edges.
+    /// Lock order: nodes first, then edges (consistent with create_edge).
     pub fn delete_node(&self, id: &str) -> Result<(), String> {
+        // Acquire both locks in consistent order: nodes → edges
         let mut nodes = self.nodes.write();
+        let mut edges = self.edges.write();
+
         if nodes.remove(id).is_none() {
             return Err(format!("Node '{}' not found", id));
         }
-        drop(nodes);
-
-        // Remove edges connected to this node
-        let mut edges = self.edges.write();
         edges.retain(|_, e| e.source != id && e.target != id);
+
         drop(edges);
+        drop(nodes);
         self.flush_to_disk();
         Ok(())
     }
@@ -964,11 +966,20 @@ impl QueryEngine {
             contexts.insert("default".to_string(), Arc::new(std::sync::RwLock::new(ExecutionContext::new())));
         }
 
-        // Initialize WAL for crash recovery
+        // Initialize WAL with crash recovery — replay any committed records
         let wal_dir = data_dir.join("wal");
-        let wal = match aegis_storage::wal::WriteAheadLog::new(wal_dir, true) {
-            Ok(w) => {
-                tracing::info!("WAL initialized for crash recovery");
+        let wal = match aegis_storage::wal::WriteAheadLog::open_and_recover(wal_dir, true) {
+            Ok((w, recovery)) => {
+                if recovery.records_processed > 0 {
+                    tracing::info!(
+                        "WAL recovery: {} records processed, {} segments scanned, {} incomplete transactions",
+                        recovery.records_processed,
+                        recovery.segments_scanned,
+                        recovery.incomplete_transactions.len(),
+                    );
+                } else {
+                    tracing::info!("WAL initialized (clean startup, no recovery needed)");
+                }
                 Some(Arc::new(w))
             }
             Err(e) => {
@@ -1015,23 +1026,35 @@ impl QueryEngine {
                     "database": db,
                 });
 
-                let resp = client
-                    .post(&url)
-                    .header("X-Aegis-Replicated", "true")
-                    .json(&body)
-                    .send()
-                    .await;
+                // Retry up to 3 times with exponential backoff
+                let mut success = false;
+                for attempt in 0..3u32 {
+                    if attempt > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(100 * 2u64.pow(attempt))).await;
+                    }
+                    let resp = client
+                        .post(&url)
+                        .header("X-Aegis-Replicated", "true")
+                        .json(&body)
+                        .send()
+                        .await;
 
-                match resp {
-                    Ok(r) if r.status().is_success() => {
-                        tracing::debug!("Replicated to {}: {}", peer, &sql[..sql.len().min(80)]);
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            tracing::debug!("Replicated to {}: {}", peer, &sql[..sql.len().min(80)]);
+                            success = true;
+                            break;
+                        }
+                        Ok(r) => {
+                            tracing::warn!("Replication to {} returned {} (attempt {})", peer, r.status(), attempt + 1);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Replication to {} failed: {} (attempt {})", peer, e, attempt + 1);
+                        }
                     }
-                    Ok(r) => {
-                        tracing::warn!("Replication to {} returned {}", peer, r.status());
-                    }
-                    Err(e) => {
-                        tracing::warn!("Replication to {} failed: {}", peer, e);
-                    }
+                }
+                if !success {
+                    tracing::error!("Replication to {} failed after 3 attempts", peer);
                 }
             }
         });
