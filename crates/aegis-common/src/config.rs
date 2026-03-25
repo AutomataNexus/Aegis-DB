@@ -62,7 +62,7 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            buffer_pool_size: 1024 * 1024 * 1024, // 1 GB
+            buffer_pool_size: 1024 * 1024 * 1024,  // 1 GB
             query_memory_limit: 256 * 1024 * 1024, // 256 MB
             arena_block_size: 64 * 1024,           // 64 KB
         }
@@ -197,7 +197,7 @@ impl ServerConfig {
                 ..Default::default()
             },
             memory: MemoryConfig {
-                buffer_pool_size: 256 * 1024 * 1024, // 4 GB
+                buffer_pool_size: 256 * 1024 * 1024, // 256 MB
                 ..Default::default()
             },
             network: NetworkConfig {
