@@ -116,10 +116,10 @@ pub struct SecurityEvent {
 }
 
 impl SecurityEvent {
-    /// Create a new security event.
-    pub fn new(event_type: SecurityEventType, description: &str) -> Self {
+    /// Create a new security event with an auto-generated ID from the given counter.
+    pub fn new(event_type: SecurityEventType, description: &str, counter: &AtomicU64) -> Self {
         Self {
-            id: generate_event_id(),
+            id: generate_event_id(counter),
             event_type,
             timestamp: now_timestamp(),
             user: None,
@@ -254,14 +254,15 @@ pub struct BreachIncident {
 }
 
 impl BreachIncident {
-    /// Create a new breach incident.
+    /// Create a new breach incident with an auto-generated ID from the given counter.
     pub fn new(
         incident_type: SecurityEventType,
         severity: BreachSeverity,
         description: &str,
+        counter: &AtomicU64,
     ) -> Self {
         Self {
-            id: generate_incident_id(),
+            id: generate_incident_id(counter),
             detected_at: now_timestamp(),
             incident_type,
             severity,
@@ -508,6 +509,21 @@ impl BreachNotifier for LogNotifier {
         });
 
         let mut writer = self.writer.write();
+        // Reopen the file if the writer was lost (e.g., log rotation)
+        if writer.is_none() {
+            match OpenOptions::new().create(true).append(true).open(&self.log_path) {
+                Ok(file) => {
+                    *writer = Some(BufWriter::new(file));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to reopen breach log {}: {}",
+                        self.log_path.display(),
+                        e
+                    ));
+                }
+            }
+        }
         if let Some(ref mut w) = *writer {
             writeln!(w, "{}", log_entry)
                 .map_err(|e| format!("Failed to write to breach log: {}", e))?;
@@ -708,6 +724,7 @@ impl BreachDetector {
         let event = SecurityEvent::new(
             SecurityEventType::FailedLogin,
             &format!("Failed login attempt for user: {}", username),
+            &self.event_counter,
         )
         .with_user(username);
 
@@ -741,6 +758,7 @@ impl BreachDetector {
                     "Mass data access detected: {} accessed {} records",
                     user, count
                 ),
+                &self.event_counter,
             )
             .with_user(user)
             .with_metadata("record_count", &count.to_string());
@@ -765,6 +783,7 @@ impl BreachDetector {
                 "Unauthorized access attempt: {} tried to {} on {}",
                 user, permission, resource
             ),
+            &self.event_counter,
         )
         .with_user(user)
         .with_resource(resource)
@@ -822,6 +841,7 @@ impl BreachDetector {
                     "High volume data access detected: {} accessed {} rows from {}",
                     user, row_count, resource
                 ),
+                &self.event_counter,
             )
             .with_user(user)
             .with_resource(resource)
@@ -850,6 +870,7 @@ impl BreachDetector {
                     "Admin action '{}' performed by {} from untrusted IP {}",
                     action, user, ip
                 ),
+                &self.event_counter,
             )
             .with_user(user)
             .with_ip(ip)
@@ -887,6 +908,7 @@ impl BreachDetector {
                     "Mass data operation: {} {} {} rows from {}",
                     user, operation, row_count, resource
                 ),
+                &self.event_counter,
             )
             .with_user(user)
             .with_resource(resource)
@@ -950,6 +972,7 @@ impl BreachDetector {
                     count,
                     window.as_secs()
                 ),
+                &self.incident_counter,
             )
             .with_related_event(&event.id)
             .with_detail("attempt_count", &count.to_string());
@@ -975,6 +998,7 @@ impl BreachDetector {
             SecurityEventType::UnauthorizedAccess,
             severity,
             &event.description,
+            &self.incident_counter,
         )
         .with_related_event(&event.id);
 
@@ -997,6 +1021,7 @@ impl BreachDetector {
             SecurityEventType::UnusualAccessPattern,
             BreachSeverity::Medium,
             &event.description,
+            &self.incident_counter,
         )
         .with_related_event(&event.id);
 
@@ -1016,6 +1041,7 @@ impl BreachDetector {
             SecurityEventType::AdminFromUnknownIp,
             BreachSeverity::High,
             &event.description,
+            &self.incident_counter,
         )
         .with_related_event(&event.id);
 
@@ -1041,8 +1067,9 @@ impl BreachDetector {
             BreachSeverity::High
         };
 
-        let mut incident = BreachIncident::new(event.event_type, severity, &event.description)
-            .with_related_event(&event.id);
+        let mut incident =
+            BreachIncident::new(event.event_type, severity, &event.description, &self.incident_counter)
+                .with_related_event(&event.id);
 
         if let Some(ref user) = event.user {
             incident = incident.with_affected_subject(user);
@@ -1066,6 +1093,7 @@ impl BreachDetector {
             SecurityEventType::SqlInjection,
             BreachSeverity::High,
             &event.description,
+            &self.incident_counter,
         )
         .with_related_event(&event.id);
 
@@ -1082,7 +1110,7 @@ impl BreachDetector {
     /// Create a high severity incident.
     fn create_high_severity_incident(&self, event: &SecurityEvent) -> Option<BreachIncident> {
         let mut incident =
-            BreachIncident::new(event.event_type, BreachSeverity::High, &event.description)
+            BreachIncident::new(event.event_type, BreachSeverity::High, &event.description, &self.incident_counter)
                 .with_related_event(&event.id);
 
         if let Some(ref user) = event.user {
@@ -1101,6 +1129,7 @@ impl BreachDetector {
             event.event_type,
             BreachSeverity::Critical,
             &event.description,
+            &self.incident_counter,
         )
         .with_related_event(&event.id);
 
@@ -1442,16 +1471,14 @@ fn now_timestamp() -> u64 {
         .as_millis() as u64
 }
 
-/// Generate a unique event ID.
-fn generate_event_id() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    format!("evt-{:012}", COUNTER.fetch_add(1, Ordering::SeqCst))
+/// Generate a unique event ID using the given counter.
+fn generate_event_id(counter: &AtomicU64) -> String {
+    format!("evt-{:012}", counter.fetch_add(1, Ordering::SeqCst))
 }
 
-/// Generate a unique incident ID.
-fn generate_incident_id() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    format!("inc-{:012}", COUNTER.fetch_add(1, Ordering::SeqCst))
+/// Generate a unique incident ID using the given counter.
+fn generate_incident_id(counter: &AtomicU64) -> String {
+    format!("inc-{:012}", counter.fetch_add(1, Ordering::SeqCst))
 }
 
 /// Format a timestamp to RFC3339 string.
@@ -1770,7 +1797,8 @@ mod tests {
 
     #[test]
     fn test_security_event_creation() {
-        let event = SecurityEvent::new(SecurityEventType::FailedLogin, "Test failed login")
+        let counter = AtomicU64::new(1);
+        let event = SecurityEvent::new(SecurityEventType::FailedLogin, "Test failed login", &counter)
             .with_user("testuser")
             .with_ip("192.168.1.1");
 
@@ -1782,10 +1810,12 @@ mod tests {
 
     #[test]
     fn test_breach_incident_creation() {
+        let counter = AtomicU64::new(1);
         let incident = BreachIncident::new(
             SecurityEventType::FailedLogin,
             BreachSeverity::Medium,
             "Multiple failed logins detected",
+            &counter,
         )
         .with_affected_subject("user1")
         .with_involved_ip("10.0.0.1");
@@ -1944,14 +1974,16 @@ mod tests {
 
     #[test]
     fn test_requires_immediate_notification() {
+        let counter = AtomicU64::new(1);
         let low_incident =
-            BreachIncident::new(SecurityEventType::FailedLogin, BreachSeverity::Low, "test");
+            BreachIncident::new(SecurityEventType::FailedLogin, BreachSeverity::Low, "test", &counter);
         assert!(!low_incident.requires_immediate_notification());
 
         let high_incident = BreachIncident::new(
             SecurityEventType::MassDataDeletion,
             BreachSeverity::High,
             "test",
+            &counter,
         );
         assert!(high_incident.requires_immediate_notification());
 
@@ -1959,6 +1991,7 @@ mod tests {
             SecurityEventType::BruteForceAttack,
             BreachSeverity::Critical,
             "test",
+            &counter,
         );
         assert!(critical_incident.requires_immediate_notification());
     }

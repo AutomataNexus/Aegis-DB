@@ -317,16 +317,24 @@ pub struct AuthService {
 impl AuthService {
     /// Create a new authentication service.
     ///
-    /// If AEGIS_ADMIN_USERNAME and AEGIS_ADMIN_PASSWORD environment variables
-    /// are set, an initial admin user will be created. Otherwise, the system
-    /// starts with no users and the first user must be created via the API
-    /// or CLI.
+    /// Uses environment variables as a fallback for admin credentials.
     pub fn new() -> Self {
         Self::with_data_dir(None)
     }
 
     /// Create an authentication service with optional persistence to disk.
+    /// Admin credentials are read from environment variables only.
     pub fn with_data_dir(data_dir: Option<PathBuf>) -> Self {
+        Self::with_data_dir_and_secrets(data_dir, None)
+    }
+
+    /// Create an authentication service with persistence and a secrets provider.
+    /// Admin credentials are resolved through the secrets provider chain
+    /// (vault → external vault → env vars) instead of raw environment variables.
+    pub fn with_data_dir_and_secrets(
+        data_dir: Option<PathBuf>,
+        secrets: Option<&dyn crate::secrets::SecretsProvider>,
+    ) -> Self {
         let mut users = HashMap::new();
 
         // Load persisted users from disk if data_dir is configured
@@ -362,16 +370,24 @@ impl AuthService {
             }
         }
 
-        // Check for initial admin user from environment variables
-        // Only create if the admin user doesn't already exist (from disk)
-        if let (Ok(username), Ok(password)) = (
-            std::env::var("AEGIS_ADMIN_USERNAME"),
-            std::env::var("AEGIS_ADMIN_PASSWORD"),
-        ) {
+        // Resolve admin credentials through secrets provider (vault-first),
+        // falling back to environment variables if no provider is given.
+        let admin_username = secrets
+            .and_then(|s| s.get(crate::secrets::keys::ADMIN_USERNAME))
+            .or_else(|| std::env::var("AEGIS_ADMIN_USERNAME").ok());
+        let admin_password = secrets
+            .and_then(|s| s.get(crate::secrets::keys::ADMIN_PASSWORD))
+            .or_else(|| std::env::var("AEGIS_ADMIN_PASSWORD").ok());
+        let admin_email = secrets
+            .and_then(|s| s.get(crate::secrets::keys::ADMIN_EMAIL))
+            .or_else(|| std::env::var("AEGIS_ADMIN_EMAIL").ok());
+
+        // Create initial admin user if credentials are available and user doesn't already exist
+        if let (Some(username), Some(password)) = (admin_username, admin_password) {
             if !users.contains_key(&username) {
                 if password.len() >= 12 {
-                    let email = std::env::var("AEGIS_ADMIN_EMAIL")
-                        .unwrap_or_else(|_| format!("{}@localhost", username));
+                    let email =
+                        admin_email.unwrap_or_else(|| format!("{}@localhost", username));
 
                     let user_count = users.len() + 1;
                     let admin = User {
@@ -385,7 +401,7 @@ impl AuthService {
                         created_at: now_timestamp(),
                         last_login: None,
                     };
-                    tracing::info!("Created initial admin user '{}' from environment", username);
+                    tracing::info!("Created initial admin user '{}' from secrets provider", username);
                     users.insert(admin.username.clone(), admin);
                 } else {
                     tracing::warn!(
@@ -395,7 +411,7 @@ impl AuthService {
             }
         } else if users.is_empty() {
             tracing::info!(
-                "No initial admin configured. Set AEGIS_ADMIN_USERNAME and AEGIS_ADMIN_PASSWORD to create one."
+                "No initial admin configured. Store credentials in the vault or set AEGIS_ADMIN_USERNAME and AEGIS_ADMIN_PASSWORD."
             );
         }
 

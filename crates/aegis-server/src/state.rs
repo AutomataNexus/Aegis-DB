@@ -66,7 +66,17 @@ pub struct AppState {
 
 impl AppState {
     /// Create new application state with the given configuration.
+    /// Admin credentials are resolved from environment variables only.
+    /// For vault-backed credentials, use `with_secrets` instead.
     pub fn new(config: ServerConfig) -> Self {
+        Self::with_secrets(config, None)
+    }
+
+    /// Create new application state with secrets provider for admin credentials.
+    pub fn with_secrets(
+        config: ServerConfig,
+        secrets: Option<&dyn crate::secrets::SecretsProvider>,
+    ) -> Self {
         let data_dir = config.data_dir.as_ref().map(PathBuf::from);
 
         // Create activity logger with persistence if data directory is configured
@@ -221,7 +231,7 @@ impl AppState {
             kv_store,
             metrics: Arc::new(RwLock::new(Metrics::default())),
             admin,
-            auth: Arc::new(AuthService::with_data_dir(data_dir.clone())),
+            auth: Arc::new(AuthService::with_data_dir_and_secrets(data_dir.clone(), secrets)),
             activity,
             settings: Arc::new(RwLock::new({
                 let mut loaded_settings = ServerSettings::default();
@@ -1232,7 +1242,7 @@ impl QueryEngine {
 
             // Write to WAL before persisting snapshot (write-ahead guarantee)
             if let Some(ref wal) = self.wal {
-                use aegis_common::{Lsn, TransactionId};
+                use aegis_common::TransactionId;
                 use aegis_storage::wal::{LogRecord, LogRecordType};
 
                 let lsn = wal.next_lsn();

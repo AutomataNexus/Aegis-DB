@@ -220,15 +220,15 @@ async fn main() {
         tracing::info!("Node Name: {}", name);
     }
 
-    let state = AppState::new(config);
+    let state = AppState::with_secrets(config, Some(&secrets_manager));
 
     // Warn loudly at startup if no admin user is configured
     if state.auth.list_users().is_empty() {
         tracing::warn!("==========================================================");
         tracing::warn!("SECURITY WARNING: No admin user configured!");
         tracing::warn!("All API endpoints are accessible without authentication.");
-        tracing::warn!("Create an admin user or set AEGIS_ADMIN_USERNAME and");
-        tracing::warn!("AEGIS_ADMIN_PASSWORD environment variables to secure the server.");
+        tracing::warn!("Store credentials in the vault or set AEGIS_ADMIN_USERNAME");
+        tracing::warn!("and AEGIS_ADMIN_PASSWORD environment variables.");
         tracing::warn!("==========================================================");
     }
 
