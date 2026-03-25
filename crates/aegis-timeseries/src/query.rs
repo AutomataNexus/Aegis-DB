@@ -159,7 +159,8 @@ impl QueryExecutor {
             .map(|mut s| {
                 points_scanned += s.points.len();
 
-                s.points.retain(|p| p.timestamp >= query.start && p.timestamp < query.end);
+                s.points
+                    .retain(|p| p.timestamp >= query.start && p.timestamp < query.end);
 
                 if let Some(ref agg) = query.aggregation {
                     s.points = Self::apply_aggregation(&s.points, agg);

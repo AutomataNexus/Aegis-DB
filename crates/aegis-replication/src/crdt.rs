@@ -228,10 +228,7 @@ impl<T: Clone + Eq + std::hash::Hash + Serialize + for<'de> Deserialize<'de>> Tw
 
     /// Get all active elements.
     pub fn elements(&self) -> HashSet<T> {
-        self.added
-            .difference(&self.removed)
-            .cloned()
-            .collect()
+        self.added.difference(&self.removed).cloned().collect()
     }
 
     /// Get the number of active elements.
@@ -298,7 +295,8 @@ impl<T: Clone + Serialize + for<'de> Deserialize<'de>> LWWRegister<T> {
     /// Set the register value.
     pub fn set(&mut self, value: T, node_id: &NodeId) {
         let ts = Self::now();
-        if ts > self.timestamp || (ts == self.timestamp && node_id.as_str() > self.node_id.as_str()) {
+        if ts > self.timestamp || (ts == self.timestamp && node_id.as_str() > self.node_id.as_str())
+        {
             self.value = Some(value);
             self.timestamp = ts;
             self.node_id = node_id.as_str().to_string();
@@ -465,10 +463,7 @@ impl<T: Clone + Eq + std::hash::Hash + Serialize + for<'de> Deserialize<'de>> OR
         *counter += 1;
 
         let tag = UniqueTag::new(node_id, *counter);
-        self.elements
-            .entry(element)
-            .or_default()
-            .insert(tag);
+        self.elements.entry(element).or_default().insert(tag);
     }
 
     /// Remove an element from the set.
@@ -547,10 +542,7 @@ impl<
 
     /// Set a key-value pair.
     pub fn set(&mut self, key: K, value: V, node_id: &NodeId) {
-        self.entries
-            .entry(key)
-            .or_default()
-            .set(value, node_id);
+        self.entries.entry(key).or_default().set(value, node_id);
     }
 
     /// Get a value by key.
@@ -600,10 +592,7 @@ impl<
 {
     fn merge(&mut self, other: &Self) {
         for (key, register) in &other.entries {
-            self.entries
-                .entry(key.clone())
-                .or_default()
-                .merge(register);
+            self.entries.entry(key.clone()).or_default().merge(register);
         }
     }
 }

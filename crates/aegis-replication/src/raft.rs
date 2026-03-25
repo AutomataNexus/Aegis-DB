@@ -68,15 +68,13 @@ impl RaftConfig {
 // =============================================================================
 
 /// Persistent state for Raft consensus.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RaftState {
     pub current_term: Term,
     pub voted_for: Option<NodeId>,
     pub commit_index: LogIndex,
     pub last_applied: LogIndex,
 }
-
 
 // =============================================================================
 // Vote Request/Response
@@ -238,12 +236,18 @@ impl RaftNode {
 
     /// Get the current term.
     pub fn current_term(&self) -> Term {
-        self.state.read().expect("raft state lock poisoned").current_term
+        self.state
+            .read()
+            .expect("raft state lock poisoned")
+            .current_term
     }
 
     /// Get the current leader ID.
     pub fn leader_id(&self) -> Option<NodeId> {
-        self.leader_id.read().expect("raft leader_id lock poisoned").clone()
+        self.leader_id
+            .read()
+            .expect("raft leader_id lock poisoned")
+            .clone()
     }
 
     /// Check if this node is the leader.
@@ -262,12 +266,19 @@ impl RaftNode {
     /// Called when the leader receives successful acks from a majority.
     pub fn extend_lease(&self) {
         let expiry = Instant::now() + self.config.lease_duration;
-        *self.lease_expiry.write().expect("raft lease_expiry lock poisoned") = Some(expiry);
+        *self
+            .lease_expiry
+            .write()
+            .expect("raft lease_expiry lock poisoned") = Some(expiry);
     }
 
     /// Check if the leader lease is still valid.
     pub fn has_valid_lease(&self) -> bool {
-        match *self.lease_expiry.read().expect("raft lease_expiry lock poisoned") {
+        match *self
+            .lease_expiry
+            .read()
+            .expect("raft lease_expiry lock poisoned")
+        {
             Some(expiry) => Instant::now() < expiry,
             None => false,
         }
@@ -278,9 +289,15 @@ impl RaftNode {
     pub fn check_lease(&self) {
         if self.is_leader() && !self.has_valid_lease() {
             *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
-            *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
+            *self
+                .leader_id
+                .write()
+                .expect("raft leader_id lock poisoned") = None;
             // Clear the lease
-            *self.lease_expiry.write().expect("raft lease_expiry lock poisoned") = None;
+            *self
+                .lease_expiry
+                .write()
+                .expect("raft lease_expiry lock poisoned") = None;
         }
     }
 
@@ -290,21 +307,38 @@ impl RaftNode {
         peers.insert(peer_id.clone());
 
         let last_log = self.log.last_index();
-        self.next_index.write().expect("raft next_index lock poisoned").insert(peer_id.clone(), last_log + 1);
-        self.match_index.write().expect("raft match_index lock poisoned").insert(peer_id, 0);
+        self.next_index
+            .write()
+            .expect("raft next_index lock poisoned")
+            .insert(peer_id.clone(), last_log + 1);
+        self.match_index
+            .write()
+            .expect("raft match_index lock poisoned")
+            .insert(peer_id, 0);
     }
 
     /// Remove a peer from the cluster.
     pub fn remove_peer(&self, peer_id: &NodeId) {
         let mut peers = self.peers.write().expect("raft peers lock poisoned");
         peers.remove(peer_id);
-        self.next_index.write().expect("raft next_index lock poisoned").remove(peer_id);
-        self.match_index.write().expect("raft match_index lock poisoned").remove(peer_id);
+        self.next_index
+            .write()
+            .expect("raft next_index lock poisoned")
+            .remove(peer_id);
+        self.match_index
+            .write()
+            .expect("raft match_index lock poisoned")
+            .remove(peer_id);
     }
 
     /// Get the list of peers.
     pub fn peers(&self) -> Vec<NodeId> {
-        self.peers.read().expect("raft peers lock poisoned").iter().cloned().collect()
+        self.peers
+            .read()
+            .expect("raft peers lock poisoned")
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Get the cluster size (including self).
@@ -319,12 +353,19 @@ impl RaftNode {
 
     /// Reset the heartbeat timer.
     pub fn reset_heartbeat(&self) {
-        *self.last_heartbeat.write().expect("raft last_heartbeat lock poisoned") = Instant::now();
+        *self
+            .last_heartbeat
+            .write()
+            .expect("raft last_heartbeat lock poisoned") = Instant::now();
     }
 
     /// Check if the election timeout has elapsed.
     pub fn election_timeout_elapsed(&self) -> bool {
-        let elapsed = self.last_heartbeat.read().expect("raft last_heartbeat lock poisoned").elapsed();
+        let elapsed = self
+            .last_heartbeat
+            .read()
+            .expect("raft last_heartbeat lock poisoned")
+            .elapsed();
         elapsed >= self.config.election_timeout_min
     }
 
@@ -339,9 +380,15 @@ impl RaftNode {
         state.voted_for = Some(self.id.clone());
 
         *self.role.write().expect("raft role lock poisoned") = NodeRole::Candidate;
-        *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
+        *self
+            .leader_id
+            .write()
+            .expect("raft leader_id lock poisoned") = None;
 
-        let mut votes = self.votes_received.write().expect("raft votes_received lock poisoned");
+        let mut votes = self
+            .votes_received
+            .write()
+            .expect("raft votes_received lock poisoned");
         votes.clear();
         votes.insert(self.id.clone());
 
@@ -363,12 +410,18 @@ impl RaftNode {
             state.current_term = request.term;
             state.voted_for = None;
             *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
-            *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
+            *self
+                .leader_id
+                .write()
+                .expect("raft leader_id lock poisoned") = None;
         }
 
         let vote_granted = request.term >= state.current_term
-            && (state.voted_for.is_none() || state.voted_for.as_ref() == Some(&request.candidate_id))
-            && self.log.is_up_to_date(request.last_log_index, request.last_log_term);
+            && (state.voted_for.is_none()
+                || state.voted_for.as_ref() == Some(&request.candidate_id))
+            && self
+                .log
+                .is_up_to_date(request.last_log_index, request.last_log_term);
 
         if vote_granted {
             state.voted_for = Some(request.candidate_id.clone());
@@ -391,7 +444,10 @@ impl RaftNode {
                 state.current_term = response.term;
                 state.voted_for = None;
                 *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
-                *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
+                *self
+                    .leader_id
+                    .write()
+                    .expect("raft leader_id lock poisoned") = None;
                 return false;
             }
 
@@ -403,10 +459,17 @@ impl RaftNode {
         };
 
         if response.vote_granted {
-            self.votes_received.write().expect("raft votes_received lock poisoned").insert(response.voter_id.clone());
+            self.votes_received
+                .write()
+                .expect("raft votes_received lock poisoned")
+                .insert(response.voter_id.clone());
         }
 
-        let votes = self.votes_received.read().expect("raft votes_received lock poisoned").len();
+        let votes = self
+            .votes_received
+            .read()
+            .expect("raft votes_received lock poisoned")
+            .len();
         if votes >= self.quorum_size() {
             self.become_leader_with_term(current_term);
             return true;
@@ -425,13 +488,28 @@ impl RaftNode {
     /// Become the leader with a specific term (avoids deadlock when called with state lock held).
     fn become_leader_with_term(&self, term: Term) {
         *self.role.write().expect("raft role lock poisoned") = NodeRole::Leader;
-        *self.leader_id.write().expect("raft leader_id lock poisoned") = Some(self.id.clone());
+        *self
+            .leader_id
+            .write()
+            .expect("raft leader_id lock poisoned") = Some(self.id.clone());
 
         let last_log = self.log.last_index();
-        let peers: Vec<_> = self.peers.read().expect("raft peers lock poisoned").iter().cloned().collect();
+        let peers: Vec<_> = self
+            .peers
+            .read()
+            .expect("raft peers lock poisoned")
+            .iter()
+            .cloned()
+            .collect();
 
-        let mut next_index = self.next_index.write().expect("raft next_index lock poisoned");
-        let mut match_index = self.match_index.write().expect("raft match_index lock poisoned");
+        let mut next_index = self
+            .next_index
+            .write()
+            .expect("raft next_index lock poisoned");
+        let mut match_index = self
+            .match_index
+            .write()
+            .expect("raft match_index lock poisoned");
 
         for peer in peers {
             next_index.insert(peer.clone(), last_log + 1);
@@ -469,7 +547,11 @@ impl RaftNode {
             return None;
         }
 
-        let next_index = *self.next_index.read().expect("raft next_index lock poisoned").get(peer_id)?;
+        let next_index = *self
+            .next_index
+            .read()
+            .expect("raft next_index lock poisoned")
+            .get(peer_id)?;
         let prev_log_index = next_index.saturating_sub(1);
         let prev_log_term = self.log.term_at(prev_log_index).unwrap_or(0);
 
@@ -511,7 +593,10 @@ impl RaftNode {
         }
 
         *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
-        *self.leader_id.write().expect("raft leader_id lock poisoned") = Some(request.leader_id.clone());
+        *self
+            .leader_id
+            .write()
+            .expect("raft leader_id lock poisoned") = Some(request.leader_id.clone());
         self.reset_heartbeat();
 
         if request.prev_log_index > 0 {
@@ -561,7 +646,11 @@ impl RaftNode {
             let last_new_index = if request.entries.is_empty() {
                 request.prev_log_index
             } else {
-                request.entries.last().expect("entries confirmed non-empty").index
+                request
+                    .entries
+                    .last()
+                    .expect("entries confirmed non-empty")
+                    .index
             };
             state.commit_index = std::cmp::min(request.leader_commit, last_new_index);
             self.log.set_commit_index(state.commit_index);
@@ -588,7 +677,10 @@ impl RaftNode {
             state.current_term = response.term;
             state.voted_for = None;
             *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
-            *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
+            *self
+                .leader_id
+                .write()
+                .expect("raft leader_id lock poisoned") = None;
             return;
         }
 
@@ -596,8 +688,14 @@ impl RaftNode {
             return;
         }
 
-        let mut next_index = self.next_index.write().expect("raft next_index lock poisoned");
-        let mut match_index = self.match_index.write().expect("raft match_index lock poisoned");
+        let mut next_index = self
+            .next_index
+            .write()
+            .expect("raft next_index lock poisoned");
+        let mut match_index = self
+            .match_index
+            .write()
+            .expect("raft match_index lock poisoned");
 
         if response.success {
             match_index.insert(peer_id.clone(), response.match_index);
@@ -628,7 +726,10 @@ impl RaftNode {
     /// Try to advance the commit index based on match indices.
     fn try_advance_commit_index(&self) {
         let match_indices: Vec<_> = {
-            let match_index = self.match_index.read().expect("raft match_index lock poisoned");
+            let match_index = self
+                .match_index
+                .read()
+                .expect("raft match_index lock poisoned");
             let mut indices: Vec<_> = match_index.values().copied().collect();
             indices.push(self.log.last_index());
             indices.sort_unstable();
@@ -738,13 +839,20 @@ impl RaftNode {
             size,
         };
 
-        *self.snapshot_metadata.write().expect("raft snapshot_metadata lock poisoned") = Some(metadata.clone());
+        *self
+            .snapshot_metadata
+            .write()
+            .expect("raft snapshot_metadata lock poisoned") = Some(metadata.clone());
         Some(metadata)
     }
 
     /// Get the current snapshot data (for sending to followers).
     pub fn get_snapshot_data(&self) -> Option<(SnapshotMetadata, Vec<u8>)> {
-        let metadata = self.snapshot_metadata.read().expect("raft snapshot_metadata lock poisoned").clone()?;
+        let metadata = self
+            .snapshot_metadata
+            .read()
+            .expect("raft snapshot_metadata lock poisoned")
+            .clone()?;
         let snapshot = self.state_machine.snapshot();
         let data = snapshot.to_bytes();
         Some((metadata, data))
@@ -761,7 +869,11 @@ impl RaftNode {
             return None;
         }
 
-        let next_index = *self.next_index.read().expect("raft next_index lock poisoned").get(peer_id)?;
+        let next_index = *self
+            .next_index
+            .read()
+            .expect("raft next_index lock poisoned")
+            .get(peer_id)?;
         let (metadata, data) = self.get_snapshot_data()?;
 
         // Only send snapshot if peer needs entries before our snapshot
@@ -818,10 +930,16 @@ impl RaftNode {
         }
 
         // Update leader and reset heartbeat
-        *self.leader_id.write().expect("raft leader_id lock poisoned") = Some(request.leader_id.clone());
+        *self
+            .leader_id
+            .write()
+            .expect("raft leader_id lock poisoned") = Some(request.leader_id.clone());
         self.reset_heartbeat();
 
-        let mut pending = self.pending_snapshot.write().expect("raft pending_snapshot lock poisoned");
+        let mut pending = self
+            .pending_snapshot
+            .write()
+            .expect("raft pending_snapshot lock poisoned");
 
         // If offset is 0, create a new pending snapshot
         if request.offset == 0 {
@@ -861,7 +979,10 @@ impl RaftNode {
                     let actual_checksum = crc32fast::hash(&snapshot_data);
                     if actual_checksum != expected_checksum {
                         // Checksum mismatch - discard the snapshot
-                        *self.pending_snapshot.write().expect("raft pending_snapshot lock poisoned") = None;
+                        *self
+                            .pending_snapshot
+                            .write()
+                            .expect("raft pending_snapshot lock poisoned") = None;
                         return InstallSnapshotResponse {
                             term: state.current_term,
                         };
@@ -873,16 +994,21 @@ impl RaftNode {
                     self.state_machine.restore(restored_snapshot);
 
                     // Update log state
-                    self.log.compact(metadata.last_included_index, metadata.last_included_term);
+                    self.log
+                        .compact(metadata.last_included_index, metadata.last_included_term);
 
                     // Update commit and applied indices
-                    state.commit_index = std::cmp::max(state.commit_index, metadata.last_included_index);
+                    state.commit_index =
+                        std::cmp::max(state.commit_index, metadata.last_included_index);
                     state.last_applied = metadata.last_included_index;
                     self.log.set_commit_index(state.commit_index);
                     self.log.set_last_applied(state.last_applied);
 
                     // Store snapshot metadata
-                    *self.snapshot_metadata.write().expect("raft snapshot_metadata lock poisoned") = Some(SnapshotMetadata {
+                    *self
+                        .snapshot_metadata
+                        .write()
+                        .expect("raft snapshot_metadata lock poisoned") = Some(SnapshotMetadata {
                         last_included_index: metadata.last_included_index,
                         last_included_term: metadata.last_included_term,
                         size: snapshot_data.len() as u64,
@@ -890,7 +1016,10 @@ impl RaftNode {
                 }
 
                 // Clear pending snapshot
-                *self.pending_snapshot.write().expect("raft pending_snapshot lock poisoned") = None;
+                *self
+                    .pending_snapshot
+                    .write()
+                    .expect("raft pending_snapshot lock poisoned") = None;
             }
         }
 
@@ -914,7 +1043,10 @@ impl RaftNode {
             state.current_term = response.term;
             state.voted_for = None;
             *self.role.write().expect("raft role lock poisoned") = NodeRole::Follower;
-            *self.leader_id.write().expect("raft leader_id lock poisoned") = None;
+            *self
+                .leader_id
+                .write()
+                .expect("raft leader_id lock poisoned") = None;
             return;
         }
 
@@ -924,7 +1056,11 @@ impl RaftNode {
 
         // If the snapshot was fully received, update next_index and match_index
         if was_last_chunk {
-            if let Some(ref metadata) = *self.snapshot_metadata.read().expect("raft snapshot_metadata lock poisoned") {
+            if let Some(ref metadata) = *self
+                .snapshot_metadata
+                .read()
+                .expect("raft snapshot_metadata lock poisoned")
+            {
                 self.next_index
                     .write()
                     .expect("raft next_index lock poisoned")
@@ -939,13 +1075,22 @@ impl RaftNode {
 
     /// Check if a peer needs a snapshot (their next_index is before our first log entry).
     pub fn peer_needs_snapshot(&self, peer_id: &NodeId) -> bool {
-        let next_index = match self.next_index.read().expect("raft next_index lock poisoned").get(peer_id) {
+        let next_index = match self
+            .next_index
+            .read()
+            .expect("raft next_index lock poisoned")
+            .get(peer_id)
+        {
             Some(&idx) => idx,
             None => return false,
         };
 
         // If we have a snapshot and peer needs entries before the snapshot
-        if let Some(ref metadata) = *self.snapshot_metadata.read().expect("raft snapshot_metadata lock poisoned") {
+        if let Some(ref metadata) = *self
+            .snapshot_metadata
+            .read()
+            .expect("raft snapshot_metadata lock poisoned")
+        {
             return next_index <= metadata.last_included_index;
         }
 
@@ -954,7 +1099,10 @@ impl RaftNode {
 
     /// Get current snapshot metadata.
     pub fn snapshot_metadata(&self) -> Option<SnapshotMetadata> {
-        self.snapshot_metadata.read().expect("raft snapshot_metadata lock poisoned").clone()
+        self.snapshot_metadata
+            .read()
+            .expect("raft snapshot_metadata lock poisoned")
+            .clone()
     }
 }
 
@@ -1069,7 +1217,9 @@ mod tests {
         let command = Command::set("key", b"value".to_vec());
         leader.propose(command).unwrap();
 
-        let request = leader.create_append_entries(&NodeId::new("follower")).unwrap();
+        let request = leader
+            .create_append_entries(&NodeId::new("follower"))
+            .unwrap();
         let response = follower.handle_append_entries(&request);
 
         assert!(response.success);
@@ -1502,7 +1652,9 @@ mod tests {
             .insert(NodeId::new("follower"), 0);
 
         // The snapshot is small enough to fit in one chunk, so done=true and checksum should be set
-        let request = leader.create_install_snapshot(&NodeId::new("follower"), 0).unwrap();
+        let request = leader
+            .create_install_snapshot(&NodeId::new("follower"), 0)
+            .unwrap();
         assert!(request.done);
         assert!(request.checksum.is_some());
 

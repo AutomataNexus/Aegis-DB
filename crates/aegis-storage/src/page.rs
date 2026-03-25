@@ -12,8 +12,8 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use aegis_common::{PageId, Result, AegisError};
-use bytes::{Bytes, BytesMut, BufMut, Buf};
+use aegis_common::{AegisError, PageId, Result};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 // =============================================================================
@@ -315,7 +315,9 @@ mod tests {
         let mut page = Page::new(PageId(1), PageType::Data);
         let tuple = b"Hello, Aegis!";
 
-        let slot_id = page.insert_tuple(tuple).expect("insert_tuple should succeed");
+        let slot_id = page
+            .insert_tuple(tuple)
+            .expect("insert_tuple should succeed");
         let read_tuple = page.read_tuple(slot_id).expect("read_tuple should succeed");
 
         assert_eq!(read_tuple, tuple);
@@ -325,28 +327,50 @@ mod tests {
     fn test_page_multiple_tuples() {
         let mut page = Page::new(PageId(1), PageType::Data);
 
-        let slot1 = page.insert_tuple(b"First tuple").expect("insert first tuple should succeed");
-        let slot2 = page.insert_tuple(b"Second tuple").expect("insert second tuple should succeed");
-        let slot3 = page.insert_tuple(b"Third tuple").expect("insert third tuple should succeed");
+        let slot1 = page
+            .insert_tuple(b"First tuple")
+            .expect("insert first tuple should succeed");
+        let slot2 = page
+            .insert_tuple(b"Second tuple")
+            .expect("insert second tuple should succeed");
+        let slot3 = page
+            .insert_tuple(b"Third tuple")
+            .expect("insert third tuple should succeed");
 
-        assert_eq!(page.read_tuple(slot1).expect("read first tuple should succeed"), b"First tuple");
-        assert_eq!(page.read_tuple(slot2).expect("read second tuple should succeed"), b"Second tuple");
-        assert_eq!(page.read_tuple(slot3).expect("read third tuple should succeed"), b"Third tuple");
+        assert_eq!(
+            page.read_tuple(slot1)
+                .expect("read first tuple should succeed"),
+            b"First tuple"
+        );
+        assert_eq!(
+            page.read_tuple(slot2)
+                .expect("read second tuple should succeed"),
+            b"Second tuple"
+        );
+        assert_eq!(
+            page.read_tuple(slot3)
+                .expect("read third tuple should succeed"),
+            b"Third tuple"
+        );
     }
 
     #[test]
     fn test_page_delete() {
         let mut page = Page::new(PageId(1), PageType::Data);
-        let slot_id = page.insert_tuple(b"Delete me").expect("insert_tuple should succeed");
+        let slot_id = page
+            .insert_tuple(b"Delete me")
+            .expect("insert_tuple should succeed");
 
-        page.delete_tuple(slot_id).expect("delete_tuple should succeed");
+        page.delete_tuple(slot_id)
+            .expect("delete_tuple should succeed");
         assert!(page.read_tuple(slot_id).is_err());
     }
 
     #[test]
     fn test_page_serialization() {
         let mut page = Page::new(PageId(42), PageType::Data);
-        page.insert_tuple(b"Test data").expect("insert_tuple should succeed");
+        page.insert_tuple(b"Test data")
+            .expect("insert_tuple should succeed");
 
         let bytes = page.to_bytes();
         let restored = Page::from_bytes(&bytes).expect("from_bytes should succeed");

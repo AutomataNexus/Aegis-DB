@@ -264,11 +264,7 @@ impl WindowedStream {
             .read()
             .expect("windows RwLock poisoned in completed_windows");
 
-        windows
-            .iter()
-            .filter(|w| w.end() <= now)
-            .cloned()
-            .collect()
+        windows.iter().filter(|w| w.end() <= now).cloned().collect()
     }
 
     /// Remove completed windows and return them.
@@ -279,11 +275,7 @@ impl WindowedStream {
             .write()
             .expect("windows RwLock poisoned in flush_completed");
 
-        let completed: Vec<Window> = windows
-            .iter()
-            .filter(|w| w.end() <= now)
-            .cloned()
-            .collect();
+        let completed: Vec<Window> = windows.iter().filter(|w| w.end() <= now).cloned().collect();
 
         windows.retain(|w| w.end() > now);
 
@@ -410,14 +402,18 @@ mod tests {
         let processor = StreamProcessor::new()
             .filter(EventFilter::new().with_type(EventType::Created))
             .map(|mut e| {
-                e.metadata.insert("processed".to_string(), "true".to_string());
+                e.metadata
+                    .insert("processed".to_string(), "true".to_string());
                 e
             });
 
         let event = create_test_event("test", 42);
         let processed = processor.process(event).unwrap();
 
-        assert_eq!(processed.get_metadata("processed"), Some(&"true".to_string()));
+        assert_eq!(
+            processed.get_metadata("processed"),
+            Some(&"true".to_string())
+        );
     }
 
     #[test]

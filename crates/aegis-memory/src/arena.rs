@@ -62,8 +62,8 @@ impl Chunk {
         NonNull::new(ptr)
     }
 
-    #[allow(dead_code)]
-    fn remaining(&self) -> usize {
+    /// Returns the number of bytes remaining in this chunk.
+    pub fn remaining(&self) -> usize {
         self.size - self.used
     }
 
@@ -123,7 +123,7 @@ impl MemoryArena {
             }
         }
 
-        let chunk_size = std::cmp::max(self.chunk_size, size + align);
+        let chunk_size = std::cmp::max(self.chunk_size, size.checked_add(align)?);
         let mut new_chunk = Chunk::new(chunk_size)?;
         let ptr = new_chunk.allocate(size, align);
 
@@ -150,7 +150,7 @@ impl MemoryArena {
     /// Allocate a slice from the arena.
     #[allow(clippy::mut_from_ref)] // Arena uses interior mutability (Mutex)
     pub fn allocate_slice<T: Copy>(&self, len: usize) -> Option<&mut [T]> {
-        let size = std::mem::size_of::<T>() * len;
+        let size = std::mem::size_of::<T>().checked_mul(len)?;
         let align = std::mem::align_of::<T>();
         let ptr = self.allocate_aligned(size, align)?;
 
@@ -204,8 +204,12 @@ mod tests {
     fn test_arena_allocation() {
         let arena = MemoryArena::new();
 
-        let ptr1 = arena.allocate(100).expect("First allocation should succeed");
-        let ptr2 = arena.allocate(200).expect("Second allocation should succeed");
+        let ptr1 = arena
+            .allocate(100)
+            .expect("First allocation should succeed");
+        let ptr2 = arena
+            .allocate(200)
+            .expect("Second allocation should succeed");
 
         // NonNull guarantees non-null, so just check they're different
         assert_ne!(ptr1.as_ptr(), ptr2.as_ptr());
@@ -215,7 +219,9 @@ mod tests {
     fn test_arena_value_allocation() {
         let arena = MemoryArena::new();
 
-        let value = arena.allocate_value(42u64).expect("Value allocation should succeed");
+        let value = arena
+            .allocate_value(42u64)
+            .expect("Value allocation should succeed");
         assert_eq!(*value, 42);
 
         *value = 100;
@@ -226,7 +232,9 @@ mod tests {
     fn test_arena_slice_allocation() {
         let arena = MemoryArena::new();
 
-        let slice = arena.allocate_slice::<u32>(10).expect("Slice allocation should succeed");
+        let slice = arena
+            .allocate_slice::<u32>(10)
+            .expect("Slice allocation should succeed");
         assert_eq!(slice.len(), 10);
 
         for (i, v) in slice.iter_mut().enumerate() {
@@ -256,6 +264,8 @@ mod tests {
         let arena = MemoryArena::with_chunk_size(1024);
 
         // Just verify the allocation succeeds - NonNull guarantees non-null
-        let _ptr = arena.allocate(2048).expect("Large allocation should succeed");
+        let _ptr = arena
+            .allocate(2048)
+            .expect("Large allocation should succeed");
     }
 }

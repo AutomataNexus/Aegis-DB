@@ -1,5 +1,5 @@
 [package]
-name = "aegis-vault"
+name = "aegis-db-vault"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

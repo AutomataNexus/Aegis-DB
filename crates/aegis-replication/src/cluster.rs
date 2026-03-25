@@ -71,8 +71,7 @@ impl ClusterConfig {
 // =============================================================================
 
 /// State of the cluster.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ClusterState {
     /// Cluster is initializing.
     #[default]
@@ -88,7 +87,6 @@ pub enum ClusterState {
     /// Cluster is shutting down.
     ShuttingDown,
 }
-
 
 // =============================================================================
 // Membership Change
@@ -168,12 +166,18 @@ impl Cluster {
 
     /// Get the current leader ID.
     pub fn leader_id(&self) -> Option<NodeId> {
-        self.leader_id.read().expect("cluster leader_id lock poisoned").clone()
+        self.leader_id
+            .read()
+            .expect("cluster leader_id lock poisoned")
+            .clone()
     }
 
     /// Set the leader ID.
     pub fn set_leader(&self, leader_id: Option<NodeId>) {
-        *self.leader_id.write().expect("cluster leader_id lock poisoned") = leader_id;
+        *self
+            .leader_id
+            .write()
+            .expect("cluster leader_id lock poisoned") = leader_id;
     }
 
     /// Check if this node is the leader.
@@ -224,22 +228,39 @@ impl Cluster {
 
     /// Get a node by ID.
     pub fn get_node(&self, node_id: &NodeId) -> Option<NodeInfo> {
-        self.nodes.read().expect("cluster nodes lock poisoned").get(node_id).cloned()
+        self.nodes
+            .read()
+            .expect("cluster nodes lock poisoned")
+            .get(node_id)
+            .cloned()
     }
 
     /// Get all nodes in the cluster.
     pub fn nodes(&self) -> Vec<NodeInfo> {
-        self.nodes.read().expect("cluster nodes lock poisoned").values().cloned().collect()
+        self.nodes
+            .read()
+            .expect("cluster nodes lock poisoned")
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Get all node IDs.
     pub fn node_ids(&self) -> Vec<NodeId> {
-        self.nodes.read().expect("cluster nodes lock poisoned").keys().cloned().collect()
+        self.nodes
+            .read()
+            .expect("cluster nodes lock poisoned")
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Get the number of nodes.
     pub fn node_count(&self) -> usize {
-        self.nodes.read().expect("cluster nodes lock poisoned").len()
+        self.nodes
+            .read()
+            .expect("cluster nodes lock poisoned")
+            .len()
     }
 
     /// Get peer nodes (excluding local).
@@ -271,7 +292,10 @@ impl Cluster {
     /// Update node health.
     pub fn update_health(&self, health: NodeHealth) {
         let node_id = health.node_id.clone();
-        let mut checks = self.health_checks.write().expect("cluster health_checks lock poisoned");
+        let mut checks = self
+            .health_checks
+            .write()
+            .expect("cluster health_checks lock poisoned");
         checks.insert(node_id.clone(), health.clone());
         drop(checks);
 
@@ -290,7 +314,11 @@ impl Cluster {
 
     /// Get health for a node.
     pub fn get_health(&self, node_id: &NodeId) -> Option<NodeHealth> {
-        self.health_checks.read().expect("cluster health_checks lock poisoned").get(node_id).cloned()
+        self.health_checks
+            .read()
+            .expect("cluster health_checks lock poisoned")
+            .get(node_id)
+            .cloned()
     }
 
     /// Process heartbeat from a node.

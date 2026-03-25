@@ -12,16 +12,17 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
+use crate::ast::SetOperationType;
+use crate::index::{IndexError, IndexKey, IndexType, TableIndexManager};
 use crate::planner::{
     AggregateExpr, AggregateFunction, AggregateNode, AlterTableNode, CreateIndexNode,
     CreateTableConstraint, CreateTableNode, DeleteNode, DropIndexNode, DropTableNode, FilterNode,
     InsertNode, InsertPlanSource, JoinNode, JoinStrategy, LimitNode, PlanAlterOperation,
     PlanBinaryOp, PlanExpression, PlanJoinType, PlanLiteral, PlanNode, PlanUnaryOp, ProjectNode,
-    ProjectionExpr, QueryPlan, ScanNode, SortKey, SortNode, UpdateNode,
+    ProjectionExpr, QueryPlan, ScanNode, SetOperationNode, SortKey, SortNode, UpdateNode,
 };
-use crate::index::{TableIndexManager, IndexType, IndexKey, IndexError};
 use aegis_common::{DataType, Row, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
@@ -105,14 +106,20 @@ pub struct StoredConstraint {
 /// Stored constraint type.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum StoredConstraintType {
-    PrimaryKey { columns: Vec<String> },
-    Unique { columns: Vec<String> },
+    PrimaryKey {
+        columns: Vec<String>,
+    },
+    Unique {
+        columns: Vec<String>,
+    },
     ForeignKey {
         columns: Vec<String>,
         ref_table: String,
         ref_columns: Vec<String>,
     },
-    Check { expression_text: String },
+    Check {
+        expression_text: String,
+    },
 }
 
 /// Table schema information.
@@ -204,7 +211,8 @@ impl ExecutionContext {
     }
 
     pub fn add_table(&mut self, table: TableData) {
-        self.tables.insert(table.name.clone(), Arc::new(RwLock::new(table)));
+        self.tables
+            .insert(table.name.clone(), Arc::new(RwLock::new(table)));
     }
 
     pub fn get_table(&self, name: &str) -> Option<Arc<RwLock<TableData>>> {
@@ -280,7 +288,9 @@ impl ExecutionContext {
 
     /// Alter a table.
     pub fn alter_table(&mut self, name: &str, op: &PlanAlterOperation) -> ExecutorResult<()> {
-        let schema = self.table_schemas.get_mut(name)
+        let schema = self
+            .table_schemas
+            .get_mut(name)
             .ok_or_else(|| ExecutorError::TableNotFound(name.to_string()))?;
 
         match op {
@@ -294,7 +304,9 @@ impl ExecutionContext {
                 }
 
                 // Evaluate default expression if provided
-                let default = col.default.as_ref()
+                let default = col
+                    .default
+                    .as_ref()
                     .map(evaluate_default_expression)
                     .transpose()?;
 
@@ -308,20 +320,27 @@ impl ExecutionContext {
                 // Add default (or null) values to existing rows
                 let fill_value = default.unwrap_or(Value::Null);
                 if let Some(table_data) = self.tables.get(name) {
-                    let mut table = table_data.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+                    let mut table = table_data
+                        .write()
+                        .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
                     for row in table.rows.iter_mut() {
                         row.values.push(fill_value.clone());
                     }
                 }
             }
-            PlanAlterOperation::DropColumn { name: col_name, if_exists } => {
+            PlanAlterOperation::DropColumn {
+                name: col_name,
+                if_exists,
+            } => {
                 let col_idx = schema.columns.iter().position(|c| c.name == *col_name);
                 match col_idx {
                     Some(idx) => {
                         schema.columns.remove(idx);
                         // Remove values from existing rows
                         if let Some(table_data) = self.tables.get(name) {
-                            let mut table = table_data.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+                            let mut table = table_data.write().map_err(|_| {
+                                ExecutorError::Internal("Lock poisoned".to_string())
+                            })?;
                             for row in table.rows.iter_mut() {
                                 if idx < row.values.len() {
                                     row.values.remove(idx);
@@ -336,12 +355,23 @@ impl ExecutionContext {
                 }
             }
             PlanAlterOperation::RenameColumn { old_name, new_name } => {
-                let col = schema.columns.iter_mut().find(|c| c.name == *old_name)
+                let col = schema
+                    .columns
+                    .iter_mut()
+                    .find(|c| c.name == *old_name)
                     .ok_or_else(|| ExecutorError::ColumnNotFound(old_name.clone()))?;
                 col.name = new_name.clone();
             }
-            PlanAlterOperation::AlterColumn { name: col_name, data_type, set_not_null, set_default } => {
-                let col = schema.columns.iter_mut().find(|c| c.name == *col_name)
+            PlanAlterOperation::AlterColumn {
+                name: col_name,
+                data_type,
+                set_not_null,
+                set_default,
+            } => {
+                let col = schema
+                    .columns
+                    .iter_mut()
+                    .find(|c| c.name == *col_name)
                     .ok_or_else(|| ExecutorError::ColumnNotFound(col_name.clone()))?;
 
                 if let Some(dt) = data_type {
@@ -352,7 +382,8 @@ impl ExecutionContext {
                 }
                 // Handle set_default: None = no change, Some(None) = drop default, Some(Some(expr)) = set new default
                 if let Some(new_default) = set_default {
-                    col.default = new_default.as_ref()
+                    col.default = new_default
+                        .as_ref()
                         .map(evaluate_default_expression)
                         .transpose()?;
                 }
@@ -381,7 +412,9 @@ impl ExecutionContext {
                 }
 
                 // Now safe to get mutable reference for the rest of the operation
-                let schema = self.table_schemas.get_mut(name)
+                let schema = self
+                    .table_schemas
+                    .get_mut(name)
                     .ok_or_else(|| ExecutorError::TableNotFound(name.to_string()))?;
 
                 let constraint_count = schema.constraints.len() + 1;
@@ -389,12 +422,18 @@ impl ExecutionContext {
                     CreateTableConstraint::PrimaryKey { columns } => {
                         // Check if primary key already exists
                         if schema.primary_key.is_some() {
-                            return Err(ExecutorError::InvalidOperation(
-                                format!("Table '{}' already has a primary key", name)
-                            ));
+                            return Err(ExecutorError::InvalidOperation(format!(
+                                "Table '{}' already has a primary key",
+                                name
+                            )));
                         }
                         schema.primary_key = Some(columns.clone());
-                        ("pk", StoredConstraintType::PrimaryKey { columns: columns.clone() })
+                        (
+                            "pk",
+                            StoredConstraintType::PrimaryKey {
+                                columns: columns.clone(),
+                            },
+                        )
                     }
                     CreateTableConstraint::Unique { columns } => {
                         // Validate columns exist
@@ -403,9 +442,18 @@ impl ExecutionContext {
                                 return Err(ExecutorError::ColumnNotFound(col.clone()));
                             }
                         }
-                        ("uq", StoredConstraintType::Unique { columns: columns.clone() })
+                        (
+                            "uq",
+                            StoredConstraintType::Unique {
+                                columns: columns.clone(),
+                            },
+                        )
                     }
-                    CreateTableConstraint::ForeignKey { columns, ref_table, ref_columns } => {
+                    CreateTableConstraint::ForeignKey {
+                        columns,
+                        ref_table,
+                        ref_columns,
+                    } => {
                         // Validate columns exist
                         for col in columns {
                             if !schema.columns.iter().any(|c| c.name == *col) {
@@ -413,17 +461,21 @@ impl ExecutionContext {
                             }
                         }
                         // ref_table validated above
-                        ("fk", StoredConstraintType::ForeignKey {
-                            columns: columns.clone(),
-                            ref_table: ref_table.clone(),
-                            ref_columns: ref_columns.clone(),
-                        })
+                        (
+                            "fk",
+                            StoredConstraintType::ForeignKey {
+                                columns: columns.clone(),
+                                ref_table: ref_table.clone(),
+                                ref_columns: ref_columns.clone(),
+                            },
+                        )
                     }
-                    CreateTableConstraint::Check { expression } => {
-                        ("ck", StoredConstraintType::Check {
+                    CreateTableConstraint::Check { expression } => (
+                        "ck",
+                        StoredConstraintType::Check {
                             expression_text: format!("{:?}", expression),
-                        })
-                    }
+                        },
+                    ),
                 };
                 schema.constraints.push(StoredConstraint {
                     name: format!("{}_{}{}", name, name_suffix, constraint_count),
@@ -431,20 +483,29 @@ impl ExecutionContext {
                 });
                 return Ok(());
             }
-            PlanAlterOperation::DropConstraint { name: constraint_name } => {
-                let pos = schema.constraints.iter().position(|c| c.name == *constraint_name);
+            PlanAlterOperation::DropConstraint {
+                name: constraint_name,
+            } => {
+                let pos = schema
+                    .constraints
+                    .iter()
+                    .position(|c| c.name == *constraint_name);
                 match pos {
                     Some(idx) => {
                         let removed = schema.constraints.remove(idx);
                         // If dropping primary key constraint, also clear primary_key field
-                        if matches!(removed.constraint_type, StoredConstraintType::PrimaryKey { .. }) {
+                        if matches!(
+                            removed.constraint_type,
+                            StoredConstraintType::PrimaryKey { .. }
+                        ) {
                             schema.primary_key = None;
                         }
                     }
                     None => {
-                        return Err(ExecutorError::InvalidOperation(
-                            format!("Constraint '{}' not found on table '{}'", constraint_name, name)
-                        ));
+                        return Err(ExecutorError::InvalidOperation(format!(
+                            "Constraint '{}' not found on table '{}'",
+                            constraint_name, name
+                        )));
                     }
                 }
             }
@@ -462,7 +523,9 @@ impl ExecutionContext {
         unique: bool,
         if_not_exists: bool,
     ) -> ExecutorResult<()> {
-        let table_data = self.tables.get(&table)
+        let table_data = self
+            .tables
+            .get(&table)
             .ok_or_else(|| ExecutorError::TableNotFound(table.clone()))?
             .clone();
 
@@ -488,30 +551,41 @@ impl ExecutionContext {
         });
 
         // Create actual index structure
-        let index_manager = self.table_indexes.entry(table.clone())
+        let index_manager = self
+            .table_indexes
+            .entry(table.clone())
             .or_insert_with(|| Arc::new(TableIndexManager::new(table.clone())));
 
         // Use B-tree by default (supports range queries)
         Arc::get_mut(index_manager)
-            .ok_or_else(|| ExecutorError::Internal("Cannot modify shared index manager".to_string()))?
+            .ok_or_else(|| {
+                ExecutorError::Internal("Cannot modify shared index manager".to_string())
+            })?
             .create_index(name.clone(), columns.clone(), unique, IndexType::BTree)?;
 
         // Populate the index with existing data
-        let table_guard = table_data.read()
+        let table_guard = table_data
+            .read()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
 
-        let index_manager = self.table_indexes.get(&table)
+        let index_manager = self
+            .table_indexes
+            .get(&table)
             .expect("index_manager was just inserted for this table");
         for (row_id, row) in table_guard.rows.iter().enumerate() {
-            let column_values: HashMap<String, Value> = table_guard.columns.iter()
+            let column_values: HashMap<String, Value> = table_guard
+                .columns
+                .iter()
                 .zip(row.values.iter())
                 .map(|(col, val)| (col.clone(), val.clone()))
                 .collect();
 
             // Build index key from specified columns
-            let key_values: Vec<crate::index::IndexValue> = columns.iter()
+            let key_values: Vec<crate::index::IndexValue> = columns
+                .iter()
                 .map(|col| {
-                    column_values.get(col)
+                    column_values
+                        .get(col)
                         .map(IndexKey::from_value)
                         .unwrap_or(crate::index::IndexValue::Null)
                 })
@@ -585,7 +659,9 @@ impl ExecutionContext {
 
     /// Create a serializable snapshot of the execution context.
     pub fn to_snapshot(&self) -> ExecutionContextSnapshot {
-        let tables: Vec<TableData> = self.tables.values()
+        let tables: Vec<TableData> = self
+            .tables
+            .values()
             .filter_map(|t| t.read().ok().map(|t| t.clone()))
             .collect();
 
@@ -607,7 +683,8 @@ impl ExecutionContext {
 
         // Restore tables
         for table in snapshot.tables {
-            ctx.tables.insert(table.name.clone(), Arc::new(RwLock::new(table)));
+            ctx.tables
+                .insert(table.name.clone(), Arc::new(RwLock::new(table)));
         }
 
         // Store index metadata
@@ -643,7 +720,8 @@ impl ExecutionContext {
             self.table_schemas.insert(schema.name.clone(), schema);
         }
         for table in snapshot.tables {
-            self.tables.insert(table.name.clone(), Arc::new(RwLock::new(table)));
+            self.tables
+                .insert(table.name.clone(), Arc::new(RwLock::new(table)));
         }
         self.indexes = snapshot.indexes.clone();
         for (table_name, index_schemas) in snapshot.indexes {
@@ -666,36 +744,49 @@ impl ExecutionContext {
         columns: &[String],
         unique: bool,
     ) -> ExecutorResult<()> {
-        let table_data = self.tables.get(table)
+        let table_data = self
+            .tables
+            .get(table)
             .ok_or_else(|| ExecutorError::TableNotFound(table.to_string()))?
             .clone();
 
         // Create index manager if needed
-        let index_manager = self.table_indexes.entry(table.to_string())
+        let index_manager = self
+            .table_indexes
+            .entry(table.to_string())
             .or_insert_with(|| Arc::new(TableIndexManager::new(table.to_string())));
 
         // Create the index structure
         if let Some(m) = Arc::get_mut(index_manager) {
             m.create_index(name.to_string(), columns.to_vec(), unique, IndexType::BTree)?;
         } else {
-            return Err(ExecutorError::Internal("Cannot modify shared index manager".to_string()));
+            return Err(ExecutorError::Internal(
+                "Cannot modify shared index manager".to_string(),
+            ));
         }
 
         // Populate with existing data
-        let table_guard = table_data.read()
+        let table_guard = table_data
+            .read()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
 
-        let index_manager = self.table_indexes.get(table)
+        let index_manager = self
+            .table_indexes
+            .get(table)
             .expect("index_manager was just inserted for this table");
         for (row_id, row) in table_guard.rows.iter().enumerate() {
-            let column_values: HashMap<String, Value> = table_guard.columns.iter()
+            let column_values: HashMap<String, Value> = table_guard
+                .columns
+                .iter()
                 .zip(row.values.iter())
                 .map(|(col, val)| (col.clone(), val.clone()))
                 .collect();
 
-            let key_values: Vec<crate::index::IndexValue> = columns.iter()
+            let key_values: Vec<crate::index::IndexValue> = columns
+                .iter()
                 .map(|col| {
-                    column_values.get(col)
+                    column_values
+                        .get(col)
                         .map(IndexKey::from_value)
                         .unwrap_or(crate::index::IndexValue::Null)
                 })
@@ -737,7 +828,8 @@ impl ExecutionContext {
 
         // Merge tables
         for table in snapshot.tables {
-            self.tables.insert(table.name.clone(), Arc::new(RwLock::new(table)));
+            self.tables
+                .insert(table.name.clone(), Arc::new(RwLock::new(table)));
         }
 
         // Merge indexes
@@ -759,14 +851,18 @@ impl ExecutionContext {
         columns: &[String],
         rows: Vec<Vec<Value>>,
     ) -> ExecutorResult<u64> {
-        let table = self.get_table(table_name)
+        let table = self
+            .get_table(table_name)
             .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
 
-        let mut table_data = table.write()
+        let mut table_data = table
+            .write()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
 
         // Get schema to access column defaults
-        let schema = self.table_schemas.get(table_name)
+        let schema = self
+            .table_schemas
+            .get(table_name)
             .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
 
         // If no columns specified, use all columns in order
@@ -779,7 +875,10 @@ impl ExecutionContext {
         // Build column index mapping
         let mut column_indices: Vec<usize> = Vec::new();
         for col in &target_columns {
-            let idx = table_data.columns.iter().position(|c| c == col)
+            let idx = table_data
+                .columns
+                .iter()
+                .position(|c| c == col)
                 .ok_or_else(|| ExecutorError::ColumnNotFound(col.clone()))?;
             column_indices.push(idx);
         }
@@ -787,22 +886,38 @@ impl ExecutionContext {
         let mut inserted = 0u64;
 
         // Build default values for each column
-        let defaults: Vec<Value> = schema.columns.iter()
+        let defaults: Vec<Value> = schema
+            .columns
+            .iter()
             .map(|col| col.default.clone().unwrap_or(Value::Null))
             .collect();
 
         // Identify constraint columns for validation
-        let pk_columns: Vec<usize> = schema.primary_key.as_ref()
-            .map(|pk| pk.iter().filter_map(|c| table_data.columns.iter().position(|tc| tc == c)).collect())
+        let pk_columns: Vec<usize> = schema
+            .primary_key
+            .as_ref()
+            .map(|pk| {
+                pk.iter()
+                    .filter_map(|c| table_data.columns.iter().position(|tc| tc == c))
+                    .collect()
+            })
             .unwrap_or_default();
-        let unique_columns: Vec<Vec<usize>> = schema.constraints.iter()
+        let unique_columns: Vec<Vec<usize>> = schema
+            .constraints
+            .iter()
             .filter_map(|c| match &c.constraint_type {
-                StoredConstraintType::Unique { columns: cols } =>
-                    Some(cols.iter().filter_map(|c| table_data.columns.iter().position(|tc| tc == c)).collect()),
+                StoredConstraintType::Unique { columns: cols } => Some(
+                    cols.iter()
+                        .filter_map(|c| table_data.columns.iter().position(|tc| tc == c))
+                        .collect(),
+                ),
                 _ => None,
             })
             .collect();
-        let not_null_columns: Vec<usize> = schema.columns.iter().enumerate()
+        let not_null_columns: Vec<usize> = schema
+            .columns
+            .iter()
+            .enumerate()
             .filter(|(_, c)| !c.nullable)
             .map(|(i, _)| i)
             .collect();
@@ -822,9 +937,10 @@ impl ExecutionContext {
             for &col_idx in &not_null_columns {
                 if matches!(new_row.get(col_idx), Some(Value::Null) | None) {
                     let col_name = table_data.columns.get(col_idx).cloned().unwrap_or_default();
-                    return Err(ExecutorError::InvalidOperation(
-                        format!("NOT NULL constraint violated for column '{}'", col_name),
-                    ));
+                    return Err(ExecutorError::InvalidOperation(format!(
+                        "NOT NULL constraint violated for column '{}'",
+                        col_name
+                    )));
                 }
             }
 
@@ -832,12 +948,16 @@ impl ExecutionContext {
             if !pk_columns.is_empty() {
                 let pk_vals: Vec<&Value> = pk_columns.iter().map(|&i| &new_row[i]).collect();
                 for (ri, existing) in table_data.rows.iter().enumerate() {
-                    if !self.is_row_visible(&table_data, ri) { continue; }
-                    let existing_pk: Vec<&Value> = pk_columns.iter().map(|&i| &existing.values[i]).collect();
+                    if !self.is_row_visible(&table_data, ri) {
+                        continue;
+                    }
+                    let existing_pk: Vec<&Value> =
+                        pk_columns.iter().map(|&i| &existing.values[i]).collect();
                     if pk_vals == existing_pk {
-                        return Err(ExecutorError::InvalidOperation(
-                            format!("PRIMARY KEY constraint violated: duplicate key in table '{}'", table_name),
-                        ));
+                        return Err(ExecutorError::InvalidOperation(format!(
+                            "PRIMARY KEY constraint violated: duplicate key in table '{}'",
+                            table_name
+                        )));
                     }
                 }
             }
@@ -846,10 +966,15 @@ impl ExecutionContext {
             for unique_cols in &unique_columns {
                 let vals: Vec<&Value> = unique_cols.iter().map(|&i| &new_row[i]).collect();
                 // Skip uniqueness check if any value is NULL (SQL standard)
-                if vals.iter().any(|v| matches!(v, Value::Null)) { continue; }
+                if vals.iter().any(|v| matches!(v, Value::Null)) {
+                    continue;
+                }
                 for (ri, existing) in table_data.rows.iter().enumerate() {
-                    if !self.is_row_visible(&table_data, ri) { continue; }
-                    let existing_vals: Vec<&Value> = unique_cols.iter().map(|&i| &existing.values[i]).collect();
+                    if !self.is_row_visible(&table_data, ri) {
+                        continue;
+                    }
+                    let existing_vals: Vec<&Value> =
+                        unique_cols.iter().map(|&i| &existing.values[i]).collect();
                     if vals == existing_vals {
                         return Err(ExecutorError::InvalidOperation(
                             "UNIQUE constraint violated".to_string(),
@@ -874,17 +999,21 @@ impl ExecutionContext {
         assignments: &[(String, Value)],
         predicate: Option<&dyn Fn(&Row, &[String]) -> bool>,
     ) -> ExecutorResult<u64> {
-        let table = self.get_table(table_name)
+        let table = self
+            .get_table(table_name)
             .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
 
-        let mut table_data = table.write()
+        let mut table_data = table
+            .write()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
         let columns = table_data.columns.clone();
 
         // Build assignment index mapping
         let mut assignment_indices: Vec<(usize, Value)> = Vec::new();
         for (col, val) in assignments {
-            let idx = columns.iter().position(|c| c == col)
+            let idx = columns
+                .iter()
+                .position(|c| c == col)
                 .ok_or_else(|| ExecutorError::ColumnNotFound(col.clone()))?;
             assignment_indices.push((idx, val.clone()));
         }
@@ -895,7 +1024,9 @@ impl ExecutionContext {
             if !self.is_row_visible(&table_data, i) {
                 continue;
             }
-            let should_update = predicate.map(|p| p(&table_data.rows[i], &columns)).unwrap_or(true);
+            let should_update = predicate
+                .map(|p| p(&table_data.rows[i], &columns))
+                .unwrap_or(true);
             if should_update {
                 for (col_idx, value) in &assignment_indices {
                     table_data.rows[i].values[*col_idx] = value.clone();
@@ -913,10 +1044,12 @@ impl ExecutionContext {
         table_name: &str,
         predicate: Option<&dyn Fn(&Row, &[String]) -> bool>,
     ) -> ExecutorResult<u64> {
-        let table = self.get_table(table_name)
+        let table = self
+            .get_table(table_name)
             .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
 
-        let mut table_data = table.write()
+        let mut table_data = table
+            .write()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
         let columns = table_data.columns.clone();
         let ver = self.version_clock;
@@ -1051,7 +1184,9 @@ pub struct Executor {
 
 impl Executor {
     pub fn new(context: ExecutionContext) -> Self {
-        Self { context: Arc::new(RwLock::new(context)) }
+        Self {
+            context: Arc::new(RwLock::new(context)),
+        }
     }
 
     /// Create executor with a shared context (for persistent DDL across queries).
@@ -1066,7 +1201,11 @@ impl Executor {
 
     /// Execute a query plan with bound parameters.
     /// Parameters are indexed starting from 1 (e.g., $1, $2, etc.)
-    pub fn execute_with_params(&self, plan: &QueryPlan, params: &[Value]) -> ExecutorResult<QueryResult> {
+    pub fn execute_with_params(
+        &self,
+        plan: &QueryPlan,
+        params: &[Value],
+    ) -> ExecutorResult<QueryResult> {
         // Substitute placeholders with actual parameter values
         let bound_plan = substitute_parameters(&plan.root, params)?;
         self.execute_internal(&bound_plan)
@@ -1089,17 +1228,23 @@ impl Executor {
             // Transaction control — return status message, actual logic in QueryEngine
             PlanNode::BeginTransaction => Ok(QueryResult {
                 columns: vec!["status".to_string()],
-                rows: vec![Row { values: vec![Value::String("BEGIN".to_string())] }],
+                rows: vec![Row {
+                    values: vec![Value::String("BEGIN".to_string())],
+                }],
                 rows_affected: 0,
             }),
             PlanNode::CommitTransaction => Ok(QueryResult {
                 columns: vec!["status".to_string()],
-                rows: vec![Row { values: vec![Value::String("COMMIT".to_string())] }],
+                rows: vec![Row {
+                    values: vec![Value::String("COMMIT".to_string())],
+                }],
                 rows_affected: 0,
             }),
             PlanNode::RollbackTransaction => Ok(QueryResult {
                 columns: vec!["status".to_string()],
-                rows: vec![Row { values: vec![Value::String("ROLLBACK".to_string())] }],
+                rows: vec![Row {
+                    values: vec![Value::String("ROLLBACK".to_string())],
+                }],
                 rows_affected: 0,
             }),
 
@@ -1113,7 +1258,10 @@ impl Executor {
     const MAX_RESULT_ROWS: usize = 100_000;
 
     fn execute_query(&self, root: &PlanNode) -> ExecutorResult<QueryResult> {
-        let context = self.context.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+        let context = self
+            .context
+            .read()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
         let mut operator = self.create_operator(root, &context)?;
         let mut all_rows = Vec::new();
         let mut columns = Vec::new();
@@ -1134,20 +1282,28 @@ impl Executor {
 
     /// Execute CREATE TABLE.
     fn execute_create_table(&self, node: &CreateTableNode) -> ExecutorResult<QueryResult> {
-        let columns: Vec<ColumnSchema> = node.columns.iter().map(|col| {
-            let default = col.default.as_ref()
-                .map(evaluate_default_expression)
-                .transpose()?;
-            Ok(ColumnSchema {
-                name: col.name.clone(),
-                data_type: col.data_type.clone(),
-                nullable: col.nullable,
-                default,
+        let columns: Vec<ColumnSchema> = node
+            .columns
+            .iter()
+            .map(|col| {
+                let default = col
+                    .default
+                    .as_ref()
+                    .map(evaluate_default_expression)
+                    .transpose()?;
+                Ok(ColumnSchema {
+                    name: col.name.clone(),
+                    data_type: col.data_type.clone(),
+                    nullable: col.nullable,
+                    default,
+                })
             })
-        }).collect::<ExecutorResult<Vec<_>>>()?;
+            .collect::<ExecutorResult<Vec<_>>>()?;
 
         // Extract primary key from constraints
-        let primary_key = node.constraints.iter()
+        let primary_key = node
+            .constraints
+            .iter()
             .find_map(|c| {
                 if let CreateTableConstraint::PrimaryKey { columns } = c {
                     Some(columns.clone())
@@ -1157,11 +1313,17 @@ impl Executor {
             })
             .or_else(|| {
                 // Check column-level primary key
-                let pk_cols: Vec<String> = node.columns.iter()
+                let pk_cols: Vec<String> = node
+                    .columns
+                    .iter()
                     .filter(|c| c.primary_key)
                     .map(|c| c.name.clone())
                     .collect();
-                if pk_cols.is_empty() { None } else { Some(pk_cols) }
+                if pk_cols.is_empty() {
+                    None
+                } else {
+                    Some(pk_cols)
+                }
             });
 
         // Convert plan constraints to stored constraints with auto-generated names
@@ -1170,24 +1332,36 @@ impl Executor {
         for c in &node.constraints {
             constraint_counter += 1;
             let (name_suffix, constraint_type) = match c {
-                CreateTableConstraint::PrimaryKey { columns } => {
-                    ("pk", StoredConstraintType::PrimaryKey { columns: columns.clone() })
-                }
-                CreateTableConstraint::Unique { columns } => {
-                    ("uq", StoredConstraintType::Unique { columns: columns.clone() })
-                }
-                CreateTableConstraint::ForeignKey { columns, ref_table, ref_columns } => {
-                    ("fk", StoredConstraintType::ForeignKey {
+                CreateTableConstraint::PrimaryKey { columns } => (
+                    "pk",
+                    StoredConstraintType::PrimaryKey {
+                        columns: columns.clone(),
+                    },
+                ),
+                CreateTableConstraint::Unique { columns } => (
+                    "uq",
+                    StoredConstraintType::Unique {
+                        columns: columns.clone(),
+                    },
+                ),
+                CreateTableConstraint::ForeignKey {
+                    columns,
+                    ref_table,
+                    ref_columns,
+                } => (
+                    "fk",
+                    StoredConstraintType::ForeignKey {
                         columns: columns.clone(),
                         ref_table: ref_table.clone(),
                         ref_columns: ref_columns.clone(),
-                    })
-                }
-                CreateTableConstraint::Check { expression } => {
-                    ("ck", StoredConstraintType::Check {
+                    },
+                ),
+                CreateTableConstraint::Check { expression } => (
+                    "ck",
+                    StoredConstraintType::Check {
                         expression_text: format!("{:?}", expression),
-                    })
-                }
+                    },
+                ),
             };
             stored_constraints.push(StoredConstraint {
                 name: format!("{}_{}{}", node.table_name, name_suffix, constraint_counter),
@@ -1201,40 +1375,61 @@ impl Executor {
                 constraint_counter += 1;
                 stored_constraints.push(StoredConstraint {
                     name: format!("{}_{}_uq{}", node.table_name, col.name, constraint_counter),
-                    constraint_type: StoredConstraintType::Unique { columns: vec![col.name.clone()] },
+                    constraint_type: StoredConstraintType::Unique {
+                        columns: vec![col.name.clone()],
+                    },
                 });
             }
         }
 
-        self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?.create_table(
-            node.table_name.clone(),
-            columns,
-            primary_key,
-            stored_constraints,
-            node.if_not_exists,
-        )?;
+        self.context
+            .write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?
+            .create_table(
+                node.table_name.clone(),
+                columns,
+                primary_key,
+                stored_constraints,
+                node.if_not_exists,
+            )?;
 
         Ok(QueryResult {
             columns: vec!["result".to_string()],
-            rows: vec![Row { values: vec![Value::String(format!("Table '{}' created", node.table_name))] }],
+            rows: vec![Row {
+                values: vec![Value::String(format!(
+                    "Table '{}' created",
+                    node.table_name
+                ))],
+            }],
             rows_affected: 0,
         })
     }
 
     /// Execute DROP TABLE.
     fn execute_drop_table(&self, node: &DropTableNode) -> ExecutorResult<QueryResult> {
-        self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?.drop_table(&node.table_name, node.if_exists)?;
+        self.context
+            .write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?
+            .drop_table(&node.table_name, node.if_exists)?;
 
         Ok(QueryResult {
             columns: vec!["result".to_string()],
-            rows: vec![Row { values: vec![Value::String(format!("Table '{}' dropped", node.table_name))] }],
+            rows: vec![Row {
+                values: vec![Value::String(format!(
+                    "Table '{}' dropped",
+                    node.table_name
+                ))],
+            }],
             rows_affected: 0,
         })
     }
 
     /// Execute ALTER TABLE.
     fn execute_alter_table(&self, node: &AlterTableNode) -> ExecutorResult<QueryResult> {
-        let mut ctx = self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+        let mut ctx = self
+            .context
+            .write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
 
         for op in &node.operations {
             ctx.alter_table(&node.table_name, op)?;
@@ -1244,40 +1439,61 @@ impl Executor {
         let msg = if op_count == 1 {
             format!("Table '{}' altered", node.table_name)
         } else {
-            format!("Table '{}' altered ({} operations)", node.table_name, op_count)
+            format!(
+                "Table '{}' altered ({} operations)",
+                node.table_name, op_count
+            )
         };
 
         Ok(QueryResult {
             columns: vec!["result".to_string()],
-            rows: vec![Row { values: vec![Value::String(msg)] }],
+            rows: vec![Row {
+                values: vec![Value::String(msg)],
+            }],
             rows_affected: 0,
         })
     }
 
     /// Execute CREATE INDEX.
     fn execute_create_index(&self, node: &CreateIndexNode) -> ExecutorResult<QueryResult> {
-        self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?.create_index(
-            node.index_name.clone(),
-            node.table_name.clone(),
-            node.columns.clone(),
-            node.unique,
-            node.if_not_exists,
-        )?;
+        self.context
+            .write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?
+            .create_index(
+                node.index_name.clone(),
+                node.table_name.clone(),
+                node.columns.clone(),
+                node.unique,
+                node.if_not_exists,
+            )?;
 
         Ok(QueryResult {
             columns: vec!["result".to_string()],
-            rows: vec![Row { values: vec![Value::String(format!("Index '{}' created", node.index_name))] }],
+            rows: vec![Row {
+                values: vec![Value::String(format!(
+                    "Index '{}' created",
+                    node.index_name
+                ))],
+            }],
             rows_affected: 0,
         })
     }
 
     /// Execute DROP INDEX.
     fn execute_drop_index(&self, node: &DropIndexNode) -> ExecutorResult<QueryResult> {
-        self.context.write().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?.drop_index(&node.index_name, node.if_exists)?;
+        self.context
+            .write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?
+            .drop_index(&node.index_name, node.if_exists)?;
 
         Ok(QueryResult {
             columns: vec!["result".to_string()],
-            rows: vec![Row { values: vec![Value::String(format!("Index '{}' dropped", node.index_name))] }],
+            rows: vec![Row {
+                values: vec![Value::String(format!(
+                    "Index '{}' dropped",
+                    node.index_name
+                ))],
+            }],
             rows_affected: 0,
         })
     }
@@ -1290,9 +1506,11 @@ impl Executor {
                 let empty_row = Row { values: vec![] };
                 let empty_columns: Vec<String> = vec![];
 
-                values.iter()
+                values
+                    .iter()
                     .map(|row_exprs| {
-                        row_exprs.iter()
+                        row_exprs
+                            .iter()
                             .map(|expr| evaluate_expression(expr, &empty_row, &empty_columns))
                             .collect::<ExecutorResult<Vec<_>>>()
                     })
@@ -1300,7 +1518,9 @@ impl Executor {
             }
             InsertPlanSource::Query(subquery) => {
                 // Execute the subquery and use its results as the insert data
-                let context = self.context.read()
+                let context = self
+                    .context
+                    .read()
                     .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
                 let mut operator = self.create_operator(subquery, &context)?;
                 let mut all_rows = Vec::new();
@@ -1315,32 +1535,43 @@ impl Executor {
             }
         };
 
-        let inserted = self.context.read()
+        let inserted = self
+            .context
+            .read()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?
             .insert_rows(&node.table_name, &node.columns, rows)?;
 
         Ok(QueryResult {
             columns: vec!["rows_affected".to_string()],
-            rows: vec![Row { values: vec![Value::Integer(inserted as i64)] }],
+            rows: vec![Row {
+                values: vec![Value::Integer(inserted as i64)],
+            }],
             rows_affected: inserted,
         })
     }
 
     /// Execute UPDATE.
     fn execute_update(&self, node: &UpdateNode) -> ExecutorResult<QueryResult> {
-        let context = self.context.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+        let context = self
+            .context
+            .read()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
 
         // Get table columns for expression evaluation
-        let table = context.get_table(&node.table_name)
+        let table = context
+            .get_table(&node.table_name)
             .ok_or_else(|| ExecutorError::TableNotFound(node.table_name.clone()))?;
-        let table_data = table.read()
+        let table_data = table
+            .read()
             .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
         let _columns = table_data.columns.clone();
         drop(table_data);
 
         // Evaluate assignment values
         let empty_row = Row { values: vec![] };
-        let assignments: Vec<(String, Value)> = node.assignments.iter()
+        let assignments: Vec<(String, Value)> = node
+            .assignments
+            .iter()
             .map(|(col, expr)| {
                 let value = evaluate_expression(expr, &empty_row, &[])?;
                 Ok((col.clone(), value))
@@ -1365,14 +1596,19 @@ impl Executor {
 
         Ok(QueryResult {
             columns: vec!["rows_affected".to_string()],
-            rows: vec![Row { values: vec![Value::Integer(updated as i64)] }],
+            rows: vec![Row {
+                values: vec![Value::Integer(updated as i64)],
+            }],
             rows_affected: updated,
         })
     }
 
     /// Execute DELETE.
     fn execute_delete(&self, node: &DeleteNode) -> ExecutorResult<QueryResult> {
-        let context = self.context.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+        let context = self
+            .context
+            .read()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
 
         // Create predicate closure if where clause exists
         let where_clause = node.where_clause.clone();
@@ -1384,20 +1620,24 @@ impl Executor {
             }) as Box<dyn Fn(&Row, &[String]) -> bool>
         });
 
-        let deleted = context.delete_rows(
-            &node.table_name,
-            predicate.as_ref().map(|p| p.as_ref()),
-        )?;
+        let deleted =
+            context.delete_rows(&node.table_name, predicate.as_ref().map(|p| p.as_ref()))?;
 
         Ok(QueryResult {
             columns: vec!["rows_affected".to_string()],
-            rows: vec![Row { values: vec![Value::Integer(deleted as i64)] }],
+            rows: vec![Row {
+                values: vec![Value::Integer(deleted as i64)],
+            }],
             rows_affected: deleted,
         })
     }
 
     /// Create an operator tree from a plan node.
-    fn create_operator<'a>(&'a self, node: &PlanNode, context: &'a ExecutionContext) -> ExecutorResult<Box<dyn Operator + 'a>> {
+    fn create_operator<'a>(
+        &'a self,
+        node: &PlanNode,
+        context: &'a ExecutionContext,
+    ) -> ExecutorResult<Box<dyn Operator + 'a>> {
         match node {
             PlanNode::Scan(scan) => Ok(Box::new(ScanOperator::new(scan.clone(), context)?)),
 
@@ -1420,13 +1660,21 @@ impl Executor {
             PlanNode::Join(join) => {
                 let left = self.create_operator(&join.left, context)?;
                 let right = self.create_operator(&join.right, context)?;
-                Ok(Box::new(JoinOperator::new(
-                    left,
-                    right,
-                    join.join_type,
-                    join.condition.clone(),
-                    join.strategy,
-                )?))
+                match join.strategy {
+                    JoinStrategy::HashJoin => Ok(Box::new(HashJoinOperator::new(
+                        left,
+                        right,
+                        join.join_type,
+                        join.condition.clone(),
+                    )?)),
+                    _ => Ok(Box::new(JoinOperator::new(
+                        left,
+                        right,
+                        join.join_type,
+                        join.condition.clone(),
+                        join.strategy,
+                    )?)),
+                }
             }
 
             PlanNode::Aggregate(agg) => {
@@ -1445,18 +1693,35 @@ impl Executor {
 
             PlanNode::Limit(limit) => {
                 let input = self.create_operator(&limit.input, context)?;
-                Ok(Box::new(LimitOperator::new(input, limit.limit, limit.offset)))
+                Ok(Box::new(LimitOperator::new(
+                    input,
+                    limit.limit,
+                    limit.offset,
+                )))
             }
 
             PlanNode::Empty => Ok(Box::new(EmptyOperator::new())),
 
-            // DDL and DML nodes are handled in execute(), not here
-            PlanNode::CreateTable(_) | PlanNode::DropTable(_) | PlanNode::AlterTable(_) |
-            PlanNode::CreateIndex(_) | PlanNode::DropIndex(_) |
-            PlanNode::Insert(_) | PlanNode::Update(_) | PlanNode::Delete(_) |
-            PlanNode::BeginTransaction | PlanNode::CommitTransaction | PlanNode::RollbackTransaction => {
-                Err(ExecutorError::Internal("DDL/DML/transaction nodes should not be in operator tree".to_string()))
+            PlanNode::SetOperation(set_op) => {
+                let left = self.create_operator(&set_op.left, context)?;
+                let right = self.create_operator(&set_op.right, context)?;
+                Ok(Box::new(SetOperationOperator::new(left, right, set_op.op)))
             }
+
+            // DDL and DML nodes are handled in execute(), not here
+            PlanNode::CreateTable(_)
+            | PlanNode::DropTable(_)
+            | PlanNode::AlterTable(_)
+            | PlanNode::CreateIndex(_)
+            | PlanNode::DropIndex(_)
+            | PlanNode::Insert(_)
+            | PlanNode::Update(_)
+            | PlanNode::Delete(_)
+            | PlanNode::BeginTransaction
+            | PlanNode::CommitTransaction
+            | PlanNode::RollbackTransaction => Err(ExecutorError::Internal(
+                "DDL/DML/transaction nodes should not be in operator tree".to_string(),
+            )),
         }
     }
 }
@@ -1497,7 +1762,9 @@ impl ScanOperator {
 
         // Read columns under lock, then release lock before moving table into struct
         let columns = {
-            let table_data = table.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+            let table_data = table
+                .read()
+                .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
             if scan.columns.is_empty() {
                 table_data.columns.clone()
             } else {
@@ -1520,7 +1787,10 @@ impl Operator for ScanOperator {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
         // Cache visible rows on first access
         if self.cached_rows.is_none() {
-            let table_data = self.table.read().map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+            let table_data = self
+                .table
+                .read()
+                .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
             let mut visible = Vec::new();
             for i in 0..table_data.rows.len() {
                 let created = table_data.row_created_version.get(i).copied().unwrap_or(0);
@@ -1537,7 +1807,10 @@ impl Operator for ScanOperator {
             self.cached_rows = Some(visible);
         }
 
-        let rows = self.cached_rows.as_ref().expect("cached_rows was just set to Some");
+        let rows = self
+            .cached_rows
+            .as_ref()
+            .expect("cached_rows was just set to Some");
 
         if self.position >= rows.len() {
             return Ok(None);
@@ -1547,7 +1820,10 @@ impl Operator for ScanOperator {
         let batch_rows: Vec<Row> = rows[self.position..end].to_vec();
         self.position = end;
 
-        Ok(Some(ResultBatch::with_rows(self.columns.clone(), batch_rows)))
+        Ok(Some(ResultBatch::with_rows(
+            self.columns.clone(),
+            batch_rows,
+        )))
     }
 
     fn columns(&self) -> &[String] {
@@ -1594,7 +1870,10 @@ impl<'a> Operator for FilterOperator<'a> {
             let filtered: Vec<Row> = batch
                 .rows
                 .into_iter()
-                .filter(|row| self.evaluate_predicate(row, &batch.columns).unwrap_or(false))
+                .filter(|row| {
+                    self.evaluate_predicate(row, &batch.columns)
+                        .unwrap_or(false)
+                })
                 .collect();
 
             if !filtered.is_empty() {
@@ -1621,7 +1900,10 @@ struct ProjectOperator<'a> {
 }
 
 impl<'a> ProjectOperator<'a> {
-    fn new(input: Box<dyn Operator + 'a>, expressions: Vec<crate::planner::ProjectionExpr>) -> Self {
+    fn new(
+        input: Box<dyn Operator + 'a>,
+        expressions: Vec<crate::planner::ProjectionExpr>,
+    ) -> Self {
         let input_columns = input.columns().to_vec();
 
         // Expand wildcards in expressions and build column names
@@ -1632,11 +1914,20 @@ impl<'a> ProjectOperator<'a> {
             // Check if this is a wildcard expression (SELECT *)
             if let PlanExpression::Column { name, table, .. } = &proj_expr.expr {
                 if name == "*" {
-                    // Expand to all input columns (optionally filtered by table)
+                    // Expand to all input columns (optionally filtered by table prefix)
                     for input_col in &input_columns {
-                        // For table-qualified wildcards (table.*), filter by table prefix
-                        // TODO: When table prefixes are added to column names, filter here
-                        let _ = table; // Acknowledge unused variable for future implementation
+                        // For table-qualified wildcards (e.g., SELECT t.*), only include
+                        // columns belonging to that table
+                        if let Some(tbl) = table {
+                            let prefix = format!("{}.", tbl);
+                            if !input_col.starts_with(&prefix) && input_col != tbl {
+                                // Also match unqualified names if the column count is unambiguous
+                                // Skip columns that clearly belong to a different table
+                                if input_col.contains('.') {
+                                    continue;
+                                }
+                            }
+                        }
                         expanded_expressions.push(crate::planner::ProjectionExpr {
                             expr: PlanExpression::Column {
                                 table: None,
@@ -1654,8 +1945,7 @@ impl<'a> ProjectOperator<'a> {
             // Regular expression
             expanded_expressions.push(proj_expr.clone());
             let col_name = proj_expr.alias.clone().unwrap_or_else(|| {
-                extract_column_name(&proj_expr.expr)
-                    .unwrap_or_else(|| format!("column_{}", i))
+                extract_column_name(&proj_expr.expr).unwrap_or_else(|| format!("column_{}", i))
             });
             columns.push(col_name);
         }
@@ -1798,7 +2088,10 @@ impl<'a> Operator for JoinOperator<'a> {
     fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
         self.materialize_right()?;
         // Safe to use expect: materialize_right() sets right_data to Some
-        let right_data = self.right_data.as_ref().expect("right_data was set by materialize_right");
+        let right_data = self
+            .right_data
+            .as_ref()
+            .expect("right_data was set by materialize_right");
 
         let mut result_rows = Vec::new();
 
@@ -1814,7 +2107,10 @@ impl<'a> Operator for JoinOperator<'a> {
             }
 
             // Safe to use expect: we checked left_batch.is_some() above
-            let left_batch = self.left_batch.as_ref().expect("left_batch verified to be Some");
+            let left_batch = self
+                .left_batch
+                .as_ref()
+                .expect("left_batch verified to be Some");
 
             while self.left_row_idx < left_batch.rows.len() {
                 let left_row = &left_batch.rows[self.left_row_idx];
@@ -1860,6 +2156,207 @@ impl<'a> Operator for JoinOperator<'a> {
 }
 
 // =============================================================================
+// Hash Join Operator
+// =============================================================================
+
+struct HashJoinOperator<'a> {
+    left: Box<dyn Operator + 'a>,
+    join_type: PlanJoinType,
+    condition: Option<PlanExpression>,
+    columns: Vec<String>,
+    left_columns: Vec<String>,
+    right_columns: Vec<String>,
+    /// Hash table: key is the stringified join-key value, value is matching rows
+    hash_table: Option<HashMap<String, Vec<Row>>>,
+    /// Index of the right-side column used as the hash key (within right_columns)
+    right_key_idx: Option<usize>,
+    /// Index of the left-side column used as the probe key (within left_columns)
+    left_key_idx: Option<usize>,
+    done: bool,
+}
+
+impl<'a> HashJoinOperator<'a> {
+    fn new(
+        left: Box<dyn Operator + 'a>,
+        mut right: Box<dyn Operator + 'a>,
+        join_type: PlanJoinType,
+        condition: Option<PlanExpression>,
+    ) -> ExecutorResult<Self> {
+        let left_columns = left.columns().to_vec();
+        let right_columns = right.columns().to_vec();
+
+        let mut columns = left_columns.clone();
+        columns.extend(right_columns.clone());
+
+        // Extract equality key columns from condition for hash partitioning
+        let (left_key_idx, right_key_idx) =
+            Self::extract_key_indices(&condition, &left_columns, &right_columns);
+
+        // Build phase: materialize right side into hash table
+        let mut hash_table: HashMap<String, Vec<Row>> = HashMap::new();
+        while let Some(batch) = right.next_batch()? {
+            for row in batch.rows {
+                let key = if let Some(idx) = right_key_idx {
+                    format!("{:?}", row.values.get(idx).unwrap_or(&Value::Null))
+                } else {
+                    String::new() // fallback: single bucket (degrades to nested loop)
+                };
+                hash_table.entry(key).or_default().push(row);
+            }
+        }
+
+        Ok(Self {
+            left,
+            join_type,
+            condition,
+            columns,
+            left_columns,
+            right_columns,
+            hash_table: Some(hash_table),
+            right_key_idx,
+            left_key_idx,
+            done: false,
+        })
+    }
+
+    /// Try to extract (left_col_idx, right_col_idx) from an equality condition
+    fn extract_key_indices(
+        condition: &Option<PlanExpression>,
+        left_columns: &[String],
+        right_columns: &[String],
+    ) -> (Option<usize>, Option<usize>) {
+        if let Some(PlanExpression::BinaryOp {
+            left,
+            op: PlanBinaryOp::Equal,
+            right,
+        }) = condition
+        {
+            let left_name = Self::extract_column_name(left);
+            let right_name = Self::extract_column_name(right);
+
+            if let (Some(ln), Some(rn)) = (left_name, right_name) {
+                // Try both orderings: condition might be left_col = right_col or right_col = left_col
+                let li = left_columns
+                    .iter()
+                    .position(|c| c == &ln || c.ends_with(&format!(".{}", ln)));
+                let ri = right_columns
+                    .iter()
+                    .position(|c| c == &rn || c.ends_with(&format!(".{}", rn)));
+                if li.is_some() && ri.is_some() {
+                    return (li, ri);
+                }
+                // Try swapped
+                let li = left_columns
+                    .iter()
+                    .position(|c| c == &rn || c.ends_with(&format!(".{}", rn)));
+                let ri = right_columns
+                    .iter()
+                    .position(|c| c == &ln || c.ends_with(&format!(".{}", ln)));
+                if li.is_some() && ri.is_some() {
+                    return (li, ri);
+                }
+            }
+        }
+        (None, None)
+    }
+
+    fn extract_column_name(expr: &PlanExpression) -> Option<String> {
+        match expr {
+            PlanExpression::Column { name, .. } => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    fn evaluate_join_condition(&self, left: &Row, right: &Row) -> ExecutorResult<bool> {
+        match &self.condition {
+            None => Ok(true),
+            Some(expr) => {
+                let mut combined = left.values.clone();
+                combined.extend(right.values.clone());
+                let combined_row = Row { values: combined };
+                let value = evaluate_expression(expr, &combined_row, &self.columns)?;
+                match value {
+                    Value::Boolean(b) => Ok(b),
+                    _ => Ok(false),
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Operator for HashJoinOperator<'a> {
+    fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
+        if self.done {
+            return Ok(None);
+        }
+
+        let hash_table = self.hash_table.as_ref().unwrap();
+        let mut result_rows = Vec::new();
+
+        while let Some(left_batch) = self.left.next_batch()? {
+            for left_row in &left_batch.rows {
+                // Probe phase: look up matching right rows by hash key
+                let probe_key = if let Some(idx) = self.left_key_idx {
+                    format!("{:?}", left_row.values.get(idx).unwrap_or(&Value::Null))
+                } else {
+                    String::new()
+                };
+
+                let candidates = if self.left_key_idx.is_some() {
+                    hash_table
+                        .get(&probe_key)
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[])
+                } else {
+                    // No key extraction — fall back to checking all right rows
+                    // This shouldn't happen for HashJoin but handles edge cases
+                    &[]
+                };
+
+                let mut matched = false;
+                for right_row in candidates {
+                    if self.evaluate_join_condition(left_row, right_row)? {
+                        let mut combined = left_row.values.clone();
+                        combined.extend(right_row.values.clone());
+                        result_rows.push(Row { values: combined });
+                        matched = true;
+
+                        if result_rows.len() >= 1024 {
+                            return Ok(Some(ResultBatch::with_rows(
+                                self.columns.clone(),
+                                result_rows,
+                            )));
+                        }
+                    }
+                }
+
+                // For LEFT joins, emit left + NULLs if no match found
+                if !matched && self.join_type == PlanJoinType::Left {
+                    let mut combined = left_row.values.clone();
+                    combined.extend(vec![Value::Null; self.right_columns.len()]);
+                    result_rows.push(Row { values: combined });
+                }
+            }
+        }
+
+        self.done = true;
+
+        if result_rows.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(ResultBatch::with_rows(
+                self.columns.clone(),
+                result_rows,
+            )))
+        }
+    }
+
+    fn columns(&self) -> &[String] {
+        &self.columns
+    }
+}
+
+// =============================================================================
 // Aggregate Operator
 // =============================================================================
 
@@ -1883,11 +2380,7 @@ impl<'a> AggregateOperator<'a> {
         let columns: Vec<String> = aggregates
             .iter()
             .enumerate()
-            .map(|(i, agg)| {
-                agg.alias
-                    .clone()
-                    .unwrap_or_else(|| format!("agg_{}", i))
-            })
+            .map(|(i, agg)| agg.alias.clone().unwrap_or_else(|| format!("agg_{}", i)))
             .collect();
 
         Self {
@@ -1977,13 +2470,27 @@ impl Accumulator {
             }
             AggregateFunction::Min => {
                 // Safe to use expect: we check is_none() first, so in the || branch it's Some
-                if self.min.is_none() || compare_values(value, self.min.as_ref().expect("min verified to be Some in || branch"))? == std::cmp::Ordering::Less {
+                if self.min.is_none()
+                    || compare_values(
+                        value,
+                        self.min
+                            .as_ref()
+                            .expect("min verified to be Some in || branch"),
+                    )? == std::cmp::Ordering::Less
+                {
                     self.min = Some(value.clone());
                 }
             }
             AggregateFunction::Max => {
                 // Safe to use expect: we check is_none() first, so in the || branch it's Some
-                if self.max.is_none() || compare_values(value, self.max.as_ref().expect("max verified to be Some in || branch"))? == std::cmp::Ordering::Greater {
+                if self.max.is_none()
+                    || compare_values(
+                        value,
+                        self.max
+                            .as_ref()
+                            .expect("max verified to be Some in || branch"),
+                    )? == std::cmp::Ordering::Greater
+                {
                     self.max = Some(value.clone());
                 }
             }
@@ -2053,11 +2560,7 @@ impl<'a> Operator for SortOperator<'a> {
                     let cmp = compare_values(&a_val, &b_val).unwrap_or(std::cmp::Ordering::Equal);
 
                     if cmp != std::cmp::Ordering::Equal {
-                        return if key.ascending {
-                            cmp
-                        } else {
-                            cmp.reverse()
-                        };
+                        return if key.ascending { cmp } else { cmp.reverse() };
                     }
                 }
                 std::cmp::Ordering::Equal
@@ -2067,7 +2570,10 @@ impl<'a> Operator for SortOperator<'a> {
         }
 
         // Safe to use expect: sorted_data was just set to Some above if it was None
-        let data = self.sorted_data.as_ref().expect("sorted_data was just set to Some");
+        let data = self
+            .sorted_data
+            .as_ref()
+            .expect("sorted_data was just set to Some");
 
         if self.position >= data.len() {
             return Ok(None);
@@ -2178,12 +2684,180 @@ impl Operator for EmptyOperator {
             return Ok(None);
         }
         self.done = true;
-        Ok(Some(ResultBatch::with_rows(vec![], vec![Row { values: vec![] }])))
+        Ok(Some(ResultBatch::with_rows(
+            vec![],
+            vec![Row { values: vec![] }],
+        )))
     }
 
     fn columns(&self) -> &[String] {
         &[]
     }
+}
+
+// =============================================================================
+// Set Operation Operator
+// =============================================================================
+
+struct SetOperationOperator<'a> {
+    left: Box<dyn Operator + 'a>,
+    right: Box<dyn Operator + 'a>,
+    op: SetOperationType,
+    result_rows: Option<Vec<Row>>,
+    result_columns: Vec<String>,
+    position: usize,
+}
+
+impl<'a> SetOperationOperator<'a> {
+    fn new(
+        left: Box<dyn Operator + 'a>,
+        right: Box<dyn Operator + 'a>,
+        op: SetOperationType,
+    ) -> Self {
+        Self {
+            left,
+            right,
+            op,
+            result_rows: None,
+            result_columns: Vec::new(),
+            position: 0,
+        }
+    }
+
+    /// Drain all rows from an operator.
+    fn drain_operator(op: &mut Box<dyn Operator + 'a>) -> ExecutorResult<(Vec<String>, Vec<Row>)> {
+        let mut all_rows = Vec::new();
+        let mut columns = Vec::new();
+        while let Some(batch) = op.next_batch()? {
+            if columns.is_empty() {
+                columns = batch.columns;
+            }
+            all_rows.extend(batch.rows);
+        }
+        Ok((columns, all_rows))
+    }
+
+    /// Compute the set operation result lazily on first call.
+    fn compute(&mut self) -> ExecutorResult<()> {
+        if self.result_rows.is_some() {
+            return Ok(());
+        }
+
+        let (left_cols, left_rows) = Self::drain_operator(&mut self.left)?;
+        let (right_cols, right_rows) = Self::drain_operator(&mut self.right)?;
+
+        self.result_columns = if !left_cols.is_empty() {
+            left_cols
+        } else {
+            right_cols
+        };
+
+        let result = match self.op {
+            SetOperationType::UnionAll => {
+                let mut combined = left_rows;
+                combined.extend(right_rows);
+                combined
+            }
+            SetOperationType::Union => {
+                let mut combined = left_rows;
+                combined.extend(right_rows);
+                deduplicate_rows(combined)
+            }
+            SetOperationType::Intersect => {
+                // Keep rows present in both sides
+                let right_set: HashSet<Vec<ValueKey>> = right_rows
+                    .iter()
+                    .map(|r| r.values.iter().map(value_to_key).collect())
+                    .collect();
+                let mut result = Vec::new();
+                let mut seen = HashSet::new();
+                for row in left_rows {
+                    let key: Vec<ValueKey> = row.values.iter().map(value_to_key).collect();
+                    if right_set.contains(&key) && seen.insert(key) {
+                        result.push(row);
+                    }
+                }
+                result
+            }
+            SetOperationType::Except => {
+                // Keep rows in left that are not in right
+                let right_set: HashSet<Vec<ValueKey>> = right_rows
+                    .iter()
+                    .map(|r| r.values.iter().map(value_to_key).collect())
+                    .collect();
+                let mut result = Vec::new();
+                let mut seen = HashSet::new();
+                for row in left_rows {
+                    let key: Vec<ValueKey> = row.values.iter().map(value_to_key).collect();
+                    if !right_set.contains(&key) && seen.insert(key) {
+                        result.push(row);
+                    }
+                }
+                result
+            }
+        };
+
+        self.result_rows = Some(result);
+        Ok(())
+    }
+}
+
+impl<'a> Operator for SetOperationOperator<'a> {
+    fn next_batch(&mut self) -> ExecutorResult<Option<ResultBatch>> {
+        self.compute()?;
+
+        let rows = self.result_rows.as_ref().unwrap();
+        if self.position >= rows.len() {
+            return Ok(None);
+        }
+
+        let end = (self.position + 1024).min(rows.len());
+        let batch_rows = rows[self.position..end].to_vec();
+        self.position = end;
+
+        Ok(Some(ResultBatch::with_rows(
+            self.result_columns.clone(),
+            batch_rows,
+        )))
+    }
+
+    fn columns(&self) -> &[String] {
+        &self.result_columns
+    }
+}
+
+/// A hashable key for a Value, used for set operation deduplication.
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+enum ValueKey {
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    Float(u64), // bit representation for hashing
+    String(String),
+}
+
+fn value_to_key(v: &Value) -> ValueKey {
+    match v {
+        Value::Null => ValueKey::Null,
+        Value::Boolean(b) => ValueKey::Boolean(*b),
+        Value::Integer(i) => ValueKey::Integer(*i),
+        Value::Float(f) => ValueKey::Float(f.to_bits()),
+        Value::String(s) => ValueKey::String(s.clone()),
+        // For any other types, convert to string representation
+        other => ValueKey::String(format!("{:?}", other)),
+    }
+}
+
+fn deduplicate_rows(rows: Vec<Row>) -> Vec<Row> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for row in rows {
+        let key: Vec<ValueKey> = row.values.iter().map(value_to_key).collect();
+        if seen.insert(key) {
+            result.push(row);
+        }
+    }
+    result
 }
 
 // =============================================================================
@@ -2201,7 +2875,9 @@ impl<'a> EvalContext<'a> {
     }
 
     pub fn with_executor(executor: &'a Executor) -> Self {
-        Self { executor: Some(executor) }
+        Self {
+            executor: Some(executor),
+        }
     }
 
     /// Execute a subquery and return all result rows.
@@ -2239,10 +2915,16 @@ fn substitute_parameters(node: &PlanNode, params: &[Value]) -> ExecutorResult<Pl
             // ScanNode doesn't have predicates - predicates are in Filter nodes
             // Just need to handle index_scan key_range expressions if present
             let index_scan = if let Some(idx) = &scan.index_scan {
-                let start = idx.key_range.start.as_ref()
+                let start = idx
+                    .key_range
+                    .start
+                    .as_ref()
                     .map(|e| substitute_expr(e, params))
                     .transpose()?;
-                let end = idx.key_range.end.as_ref()
+                let end = idx
+                    .key_range
+                    .end
+                    .as_ref()
                     .map(|e| substitute_expr(e, params))
                     .transpose()?;
                 Some(crate::planner::IndexScan {
@@ -2271,22 +2953,30 @@ fn substitute_parameters(node: &PlanNode, params: &[Value]) -> ExecutorResult<Pl
         }
         PlanNode::Project(proj) => {
             let input = Box::new(substitute_parameters(&proj.input, params)?);
-            let expressions = proj.expressions.iter()
-                .map(|pe| Ok(ProjectionExpr {
-                    expr: substitute_expr(&pe.expr, params)?,
-                    alias: pe.alias.clone(),
-                }))
+            let expressions = proj
+                .expressions
+                .iter()
+                .map(|pe| {
+                    Ok(ProjectionExpr {
+                        expr: substitute_expr(&pe.expr, params)?,
+                        alias: pe.alias.clone(),
+                    })
+                })
                 .collect::<ExecutorResult<Vec<_>>>()?;
             Ok(PlanNode::Project(ProjectNode { input, expressions }))
         }
         PlanNode::Sort(sort) => {
             let input = Box::new(substitute_parameters(&sort.input, params)?);
-            let order_by = sort.order_by.iter()
-                .map(|sk| Ok(SortKey {
-                    expr: substitute_expr(&sk.expr, params)?,
-                    ascending: sk.ascending,
-                    nulls_first: sk.nulls_first,
-                }))
+            let order_by = sort
+                .order_by
+                .iter()
+                .map(|sk| {
+                    Ok(SortKey {
+                        expr: substitute_expr(&sk.expr, params)?,
+                        ascending: sk.ascending,
+                        nulls_first: sk.nulls_first,
+                    })
+                })
                 .collect::<ExecutorResult<Vec<_>>>()?;
             Ok(PlanNode::Sort(SortNode { input, order_by }))
         }
@@ -2300,23 +2990,39 @@ fn substitute_parameters(node: &PlanNode, params: &[Value]) -> ExecutorResult<Pl
         }
         PlanNode::Aggregate(agg) => {
             let input = Box::new(substitute_parameters(&agg.input, params)?);
-            let group_by = agg.group_by.iter()
+            let group_by = agg
+                .group_by
+                .iter()
                 .map(|e| substitute_expr(e, params))
                 .collect::<ExecutorResult<Vec<_>>>()?;
-            let aggregates = agg.aggregates.iter()
-                .map(|ae| Ok(AggregateExpr {
-                    function: ae.function,
-                    argument: ae.argument.as_ref().map(|a| substitute_expr(a, params)).transpose()?,
-                    distinct: ae.distinct,
-                    alias: ae.alias.clone(),
-                }))
+            let aggregates = agg
+                .aggregates
+                .iter()
+                .map(|ae| {
+                    Ok(AggregateExpr {
+                        function: ae.function,
+                        argument: ae
+                            .argument
+                            .as_ref()
+                            .map(|a| substitute_expr(a, params))
+                            .transpose()?,
+                        distinct: ae.distinct,
+                        alias: ae.alias.clone(),
+                    })
+                })
                 .collect::<ExecutorResult<Vec<_>>>()?;
-            Ok(PlanNode::Aggregate(AggregateNode { input, group_by, aggregates }))
+            Ok(PlanNode::Aggregate(AggregateNode {
+                input,
+                group_by,
+                aggregates,
+            }))
         }
         PlanNode::Join(join) => {
             let left = Box::new(substitute_parameters(&join.left, params)?);
             let right = Box::new(substitute_parameters(&join.right, params)?);
-            let condition = join.condition.as_ref()
+            let condition = join
+                .condition
+                .as_ref()
                 .map(|c| substitute_expr(c, params))
                 .transpose()?;
             Ok(PlanNode::Join(JoinNode {
@@ -2330,8 +3036,13 @@ fn substitute_parameters(node: &PlanNode, params: &[Value]) -> ExecutorResult<Pl
         PlanNode::Insert(insert) => {
             let source = match &insert.source {
                 InsertPlanSource::Values(rows) => {
-                    let substituted = rows.iter()
-                        .map(|row| row.iter().map(|e| substitute_expr(e, params)).collect::<ExecutorResult<Vec<_>>>())
+                    let substituted = rows
+                        .iter()
+                        .map(|row| {
+                            row.iter()
+                                .map(|e| substitute_expr(e, params))
+                                .collect::<ExecutorResult<Vec<_>>>()
+                        })
                         .collect::<ExecutorResult<Vec<_>>>()?;
                     InsertPlanSource::Values(substituted)
                 }
@@ -2346,10 +3057,14 @@ fn substitute_parameters(node: &PlanNode, params: &[Value]) -> ExecutorResult<Pl
             }))
         }
         PlanNode::Update(update) => {
-            let assignments = update.assignments.iter()
+            let assignments = update
+                .assignments
+                .iter()
                 .map(|(col, expr)| Ok((col.clone(), substitute_expr(expr, params)?)))
                 .collect::<ExecutorResult<Vec<_>>>()?;
-            let where_clause = update.where_clause.as_ref()
+            let where_clause = update
+                .where_clause
+                .as_ref()
                 .map(|p| substitute_expr(p, params))
                 .transpose()?;
             Ok(PlanNode::Update(UpdateNode {
@@ -2359,7 +3074,9 @@ fn substitute_parameters(node: &PlanNode, params: &[Value]) -> ExecutorResult<Pl
             }))
         }
         PlanNode::Delete(delete) => {
-            let where_clause = delete.where_clause.as_ref()
+            let where_clause = delete
+                .where_clause
+                .as_ref()
                 .map(|p| substitute_expr(p, params))
                 .transpose()?;
             Ok(PlanNode::Delete(DeleteNode {
@@ -2367,16 +3084,25 @@ fn substitute_parameters(node: &PlanNode, params: &[Value]) -> ExecutorResult<Pl
                 where_clause,
             }))
         }
+        PlanNode::SetOperation(set_op) => {
+            let left = Box::new(substitute_parameters(&set_op.left, params)?);
+            let right = Box::new(substitute_parameters(&set_op.right, params)?);
+            Ok(PlanNode::SetOperation(SetOperationNode {
+                op: set_op.op,
+                left,
+                right,
+            }))
+        }
         // DDL operations don't have parameters, return as-is
-        PlanNode::CreateTable(_) |
-        PlanNode::DropTable(_) |
-        PlanNode::AlterTable(_) |
-        PlanNode::CreateIndex(_) |
-        PlanNode::DropIndex(_) |
-        PlanNode::Empty |
-        PlanNode::BeginTransaction |
-        PlanNode::CommitTransaction |
-        PlanNode::RollbackTransaction => Ok(node.clone()),
+        PlanNode::CreateTable(_)
+        | PlanNode::DropTable(_)
+        | PlanNode::AlterTable(_)
+        | PlanNode::CreateIndex(_)
+        | PlanNode::DropIndex(_)
+        | PlanNode::Empty
+        | PlanNode::BeginTransaction
+        | PlanNode::CommitTransaction
+        | PlanNode::RollbackTransaction => Ok(node.clone()),
     }
 }
 
@@ -2386,41 +3112,60 @@ fn substitute_expr(expr: &PlanExpression, params: &[Value]) -> ExecutorResult<Pl
         PlanExpression::Placeholder(idx) => {
             // Parameters are 1-indexed ($1, $2, etc.)
             let param_idx = *idx - 1;
-            params.get(param_idx)
-                .map(value_to_literal)
-                .ok_or_else(|| ExecutorError::Internal(format!(
+            params.get(param_idx).map(value_to_literal).ok_or_else(|| {
+                ExecutorError::Internal(format!(
                     "Missing parameter ${}: expected {} parameters but got {}",
-                    idx, idx, params.len()
-                )))
-        }
-        PlanExpression::BinaryOp { op, left, right } => {
-            Ok(PlanExpression::BinaryOp {
-                op: *op,
-                left: Box::new(substitute_expr(left, params)?),
-                right: Box::new(substitute_expr(right, params)?),
+                    idx,
+                    idx,
+                    params.len()
+                ))
             })
         }
-        PlanExpression::UnaryOp { op, expr: inner } => {
-            Ok(PlanExpression::UnaryOp {
-                op: *op,
-                expr: Box::new(substitute_expr(inner, params)?),
-            })
-        }
-        PlanExpression::Function { name, args, return_type } => {
-            let new_args = args.iter()
+        PlanExpression::BinaryOp { op, left, right } => Ok(PlanExpression::BinaryOp {
+            op: *op,
+            left: Box::new(substitute_expr(left, params)?),
+            right: Box::new(substitute_expr(right, params)?),
+        }),
+        PlanExpression::UnaryOp { op, expr: inner } => Ok(PlanExpression::UnaryOp {
+            op: *op,
+            expr: Box::new(substitute_expr(inner, params)?),
+        }),
+        PlanExpression::Function {
+            name,
+            args,
+            return_type,
+        } => {
+            let new_args = args
+                .iter()
                 .map(|a| substitute_expr(a, params))
                 .collect::<ExecutorResult<Vec<_>>>()?;
-            Ok(PlanExpression::Function { name: name.clone(), args: new_args, return_type: return_type.clone() })
+            Ok(PlanExpression::Function {
+                name: name.clone(),
+                args: new_args,
+                return_type: return_type.clone(),
+            })
         }
-        PlanExpression::Case { operand, conditions, else_result } => {
-            let new_operand = operand.as_ref()
+        PlanExpression::Case {
+            operand,
+            conditions,
+            else_result,
+        } => {
+            let new_operand = operand
+                .as_ref()
                 .map(|o| substitute_expr(o, params))
                 .transpose()?
                 .map(Box::new);
-            let new_conditions = conditions.iter()
-                .map(|(cond, result)| Ok((substitute_expr(cond, params)?, substitute_expr(result, params)?)))
+            let new_conditions = conditions
+                .iter()
+                .map(|(cond, result)| {
+                    Ok((
+                        substitute_expr(cond, params)?,
+                        substitute_expr(result, params)?,
+                    ))
+                })
                 .collect::<ExecutorResult<Vec<_>>>()?;
-            let new_else = else_result.as_ref()
+            let new_else = else_result
+                .as_ref()
                 .map(|e| substitute_expr(e, params))
                 .transpose()?
                 .map(Box::new);
@@ -2430,53 +3175,80 @@ fn substitute_expr(expr: &PlanExpression, params: &[Value]) -> ExecutorResult<Pl
                 else_result: new_else,
             })
         }
-        PlanExpression::InList { expr: inner, list, negated } => {
+        PlanExpression::InList {
+            expr: inner,
+            list,
+            negated,
+        } => {
             let new_inner = Box::new(substitute_expr(inner, params)?);
-            let new_list = list.iter()
+            let new_list = list
+                .iter()
                 .map(|e| substitute_expr(e, params))
                 .collect::<ExecutorResult<Vec<_>>>()?;
-            Ok(PlanExpression::InList { expr: new_inner, list: new_list, negated: *negated })
+            Ok(PlanExpression::InList {
+                expr: new_inner,
+                list: new_list,
+                negated: *negated,
+            })
         }
-        PlanExpression::InSubquery { expr: inner, subquery, negated } => {
+        PlanExpression::InSubquery {
+            expr: inner,
+            subquery,
+            negated,
+        } => {
             let new_inner = Box::new(substitute_expr(inner, params)?);
             let new_subquery = Box::new(substitute_parameters(subquery, params)?);
-            Ok(PlanExpression::InSubquery { expr: new_inner, subquery: new_subquery, negated: *negated })
+            Ok(PlanExpression::InSubquery {
+                expr: new_inner,
+                subquery: new_subquery,
+                negated: *negated,
+            })
         }
         PlanExpression::Exists { subquery, negated } => {
             let new_subquery = Box::new(substitute_parameters(subquery, params)?);
-            Ok(PlanExpression::Exists { subquery: new_subquery, negated: *negated })
+            Ok(PlanExpression::Exists {
+                subquery: new_subquery,
+                negated: *negated,
+            })
         }
         PlanExpression::ScalarSubquery(subquery) => {
             let new_subquery = Box::new(substitute_parameters(subquery, params)?);
             Ok(PlanExpression::ScalarSubquery(new_subquery))
         }
-        PlanExpression::Between { expr: inner, low, high, negated } => {
-            Ok(PlanExpression::Between {
-                expr: Box::new(substitute_expr(inner, params)?),
-                low: Box::new(substitute_expr(low, params)?),
-                high: Box::new(substitute_expr(high, params)?),
-                negated: *negated,
-            })
-        }
-        PlanExpression::Like { expr: inner, pattern, negated } => {
-            Ok(PlanExpression::Like {
-                expr: Box::new(substitute_expr(inner, params)?),
-                pattern: Box::new(substitute_expr(pattern, params)?),
-                negated: *negated,
-            })
-        }
-        PlanExpression::IsNull { expr: inner, negated } => {
-            Ok(PlanExpression::IsNull {
-                expr: Box::new(substitute_expr(inner, params)?),
-                negated: *negated,
-            })
-        }
-        PlanExpression::Cast { expr: inner, target_type } => {
-            Ok(PlanExpression::Cast {
-                expr: Box::new(substitute_expr(inner, params)?),
-                target_type: target_type.clone(),
-            })
-        }
+        PlanExpression::Between {
+            expr: inner,
+            low,
+            high,
+            negated,
+        } => Ok(PlanExpression::Between {
+            expr: Box::new(substitute_expr(inner, params)?),
+            low: Box::new(substitute_expr(low, params)?),
+            high: Box::new(substitute_expr(high, params)?),
+            negated: *negated,
+        }),
+        PlanExpression::Like {
+            expr: inner,
+            pattern,
+            negated,
+        } => Ok(PlanExpression::Like {
+            expr: Box::new(substitute_expr(inner, params)?),
+            pattern: Box::new(substitute_expr(pattern, params)?),
+            negated: *negated,
+        }),
+        PlanExpression::IsNull {
+            expr: inner,
+            negated,
+        } => Ok(PlanExpression::IsNull {
+            expr: Box::new(substitute_expr(inner, params)?),
+            negated: *negated,
+        }),
+        PlanExpression::Cast {
+            expr: inner,
+            target_type,
+        } => Ok(PlanExpression::Cast {
+            expr: Box::new(substitute_expr(inner, params)?),
+            target_type: target_type.clone(),
+        }),
         // Literals and columns don't have parameters
         PlanExpression::Literal(_) | PlanExpression::Column { .. } => Ok(expr.clone()),
     }
@@ -2567,13 +3339,19 @@ fn evaluate_expression_with_context(
             evaluate_function(name, &arg_values)
         }
 
-        PlanExpression::Case { operand, conditions, else_result } => {
+        PlanExpression::Case {
+            operand,
+            conditions,
+            else_result,
+        } => {
             match operand {
                 Some(operand_expr) => {
                     // CASE operand WHEN value THEN result ... END
-                    let operand_val = evaluate_expression_with_context(operand_expr, row, columns, ctx)?;
+                    let operand_val =
+                        evaluate_expression_with_context(operand_expr, row, columns, ctx)?;
                     for (when_expr, then_expr) in conditions {
-                        let when_val = evaluate_expression_with_context(when_expr, row, columns, ctx)?;
+                        let when_val =
+                            evaluate_expression_with_context(when_expr, row, columns, ctx)?;
                         if compare_values(&operand_val, &when_val)? == std::cmp::Ordering::Equal {
                             return evaluate_expression_with_context(then_expr, row, columns, ctx);
                         }
@@ -2582,7 +3360,8 @@ fn evaluate_expression_with_context(
                 None => {
                     // CASE WHEN condition THEN result ... END
                     for (when_expr, then_expr) in conditions {
-                        let when_val = evaluate_expression_with_context(when_expr, row, columns, ctx)?;
+                        let when_val =
+                            evaluate_expression_with_context(when_expr, row, columns, ctx)?;
                         if matches!(when_val, Value::Boolean(true)) {
                             return evaluate_expression_with_context(then_expr, row, columns, ctx);
                         }
@@ -2596,7 +3375,11 @@ fn evaluate_expression_with_context(
             }
         }
 
-        PlanExpression::InList { expr, list, negated } => {
+        PlanExpression::InList {
+            expr,
+            list,
+            negated,
+        } => {
             let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
             let mut found = false;
             for item in list {
@@ -2609,7 +3392,12 @@ fn evaluate_expression_with_context(
             Ok(Value::Boolean(if *negated { !found } else { found }))
         }
 
-        PlanExpression::Between { expr, low, high, negated } => {
+        PlanExpression::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => {
             let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
             let low_val = evaluate_expression_with_context(low, row, columns, ctx)?;
             let high_val = evaluate_expression_with_context(high, row, columns, ctx)?;
@@ -2621,7 +3409,11 @@ fn evaluate_expression_with_context(
             Ok(Value::Boolean(if *negated { !in_range } else { in_range }))
         }
 
-        PlanExpression::Like { expr, pattern, negated } => {
+        PlanExpression::Like {
+            expr,
+            pattern,
+            negated,
+        } => {
             let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
             let pattern_val = evaluate_expression_with_context(pattern, row, columns, ctx)?;
 
@@ -2648,16 +3440,14 @@ fn evaluate_expression_with_context(
             };
 
             // Convert SQL LIKE pattern to regex
-            let regex_pattern = pattern_str
-                .replace('%', ".*")
-                .replace('_', ".");
+            let regex_pattern = pattern_str.replace('%', ".*").replace('_', ".");
             let regex_pattern = format!("^{}$", regex_pattern);
 
             // Simple pattern matching (could use regex crate for full support)
             let matches = if regex_pattern == "^.*$" {
                 true
             } else if regex_pattern.starts_with("^") && regex_pattern.ends_with("$") {
-                let inner = &regex_pattern[1..regex_pattern.len()-1];
+                let inner = &regex_pattern[1..regex_pattern.len() - 1];
                 if inner.contains(".*") || inner.contains('.') {
                     // For patterns with wildcards, do simple matching
                     let parts: Vec<&str> = inner.split(".*").collect();
@@ -2667,7 +3457,9 @@ fn evaluate_expression_with_context(
                         let mut pos = 0;
                         let mut matched = true;
                         for (i, part) in parts.iter().enumerate() {
-                            if part.is_empty() { continue; }
+                            if part.is_empty() {
+                                continue;
+                            }
                             if let Some(found_pos) = val_str[pos..].find(part) {
                                 if i == 0 && found_pos != 0 {
                                     matched = false;
@@ -2691,7 +3483,11 @@ fn evaluate_expression_with_context(
             Ok(Value::Boolean(if *negated { !matches } else { matches }))
         }
 
-        PlanExpression::InSubquery { expr, subquery, negated } => {
+        PlanExpression::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => {
             // Evaluate the expression to check
             let val = evaluate_expression_with_context(expr, row, columns, ctx)?;
 
@@ -2730,21 +3526,22 @@ fn evaluate_expression_with_context(
 
             if subquery_rows.len() > 1 {
                 return Err(ExecutorError::Internal(
-                    "Scalar subquery returned more than one row".to_string()
+                    "Scalar subquery returned more than one row".to_string(),
                 ));
             }
 
             // Return the first column of the first row
-            subquery_rows[0]
-                .values
-                .first()
-                .cloned()
-                .ok_or_else(|| ExecutorError::Internal("Scalar subquery returned no columns".to_string()))
+            subquery_rows[0].values.first().cloned().ok_or_else(|| {
+                ExecutorError::Internal("Scalar subquery returned no columns".to_string())
+            })
         }
 
         PlanExpression::Placeholder(idx) => {
             // Placeholders should be replaced before execution
-            Err(ExecutorError::Internal(format!("Unresolved placeholder ${}", idx)))
+            Err(ExecutorError::Internal(format!(
+                "Unresolved placeholder ${}",
+                idx
+            )))
         }
     }
 }
@@ -2789,12 +3586,24 @@ fn evaluate_binary_op(op: PlanBinaryOp, left: &Value, right: &Value) -> Executor
             }
             Ok(Value::Integer(l % r))
         }
-        PlanBinaryOp::Equal => Ok(Value::Boolean(compare_values(left, right)? == std::cmp::Ordering::Equal)),
-        PlanBinaryOp::NotEqual => Ok(Value::Boolean(compare_values(left, right)? != std::cmp::Ordering::Equal)),
-        PlanBinaryOp::LessThan => Ok(Value::Boolean(compare_values(left, right)? == std::cmp::Ordering::Less)),
-        PlanBinaryOp::LessThanOrEqual => Ok(Value::Boolean(compare_values(left, right)? != std::cmp::Ordering::Greater)),
-        PlanBinaryOp::GreaterThan => Ok(Value::Boolean(compare_values(left, right)? == std::cmp::Ordering::Greater)),
-        PlanBinaryOp::GreaterThanOrEqual => Ok(Value::Boolean(compare_values(left, right)? != std::cmp::Ordering::Less)),
+        PlanBinaryOp::Equal => Ok(Value::Boolean(
+            compare_values(left, right)? == std::cmp::Ordering::Equal,
+        )),
+        PlanBinaryOp::NotEqual => Ok(Value::Boolean(
+            compare_values(left, right)? != std::cmp::Ordering::Equal,
+        )),
+        PlanBinaryOp::LessThan => Ok(Value::Boolean(
+            compare_values(left, right)? == std::cmp::Ordering::Less,
+        )),
+        PlanBinaryOp::LessThanOrEqual => Ok(Value::Boolean(
+            compare_values(left, right)? != std::cmp::Ordering::Greater,
+        )),
+        PlanBinaryOp::GreaterThan => Ok(Value::Boolean(
+            compare_values(left, right)? == std::cmp::Ordering::Greater,
+        )),
+        PlanBinaryOp::GreaterThanOrEqual => Ok(Value::Boolean(
+            compare_values(left, right)? != std::cmp::Ordering::Less,
+        )),
         PlanBinaryOp::And => {
             let l = value_to_bool(left)?;
             let r = value_to_bool(right)?;
@@ -2851,6 +3660,103 @@ fn evaluate_function(name: &str, args: &[Value]) -> ExecutorResult<Value> {
                 }
             }
             Ok(Value::Null)
+        }
+        "ROUND" => {
+            let f = value_to_f64(&args.first().cloned().unwrap_or(Value::Null))?;
+            let decimals = args
+                .get(1)
+                .and_then(|v| match v {
+                    Value::Integer(i) => Some(*i as i32),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let factor = 10_f64.powi(decimals);
+            Ok(Value::Float((f * factor).round() / factor))
+        }
+        "CEIL" | "CEILING" => {
+            let f = value_to_f64(&args.first().cloned().unwrap_or(Value::Null))?;
+            Ok(Value::Float(f.ceil()))
+        }
+        "FLOOR" => {
+            let f = value_to_f64(&args.first().cloned().unwrap_or(Value::Null))?;
+            Ok(Value::Float(f.floor()))
+        }
+        "SUBSTRING" | "SUBSTR" => {
+            let s = value_to_string(&args.first().cloned().unwrap_or(Value::Null));
+            let start = args
+                .get(1)
+                .and_then(|v| match v {
+                    Value::Integer(i) => Some((*i as usize).saturating_sub(1)), // SQL is 1-indexed
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let len = args.get(2).and_then(|v| match v {
+                Value::Integer(i) => Some(*i as usize),
+                _ => None,
+            });
+            let result: String = match len {
+                Some(l) => s.chars().skip(start).take(l).collect(),
+                None => s.chars().skip(start).collect(),
+            };
+            Ok(Value::String(result))
+        }
+        "TRIM" => {
+            let s = value_to_string(&args.first().cloned().unwrap_or(Value::Null));
+            Ok(Value::String(s.trim().to_string()))
+        }
+        "LTRIM" => {
+            let s = value_to_string(&args.first().cloned().unwrap_or(Value::Null));
+            Ok(Value::String(s.trim_start().to_string()))
+        }
+        "RTRIM" => {
+            let s = value_to_string(&args.first().cloned().unwrap_or(Value::Null));
+            Ok(Value::String(s.trim_end().to_string()))
+        }
+        "NULLIF" => {
+            if args.len() >= 2 && args[0] == args[1] {
+                Ok(Value::Null)
+            } else {
+                Ok(args.first().cloned().unwrap_or(Value::Null))
+            }
+        }
+        "NOW" | "CURRENT_TIMESTAMP" => Ok(Value::String(
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        )),
+        "CURRENT_DATE" => Ok(Value::String(
+            chrono::Utc::now().format("%Y-%m-%d").to_string(),
+        )),
+        "CURRENT_TIME" => Ok(Value::String(
+            chrono::Utc::now().format("%H:%M:%S").to_string(),
+        )),
+        "EXTRACT" => {
+            // EXTRACT is typically handled specially by the parser, but handle the function form
+            let s = value_to_string(&args.last().cloned().unwrap_or(Value::Null));
+            let part =
+                value_to_string(&args.first().cloned().unwrap_or(Value::Null)).to_uppercase();
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                let val = match part.as_str() {
+                    "YEAR" => dt.format("%Y").to_string().parse::<i64>().unwrap_or(0),
+                    "MONTH" => dt.format("%m").to_string().parse::<i64>().unwrap_or(0),
+                    "DAY" => dt.format("%d").to_string().parse::<i64>().unwrap_or(0),
+                    "HOUR" => dt.format("%H").to_string().parse::<i64>().unwrap_or(0),
+                    "MINUTE" => dt.format("%M").to_string().parse::<i64>().unwrap_or(0),
+                    "SECOND" => dt.format("%S").to_string().parse::<i64>().unwrap_or(0),
+                    _ => 0,
+                };
+                Ok(Value::Integer(val))
+            } else {
+                Ok(Value::Null)
+            }
+        }
+        "REPLACE" => {
+            let s = value_to_string(&args.first().cloned().unwrap_or(Value::Null));
+            let from = value_to_string(&args.get(1).cloned().unwrap_or(Value::Null));
+            let to = value_to_string(&args.get(2).cloned().unwrap_or(Value::Null));
+            Ok(Value::String(s.replace(&from, &to)))
+        }
+        "CONCAT" => {
+            let result: String = args.iter().map(|a| value_to_string(a)).collect();
+            Ok(Value::String(result))
         }
         _ => Err(ExecutorError::InvalidOperation(format!(
             "Unknown function: {}",
@@ -2960,11 +3866,7 @@ mod tests {
 
         context.add_table(TableData {
             name: "users".to_string(),
-            columns: vec![
-                "id".to_string(),
-                "name".to_string(),
-                "age".to_string(),
-            ],
+            columns: vec!["id".to_string(), "name".to_string(), "age".to_string()],
             rows: vec![
                 Row {
                     values: vec![
@@ -3005,11 +3907,7 @@ mod tests {
                 input: Box::new(PlanNode::Scan(ScanNode {
                     table_name: "users".to_string(),
                     alias: None,
-                    columns: vec![
-                        "id".to_string(),
-                        "name".to_string(),
-                        "age".to_string(),
-                    ],
+                    columns: vec!["id".to_string(), "name".to_string(), "age".to_string()],
                     index_scan: None,
                 })),
                 expressions: vec![
@@ -3052,11 +3950,7 @@ mod tests {
                     input: Box::new(PlanNode::Scan(ScanNode {
                         table_name: "users".to_string(),
                         alias: None,
-                        columns: vec![
-                            "id".to_string(),
-                            "name".to_string(),
-                            "age".to_string(),
-                        ],
+                        columns: vec!["id".to_string(), "name".to_string(), "age".to_string()],
                         index_scan: None,
                     })),
                     predicate: PlanExpression::BinaryOp {
@@ -3124,7 +4018,7 @@ mod tests {
 
     #[test]
     fn test_create_table() {
-        use crate::planner::{CreateTableNode, CreateColumnDef};
+        use crate::planner::{CreateColumnDef, CreateTableNode};
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -3169,7 +4063,7 @@ mod tests {
 
     #[test]
     fn test_insert_into_table() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource};
+        use crate::planner::{CreateColumnDef, CreateTableNode, InsertNode, InsertPlanSource};
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -3235,16 +4129,14 @@ mod tests {
                     columns: vec!["id".to_string(), "value".to_string()],
                     index_scan: None,
                 })),
-                expressions: vec![
-                    ProjectionExpr {
-                        expr: PlanExpression::Column {
-                            table: None,
-                            name: "id".to_string(),
-                            data_type: DataType::Integer,
-                        },
-                        alias: Some("id".to_string()),
+                expressions: vec![ProjectionExpr {
+                    expr: PlanExpression::Column {
+                        table: None,
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
                     },
-                ],
+                    alias: Some("id".to_string()),
+                }],
             }),
             estimated_cost: 100.0,
             estimated_rows: 2,
@@ -3256,7 +4148,7 @@ mod tests {
 
     #[test]
     fn test_drop_table() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, DropTableNode};
+        use crate::planner::{CreateColumnDef, CreateTableNode, DropTableNode};
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -3302,7 +4194,7 @@ mod tests {
 
     #[test]
     fn test_shared_context_persistence() {
-        use crate::planner::{CreateTableNode, CreateColumnDef};
+        use crate::planner::{CreateColumnDef, CreateTableNode};
         use std::sync::{Arc, RwLock};
 
         // Create a shared context
@@ -3341,7 +4233,9 @@ mod tests {
 
     #[test]
     fn test_insert_select() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource, FilterNode};
+        use crate::planner::{
+            CreateColumnDef, CreateTableNode, FilterNode, InsertNode, InsertPlanSource,
+        };
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -3435,45 +4329,43 @@ mod tests {
             root: PlanNode::Insert(InsertNode {
                 table_name: "dest_table".to_string(),
                 columns: vec!["id".to_string(), "value".to_string()],
-                source: InsertPlanSource::Query(Box::new(
-                    PlanNode::Project(ProjectNode {
-                        input: Box::new(PlanNode::Filter(FilterNode {
-                            input: Box::new(PlanNode::Scan(ScanNode {
-                                table_name: "source_table".to_string(),
-                                alias: None,
-                                columns: vec!["id".to_string(), "value".to_string()],
-                                index_scan: None,
-                            })),
-                            predicate: PlanExpression::BinaryOp {
-                                left: Box::new(PlanExpression::Column {
-                                    table: None,
-                                    name: "id".to_string(),
-                                    data_type: DataType::Integer,
-                                }),
-                                op: PlanBinaryOp::GreaterThan,
-                                right: Box::new(PlanExpression::Literal(PlanLiteral::Integer(1))),
-                            },
+                source: InsertPlanSource::Query(Box::new(PlanNode::Project(ProjectNode {
+                    input: Box::new(PlanNode::Filter(FilterNode {
+                        input: Box::new(PlanNode::Scan(ScanNode {
+                            table_name: "source_table".to_string(),
+                            alias: None,
+                            columns: vec!["id".to_string(), "value".to_string()],
+                            index_scan: None,
                         })),
-                        expressions: vec![
-                            ProjectionExpr {
-                                expr: PlanExpression::Column {
-                                    table: None,
-                                    name: "id".to_string(),
-                                    data_type: DataType::Integer,
-                                },
-                                alias: Some("id".to_string()),
+                        predicate: PlanExpression::BinaryOp {
+                            left: Box::new(PlanExpression::Column {
+                                table: None,
+                                name: "id".to_string(),
+                                data_type: DataType::Integer,
+                            }),
+                            op: PlanBinaryOp::GreaterThan,
+                            right: Box::new(PlanExpression::Literal(PlanLiteral::Integer(1))),
+                        },
+                    })),
+                    expressions: vec![
+                        ProjectionExpr {
+                            expr: PlanExpression::Column {
+                                table: None,
+                                name: "id".to_string(),
+                                data_type: DataType::Integer,
                             },
-                            ProjectionExpr {
-                                expr: PlanExpression::Column {
-                                    table: None,
-                                    name: "value".to_string(),
-                                    data_type: DataType::Text,
-                                },
-                                alias: Some("value".to_string()),
+                            alias: Some("id".to_string()),
+                        },
+                        ProjectionExpr {
+                            expr: PlanExpression::Column {
+                                table: None,
+                                name: "value".to_string(),
+                                data_type: DataType::Text,
                             },
-                        ],
-                    })
-                )),
+                            alias: Some("value".to_string()),
+                        },
+                    ],
+                }))),
             }),
             estimated_cost: 2.0,
             estimated_rows: 2,
@@ -3491,16 +4383,14 @@ mod tests {
                     columns: vec!["id".to_string(), "value".to_string()],
                     index_scan: None,
                 })),
-                expressions: vec![
-                    ProjectionExpr {
-                        expr: PlanExpression::Column {
-                            table: None,
-                            name: "id".to_string(),
-                            data_type: DataType::Integer,
-                        },
-                        alias: Some("id".to_string()),
+                expressions: vec![ProjectionExpr {
+                    expr: PlanExpression::Column {
+                        table: None,
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
                     },
-                ],
+                    alias: Some("id".to_string()),
+                }],
             }),
             estimated_cost: 100.0,
             estimated_rows: 2,
@@ -3512,7 +4402,9 @@ mod tests {
 
     #[test]
     fn test_case_expression() {
-        let row = Row { values: vec![Value::Integer(2)] };
+        let row = Row {
+            values: vec![Value::Integer(2)],
+        };
         let columns = vec!["status".to_string()];
 
         // CASE WHEN status = 1 THEN 'one' WHEN status = 2 THEN 'two' ELSE 'other' END
@@ -3544,7 +4436,9 @@ mod tests {
                     PlanExpression::Literal(PlanLiteral::String("two".to_string())),
                 ),
             ],
-            else_result: Some(Box::new(PlanExpression::Literal(PlanLiteral::String("other".to_string())))),
+            else_result: Some(Box::new(PlanExpression::Literal(PlanLiteral::String(
+                "other".to_string(),
+            )))),
         };
 
         let result = evaluate_expression(&case_expr, &row, &columns).unwrap();
@@ -3553,7 +4447,9 @@ mod tests {
 
     #[test]
     fn test_in_list_expression() {
-        let row = Row { values: vec![Value::Integer(3)] };
+        let row = Row {
+            values: vec![Value::Integer(3)],
+        };
         let columns = vec!["id".to_string()];
 
         // id IN (1, 2, 3, 4, 5)
@@ -3597,7 +4493,9 @@ mod tests {
 
     #[test]
     fn test_between_expression() {
-        let row = Row { values: vec![Value::Integer(50)] };
+        let row = Row {
+            values: vec![Value::Integer(50)],
+        };
         let columns = vec!["value".to_string()];
 
         // value BETWEEN 10 AND 100
@@ -3633,7 +4531,9 @@ mod tests {
 
     #[test]
     fn test_like_expression() {
-        let row = Row { values: vec![Value::String("hello world".to_string())] };
+        let row = Row {
+            values: vec![Value::String("hello world".to_string())],
+        };
         let columns = vec!["text".to_string()];
 
         // text LIKE 'hello%'
@@ -3643,7 +4543,9 @@ mod tests {
                 name: "text".to_string(),
                 data_type: DataType::Text,
             }),
-            pattern: Box::new(PlanExpression::Literal(PlanLiteral::String("hello%".to_string()))),
+            pattern: Box::new(PlanExpression::Literal(PlanLiteral::String(
+                "hello%".to_string(),
+            ))),
             negated: false,
         };
 
@@ -3657,7 +4559,9 @@ mod tests {
                 name: "text".to_string(),
                 data_type: DataType::Text,
             }),
-            pattern: Box::new(PlanExpression::Literal(PlanLiteral::String("%world".to_string()))),
+            pattern: Box::new(PlanExpression::Literal(PlanLiteral::String(
+                "%world".to_string(),
+            ))),
             negated: false,
         };
 
@@ -3671,7 +4575,9 @@ mod tests {
                 name: "text".to_string(),
                 data_type: DataType::Text,
             }),
-            pattern: Box::new(PlanExpression::Literal(PlanLiteral::String("%foo%".to_string()))),
+            pattern: Box::new(PlanExpression::Literal(PlanLiteral::String(
+                "%foo%".to_string(),
+            ))),
             negated: true,
         };
 
@@ -3681,7 +4587,9 @@ mod tests {
 
     #[test]
     fn test_alter_table() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, AlterTableNode, PlanAlterOperation};
+        use crate::planner::{
+            AlterTableNode, CreateColumnDef, CreateTableNode, PlanAlterOperation,
+        };
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -3689,16 +4597,14 @@ mod tests {
         let create_plan = QueryPlan {
             root: PlanNode::CreateTable(CreateTableNode {
                 table_name: "alter_test".to_string(),
-                columns: vec![
-                    CreateColumnDef {
-                        name: "id".to_string(),
-                        data_type: DataType::Integer,
-                        nullable: false,
-                        default: None,
-                        primary_key: true,
-                        unique: false,
-                    },
-                ],
+                columns: vec![CreateColumnDef {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                    default: None,
+                    primary_key: true,
+                    unique: false,
+                }],
                 constraints: vec![],
                 if_not_exists: false,
             }),
@@ -3711,16 +4617,14 @@ mod tests {
         let add_column_plan = QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
                 table_name: "alter_test".to_string(),
-                operations: vec![
-                    PlanAlterOperation::AddColumn(CreateColumnDef {
-                        name: "name".to_string(),
-                        data_type: DataType::Text,
-                        nullable: true,
-                        default: None,
-                        primary_key: false,
-                        unique: false,
-                    }),
-                ],
+                operations: vec![PlanAlterOperation::AddColumn(CreateColumnDef {
+                    name: "name".to_string(),
+                    data_type: DataType::Text,
+                    nullable: true,
+                    default: None,
+                    primary_key: false,
+                    unique: false,
+                })],
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -3732,7 +4636,13 @@ mod tests {
         }
 
         // Verify the column was added
-        let schema = executor.context.read().unwrap().get_table_schema("alter_test").unwrap().clone();
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("alter_test")
+            .unwrap()
+            .clone();
         assert_eq!(schema.columns.len(), 2);
         assert_eq!(schema.columns[1].name, "name");
 
@@ -3740,12 +4650,10 @@ mod tests {
         let rename_column_plan = QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
                 table_name: "alter_test".to_string(),
-                operations: vec![
-                    PlanAlterOperation::RenameColumn {
-                        old_name: "name".to_string(),
-                        new_name: "full_name".to_string(),
-                    },
-                ],
+                operations: vec![PlanAlterOperation::RenameColumn {
+                    old_name: "name".to_string(),
+                    new_name: "full_name".to_string(),
+                }],
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -3753,19 +4661,23 @@ mod tests {
         executor.execute(&rename_column_plan).unwrap();
 
         // Verify the column was renamed
-        let schema = executor.context.read().unwrap().get_table_schema("alter_test").unwrap().clone();
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("alter_test")
+            .unwrap()
+            .clone();
         assert_eq!(schema.columns[1].name, "full_name");
 
         // Drop the column
         let drop_column_plan = QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
                 table_name: "alter_test".to_string(),
-                operations: vec![
-                    PlanAlterOperation::DropColumn {
-                        name: "full_name".to_string(),
-                        if_exists: false,
-                    },
-                ],
+                operations: vec![PlanAlterOperation::DropColumn {
+                    name: "full_name".to_string(),
+                    if_exists: false,
+                }],
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -3773,13 +4685,22 @@ mod tests {
         executor.execute(&drop_column_plan).unwrap();
 
         // Verify the column was dropped
-        let schema = executor.context.read().unwrap().get_table_schema("alter_test").unwrap().clone();
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("alter_test")
+            .unwrap()
+            .clone();
         assert_eq!(schema.columns.len(), 1);
     }
 
     #[test]
     fn test_alter_table_constraints() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, AlterTableNode, PlanAlterOperation, CreateTableConstraint};
+        use crate::planner::{
+            AlterTableNode, CreateColumnDef, CreateTableConstraint, CreateTableNode,
+            PlanAlterOperation,
+        };
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -3817,11 +4738,11 @@ mod tests {
         let add_unique_plan = QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
                 table_name: "constraint_test".to_string(),
-                operations: vec![
-                    PlanAlterOperation::AddConstraint(CreateTableConstraint::Unique {
+                operations: vec![PlanAlterOperation::AddConstraint(
+                    CreateTableConstraint::Unique {
                         columns: vec!["email".to_string()],
-                    }),
-                ],
+                    },
+                )],
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -3829,7 +4750,13 @@ mod tests {
         executor.execute(&add_unique_plan).unwrap();
 
         // Verify the constraint was added
-        let schema = executor.context.read().unwrap().get_table_schema("constraint_test").unwrap().clone();
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("constraint_test")
+            .unwrap()
+            .clone();
         assert_eq!(schema.constraints.len(), 1);
         assert!(schema.constraints[0].name.contains("uq"));
 
@@ -3837,11 +4764,11 @@ mod tests {
         let add_pk_plan = QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
                 table_name: "constraint_test".to_string(),
-                operations: vec![
-                    PlanAlterOperation::AddConstraint(CreateTableConstraint::PrimaryKey {
+                operations: vec![PlanAlterOperation::AddConstraint(
+                    CreateTableConstraint::PrimaryKey {
                         columns: vec!["id".to_string()],
-                    }),
-                ],
+                    },
+                )],
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -3849,7 +4776,13 @@ mod tests {
         executor.execute(&add_pk_plan).unwrap();
 
         // Verify the primary key was set
-        let schema = executor.context.read().unwrap().get_table_schema("constraint_test").unwrap().clone();
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("constraint_test")
+            .unwrap()
+            .clone();
         assert_eq!(schema.primary_key, Some(vec!["id".to_string()]));
         assert_eq!(schema.constraints.len(), 2);
 
@@ -3857,11 +4790,11 @@ mod tests {
         let add_dup_pk_plan = QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
                 table_name: "constraint_test".to_string(),
-                operations: vec![
-                    PlanAlterOperation::AddConstraint(CreateTableConstraint::PrimaryKey {
+                operations: vec![PlanAlterOperation::AddConstraint(
+                    CreateTableConstraint::PrimaryKey {
                         columns: vec!["email".to_string()],
-                    }),
-                ],
+                    },
+                )],
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -3871,8 +4804,16 @@ mod tests {
 
         // Drop the UNIQUE constraint by name
         let pk_constraint_name = {
-            let schema = executor.context.read().unwrap().get_table_schema("constraint_test").unwrap().clone();
-            schema.constraints.iter()
+            let schema = executor
+                .context
+                .read()
+                .unwrap()
+                .get_table_schema("constraint_test")
+                .unwrap()
+                .clone();
+            schema
+                .constraints
+                .iter()
                 .find(|c| matches!(c.constraint_type, StoredConstraintType::Unique { .. }))
                 .map(|c| c.name.clone())
                 .unwrap()
@@ -3881,11 +4822,9 @@ mod tests {
         let drop_constraint_plan = QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
                 table_name: "constraint_test".to_string(),
-                operations: vec![
-                    PlanAlterOperation::DropConstraint {
-                        name: pk_constraint_name,
-                    },
-                ],
+                operations: vec![PlanAlterOperation::DropConstraint {
+                    name: pk_constraint_name,
+                }],
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -3893,15 +4832,24 @@ mod tests {
         executor.execute(&drop_constraint_plan).unwrap();
 
         // Verify the constraint was dropped
-        let schema = executor.context.read().unwrap().get_table_schema("constraint_test").unwrap().clone();
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("constraint_test")
+            .unwrap()
+            .clone();
         assert_eq!(schema.constraints.len(), 1);
         // Only the PK constraint should remain
-        assert!(matches!(schema.constraints[0].constraint_type, StoredConstraintType::PrimaryKey { .. }));
+        assert!(matches!(
+            schema.constraints[0].constraint_type,
+            StoredConstraintType::PrimaryKey { .. }
+        ));
     }
 
     #[test]
     fn test_create_table_with_constraints() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, CreateTableConstraint};
+        use crate::planner::{CreateColumnDef, CreateTableConstraint, CreateTableNode};
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -3935,11 +4883,9 @@ mod tests {
                         unique: false,
                     },
                 ],
-                constraints: vec![
-                    CreateTableConstraint::Unique {
-                        columns: vec!["name".to_string()],
-                    },
-                ],
+                constraints: vec![CreateTableConstraint::Unique {
+                    columns: vec!["name".to_string()],
+                }],
                 if_not_exists: false,
             }),
             estimated_cost: 1.0,
@@ -3948,7 +4894,13 @@ mod tests {
         executor.execute(&create_plan).unwrap();
 
         // Verify schema has primary key and constraints
-        let schema = executor.context.read().unwrap().get_table_schema("users").unwrap().clone();
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("users")
+            .unwrap()
+            .clone();
         assert_eq!(schema.primary_key, Some(vec!["id".to_string()]));
         // Should have: pk, uq for name, uq for email (column-level)
         assert!(schema.constraints.len() >= 2);
@@ -3956,7 +4908,10 @@ mod tests {
 
     #[test]
     fn test_column_default_values() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource, PlanExpression, PlanLiteral};
+        use crate::planner::{
+            CreateColumnDef, CreateTableNode, InsertNode, InsertPlanSource, PlanExpression,
+            PlanLiteral,
+        };
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -3977,7 +4932,9 @@ mod tests {
                         name: "status".to_string(),
                         data_type: DataType::Text,
                         nullable: false,
-                        default: Some(PlanExpression::Literal(PlanLiteral::String("active".to_string()))),
+                        default: Some(PlanExpression::Literal(PlanLiteral::String(
+                            "active".to_string(),
+                        ))),
                         primary_key: false,
                         unique: false,
                     },
@@ -3999,8 +4956,17 @@ mod tests {
         executor.execute(&create_plan).unwrap();
 
         // Verify default values are stored in schema
-        let schema = executor.context.read().unwrap().get_table_schema("defaults_test").unwrap().clone();
-        assert_eq!(schema.columns[1].default, Some(Value::String("active".to_string())));
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("defaults_test")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            schema.columns[1].default,
+            Some(Value::String("active".to_string()))
+        );
         assert_eq!(schema.columns[2].default, Some(Value::Integer(0)));
 
         // Insert a row specifying only the id column
@@ -4008,9 +4974,9 @@ mod tests {
             root: PlanNode::Insert(InsertNode {
                 table_name: "defaults_test".to_string(),
                 columns: vec!["id".to_string()],
-                source: InsertPlanSource::Values(vec![
-                    vec![PlanExpression::Literal(PlanLiteral::Integer(1))],
-                ]),
+                source: InsertPlanSource::Values(vec![vec![PlanExpression::Literal(
+                    PlanLiteral::Integer(1),
+                )]]),
             }),
             estimated_cost: 1.0,
             estimated_rows: 1,
@@ -4024,13 +4990,19 @@ mod tests {
 
         assert_eq!(table_data.rows.len(), 1);
         assert_eq!(table_data.rows[0].values[0], Value::Integer(1)); // id
-        assert_eq!(table_data.rows[0].values[1], Value::String("active".to_string())); // status default
+        assert_eq!(
+            table_data.rows[0].values[1],
+            Value::String("active".to_string())
+        ); // status default
         assert_eq!(table_data.rows[0].values[2], Value::Integer(0)); // count default
     }
 
     #[test]
     fn test_alter_column_default() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, AlterTableNode, PlanAlterOperation, PlanExpression, PlanLiteral};
+        use crate::planner::{
+            AlterTableNode, CreateColumnDef, CreateTableNode, PlanAlterOperation, PlanExpression,
+            PlanLiteral,
+        };
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -4068,14 +5040,12 @@ mod tests {
         let alter_plan = QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
                 table_name: "alter_default_test".to_string(),
-                operations: vec![
-                    PlanAlterOperation::AlterColumn {
-                        name: "value".to_string(),
-                        data_type: None,
-                        set_not_null: None,
-                        set_default: Some(Some(PlanExpression::Literal(PlanLiteral::Integer(42)))),
-                    },
-                ],
+                operations: vec![PlanAlterOperation::AlterColumn {
+                    name: "value".to_string(),
+                    data_type: None,
+                    set_not_null: None,
+                    set_default: Some(Some(PlanExpression::Literal(PlanLiteral::Integer(42)))),
+                }],
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -4083,21 +5053,25 @@ mod tests {
         executor.execute(&alter_plan).unwrap();
 
         // Verify the default was set
-        let schema = executor.context.read().unwrap().get_table_schema("alter_default_test").unwrap().clone();
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("alter_default_test")
+            .unwrap()
+            .clone();
         assert_eq!(schema.columns[1].default, Some(Value::Integer(42)));
 
         // Alter column to drop the default
         let drop_default_plan = QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
                 table_name: "alter_default_test".to_string(),
-                operations: vec![
-                    PlanAlterOperation::AlterColumn {
-                        name: "value".to_string(),
-                        data_type: None,
-                        set_not_null: None,
-                        set_default: Some(None), // Drop default
-                    },
-                ],
+                operations: vec![PlanAlterOperation::AlterColumn {
+                    name: "value".to_string(),
+                    data_type: None,
+                    set_not_null: None,
+                    set_default: Some(None), // Drop default
+                }],
             }),
             estimated_cost: 1.0,
             estimated_rows: 0,
@@ -4105,13 +5079,21 @@ mod tests {
         executor.execute(&drop_default_plan).unwrap();
 
         // Verify the default was removed
-        let schema = executor.context.read().unwrap().get_table_schema("alter_default_test").unwrap().clone();
+        let schema = executor
+            .context
+            .read()
+            .unwrap()
+            .get_table_schema("alter_default_test")
+            .unwrap()
+            .clone();
         assert_eq!(schema.columns[1].default, None);
     }
 
     #[test]
     fn test_parameterized_query() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource, FilterNode};
+        use crate::planner::{
+            CreateColumnDef, CreateTableNode, FilterNode, InsertNode, InsertPlanSource,
+        };
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -4194,24 +5176,30 @@ mod tests {
         };
 
         // Execute with parameter $1 = 2 (should find Bob)
-        let result = executor.execute_with_params(&query_plan, &[Value::Integer(2)]).unwrap();
+        let result = executor
+            .execute_with_params(&query_plan, &[Value::Integer(2)])
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].values[0], Value::Integer(2));
         assert_eq!(result.rows[0].values[1], Value::String("Bob".to_string()));
 
         // Execute with parameter $1 = 1 (should find Alice)
-        let result = executor.execute_with_params(&query_plan, &[Value::Integer(1)]).unwrap();
+        let result = executor
+            .execute_with_params(&query_plan, &[Value::Integer(1)])
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].values[1], Value::String("Alice".to_string()));
 
         // Execute with parameter $1 = 99 (should find nothing)
-        let result = executor.execute_with_params(&query_plan, &[Value::Integer(99)]).unwrap();
+        let result = executor
+            .execute_with_params(&query_plan, &[Value::Integer(99)])
+            .unwrap();
         assert_eq!(result.rows.len(), 0);
     }
 
     #[test]
     fn test_parameterized_insert() {
-        use crate::planner::{CreateTableNode, CreateColumnDef, InsertNode, InsertPlanSource};
+        use crate::planner::{CreateColumnDef, CreateTableNode, InsertNode, InsertPlanSource};
 
         let executor = Executor::new(ExecutionContext::new());
 
@@ -4250,22 +5238,22 @@ mod tests {
             root: PlanNode::Insert(InsertNode {
                 table_name: "param_insert_test".to_string(),
                 columns: vec!["id".to_string(), "value".to_string()],
-                source: InsertPlanSource::Values(vec![
-                    vec![
-                        PlanExpression::Placeholder(1),
-                        PlanExpression::Placeholder(2),
-                    ],
-                ]),
+                source: InsertPlanSource::Values(vec![vec![
+                    PlanExpression::Placeholder(1),
+                    PlanExpression::Placeholder(2),
+                ]]),
             }),
             estimated_cost: 1.0,
             estimated_rows: 1,
         };
 
         // Execute insert with parameters
-        executor.execute_with_params(&insert_plan, &[
-            Value::Integer(42),
-            Value::String("test value".to_string()),
-        ]).unwrap();
+        executor
+            .execute_with_params(
+                &insert_plan,
+                &[Value::Integer(42), Value::String("test value".to_string())],
+            )
+            .unwrap();
 
         // Verify the data was inserted
         let context = executor.context.read().unwrap();
@@ -4274,6 +5262,197 @@ mod tests {
 
         assert_eq!(table_data.rows.len(), 1);
         assert_eq!(table_data.rows[0].values[0], Value::Integer(42));
-        assert_eq!(table_data.rows[0].values[1], Value::String("test value".to_string()));
+        assert_eq!(
+            table_data.rows[0].values[1],
+            Value::String("test value".to_string())
+        );
+    }
+
+    // =========================================================================
+    // Set Operation Tests
+    // =========================================================================
+
+    /// Helper: create a context with two tables sharing an "id" column for set op tests.
+    fn create_set_op_context() -> ExecutionContext {
+        let mut context = ExecutionContext::new();
+
+        context.add_table(TableData {
+            name: "t1".to_string(),
+            columns: vec!["id".to_string(), "val".to_string()],
+            rows: vec![
+                Row {
+                    values: vec![Value::Integer(1), Value::String("a".to_string())],
+                },
+                Row {
+                    values: vec![Value::Integer(2), Value::String("b".to_string())],
+                },
+                Row {
+                    values: vec![Value::Integer(3), Value::String("c".to_string())],
+                },
+            ],
+            row_created_version: vec![0, 0, 0],
+            row_deleted_version: vec![0, 0, 0],
+        });
+
+        context.add_table(TableData {
+            name: "t2".to_string(),
+            columns: vec!["id".to_string(), "val".to_string()],
+            rows: vec![
+                Row {
+                    values: vec![Value::Integer(2), Value::String("b".to_string())],
+                },
+                Row {
+                    values: vec![Value::Integer(3), Value::String("c".to_string())],
+                },
+                Row {
+                    values: vec![Value::Integer(4), Value::String("d".to_string())],
+                },
+            ],
+            row_created_version: vec![0, 0, 0],
+            row_deleted_version: vec![0, 0, 0],
+        });
+
+        context
+    }
+
+    /// Build a SetOperation plan from two table scans with projections.
+    fn make_set_op_plan(op: SetOperationType) -> QueryPlan {
+        use crate::planner::SetOperationNode;
+
+        let left = PlanNode::Project(ProjectNode {
+            input: Box::new(PlanNode::Scan(ScanNode {
+                table_name: "t1".to_string(),
+                alias: None,
+                columns: vec!["id".to_string(), "val".to_string()],
+                index_scan: None,
+            })),
+            expressions: vec![
+                ProjectionExpr {
+                    expr: PlanExpression::Column {
+                        table: None,
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                    },
+                    alias: Some("id".to_string()),
+                },
+                ProjectionExpr {
+                    expr: PlanExpression::Column {
+                        table: None,
+                        name: "val".to_string(),
+                        data_type: DataType::Text,
+                    },
+                    alias: Some("val".to_string()),
+                },
+            ],
+        });
+
+        let right = PlanNode::Project(ProjectNode {
+            input: Box::new(PlanNode::Scan(ScanNode {
+                table_name: "t2".to_string(),
+                alias: None,
+                columns: vec!["id".to_string(), "val".to_string()],
+                index_scan: None,
+            })),
+            expressions: vec![
+                ProjectionExpr {
+                    expr: PlanExpression::Column {
+                        table: None,
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                    },
+                    alias: Some("id".to_string()),
+                },
+                ProjectionExpr {
+                    expr: PlanExpression::Column {
+                        table: None,
+                        name: "val".to_string(),
+                        data_type: DataType::Text,
+                    },
+                    alias: Some("val".to_string()),
+                },
+            ],
+        });
+
+        QueryPlan {
+            root: PlanNode::SetOperation(SetOperationNode {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }),
+            estimated_cost: 10.0,
+            estimated_rows: 6,
+        }
+    }
+
+    #[test]
+    fn test_union_all() {
+        let context = create_set_op_context();
+        let executor = Executor::new(context);
+        let plan = make_set_op_plan(crate::ast::SetOperationType::UnionAll);
+
+        let result = executor.execute(&plan).unwrap();
+
+        // UNION ALL: 3 + 3 = 6 rows, no dedup
+        assert_eq!(result.rows.len(), 6);
+        assert_eq!(result.columns, vec!["id".to_string(), "val".to_string()]);
+    }
+
+    #[test]
+    fn test_union() {
+        let context = create_set_op_context();
+        let executor = Executor::new(context);
+        let plan = make_set_op_plan(crate::ast::SetOperationType::Union);
+
+        let result = executor.execute(&plan).unwrap();
+
+        // UNION: {1,a}, {2,b}, {3,c}, {4,d} = 4 unique rows
+        assert_eq!(result.rows.len(), 4);
+        // Check the IDs are 1, 2, 3, 4
+        let mut ids: Vec<i64> = result
+            .rows
+            .iter()
+            .map(|r| match &r.values[0] {
+                Value::Integer(i) => *i,
+                _ => panic!("Expected int"),
+            })
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_intersect() {
+        let context = create_set_op_context();
+        let executor = Executor::new(context);
+        let plan = make_set_op_plan(crate::ast::SetOperationType::Intersect);
+
+        let result = executor.execute(&plan).unwrap();
+
+        // INTERSECT: {2,b}, {3,c} = 2 rows
+        assert_eq!(result.rows.len(), 2);
+        let mut ids: Vec<i64> = result
+            .rows
+            .iter()
+            .map(|r| match &r.values[0] {
+                Value::Integer(i) => *i,
+                _ => panic!("Expected int"),
+            })
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_except() {
+        let context = create_set_op_context();
+        let executor = Executor::new(context);
+        let plan = make_set_op_plan(crate::ast::SetOperationType::Except);
+
+        let result = executor.execute(&plan).unwrap();
+
+        // EXCEPT: {1,a} only (in t1 but not in t2)
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], Value::Integer(1));
+        assert_eq!(result.rows[0].values[1], Value::String("a".to_string()));
     }
 }

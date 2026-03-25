@@ -12,20 +12,19 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-pub mod metrics;
 pub mod health;
+pub mod metrics;
 pub mod tracing;
 
-pub use metrics::{
-    Counter, Gauge, Histogram, Summary, MetricRegistry, DatabaseMetrics,
-    MetricType, MetricValue, HistogramValue, SummaryValue,
-};
 pub use health::{
-    HealthStatus, HealthCheck, HealthCheckResult, HealthChecker, HealthReport,
-    ProbeChecker, MemoryHealthCheck, DiskHealthCheck, ConnectionPoolHealthCheck,
-    LatencyHealthCheck,
+    ConnectionPoolHealthCheck, DiskHealthCheck, HealthCheck, HealthCheckResult, HealthChecker,
+    HealthReport, HealthStatus, LatencyHealthCheck, MemoryHealthCheck, ProbeChecker,
+};
+pub use metrics::{
+    Counter, DatabaseMetrics, Gauge, Histogram, HistogramValue, MetricRegistry, MetricType,
+    MetricValue, Summary, SummaryValue,
 };
 pub use tracing::{
-    TraceId, SpanId, Span, SpanBuilder, SpanKind, SpanStatus, SpanEvent,
-    TraceContext, Tracer, LogLevel, LogEntry, Logger,
+    LogEntry, LogLevel, Logger, Span, SpanBuilder, SpanEvent, SpanId, SpanKind, SpanStatus,
+    TraceContext, TraceId, Tracer,
 };

@@ -12,9 +12,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::binary::{
-    backup_current_binary, download_binary, stage_binary, verify_sha256,
-};
+use crate::binary::{backup_current_binary, download_binary, stage_binary, verify_sha256};
 use crate::health::{wait_for_healthy, HealthCheck};
 use crate::rollback::{rollback_nodes, RollbackEntry};
 use crate::UpdateError;
@@ -92,11 +90,7 @@ pub struct UpdateOrchestrator {
 
 impl UpdateOrchestrator {
     /// Create a new orchestrator.
-    pub fn new(
-        current_binary_path: PathBuf,
-        staging_dir: PathBuf,
-        backup_dir: PathBuf,
-    ) -> Self {
+    pub fn new(current_binary_path: PathBuf, staging_dir: PathBuf, backup_dir: PathBuf) -> Self {
         Self {
             plans: RwLock::new(Vec::new()),
             current_binary_path,
@@ -162,7 +156,10 @@ impl UpdateOrchestrator {
     /// Get just the status of a plan.
     pub async fn get_plan_status(&self, plan_id: &str) -> Option<UpdateStatus> {
         let plans = self.plans.read().await;
-        plans.iter().find(|p| p.id == plan_id).map(|p| p.status.clone())
+        plans
+            .iter()
+            .find(|p| p.id == plan_id)
+            .map(|p| p.status.clone())
     }
 
     /// Stage the binary on a specific node by POSTing to its staging endpoint.
@@ -193,14 +190,9 @@ impl UpdateOrchestrator {
             "sha256": plan.sha256,
         });
 
-        let response = client
-            .post(&url)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| {
-                UpdateError::NodeUnreachable(format!("Failed to reach {node_address}: {e}"))
-            })?;
+        let response = client.post(&url).json(&payload).send().await.map_err(|e| {
+            UpdateError::NodeUnreachable(format!("Failed to reach {node_address}: {e}"))
+        })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -312,23 +304,25 @@ impl UpdateOrchestrator {
             );
 
             // Backup current binary
-            let backup_path = match backup_current_binary(&self.current_binary_path, &self.backup_dir)
-            {
-                Ok(p) => p,
-                Err(e) => {
-                    error!(node = %node.name, error = %e, "Failed to backup binary");
-                    self.set_node_status(
-                        plan_id,
-                        &node.node_id,
-                        NodeUpdateStatus::Failed(e.to_string()),
-                    )
-                    .await?;
-                    // Rollback previously updated nodes
-                    self.rollback_updated_nodes(plan_id, &rollback_entries).await;
-                    self.set_plan_status(plan_id, UpdateStatus::RolledBack).await?;
-                    return Err(e);
-                }
-            };
+            let backup_path =
+                match backup_current_binary(&self.current_binary_path, &self.backup_dir) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!(node = %node.name, error = %e, "Failed to backup binary");
+                        self.set_node_status(
+                            plan_id,
+                            &node.node_id,
+                            NodeUpdateStatus::Failed(e.to_string()),
+                        )
+                        .await?;
+                        // Rollback previously updated nodes
+                        self.rollback_updated_nodes(plan_id, &rollback_entries)
+                            .await;
+                        self.set_plan_status(plan_id, UpdateStatus::RolledBack)
+                            .await?;
+                        return Err(e);
+                    }
+                };
 
             // Drain the node
             self.set_node_status(plan_id, &node.node_id, NodeUpdateStatus::Draining)
@@ -350,8 +344,10 @@ impl UpdateOrchestrator {
                     NodeUpdateStatus::Failed(e.to_string()),
                 )
                 .await?;
-                self.rollback_updated_nodes(plan_id, &rollback_entries).await;
-                self.set_plan_status(plan_id, UpdateStatus::RolledBack).await?;
+                self.rollback_updated_nodes(plan_id, &rollback_entries)
+                    .await;
+                self.set_plan_status(plan_id, UpdateStatus::RolledBack)
+                    .await?;
                 return Err(e);
             }
 
@@ -391,8 +387,10 @@ impl UpdateOrchestrator {
                         target_binary: self.current_binary_path.clone(),
                     });
 
-                    self.rollback_updated_nodes(plan_id, &rollback_entries).await;
-                    self.set_plan_status(plan_id, UpdateStatus::RolledBack).await?;
+                    self.rollback_updated_nodes(plan_id, &rollback_entries)
+                        .await;
+                    self.set_plan_status(plan_id, UpdateStatus::RolledBack)
+                        .await?;
                     return Err(UpdateError::HealthCheckFailed(format!(
                         "Node {} failed health check after update",
                         node.name
@@ -402,7 +400,8 @@ impl UpdateOrchestrator {
         }
 
         // --- Phase 4: Final cluster verification ---
-        self.set_plan_status(plan_id, UpdateStatus::Completed).await?;
+        self.set_plan_status(plan_id, UpdateStatus::Completed)
+            .await?;
         info!(plan_id = plan_id, version = %plan.version, "Rolling update completed successfully");
 
         Ok(())
@@ -445,10 +444,7 @@ impl UpdateOrchestrator {
 
     /// Signal a node to drain active connections.
     async fn drain_node(&self, node_address: &str) -> Result<(), UpdateError> {
-        let url = format!(
-            "{}/api/v1/admin/drain",
-            node_address.trim_end_matches('/')
-        );
+        let url = format!("{}/api/v1/admin/drain", node_address.trim_end_matches('/'));
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -614,7 +610,11 @@ mod tests {
         orchestrator.set_cluster_nodes(test_nodes()).await;
 
         let plan = orchestrator
-            .create_plan("0.2.0".into(), "https://example.com/bin".into(), "sha".into())
+            .create_plan(
+                "0.2.0".into(),
+                "https://example.com/bin".into(),
+                "sha".into(),
+            )
             .await;
 
         let retrieved = orchestrator.get_plan(&plan.id).await;

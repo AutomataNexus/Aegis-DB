@@ -29,8 +29,8 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 // =============================================================================
 // Types
@@ -235,8 +235,13 @@ impl DeletionCertificate {
         let total_bytes = items.iter().filter_map(|i| i.size_bytes).sum();
 
         // Generate unique certificate ID
-        let id = format!("DEL-{}-{}",
-            timestamp.replace([':', '-', 'T', 'Z', '.'], "").chars().take(14).collect::<String>(),
+        let id = format!(
+            "DEL-{}-{}",
+            timestamp
+                .replace([':', '-', 'T', 'Z', '.'], "")
+                .chars()
+                .take(14)
+                .collect::<String>(),
             &subject_id.chars().take(8).collect::<String>()
         );
 
@@ -553,8 +558,9 @@ impl GdprService {
         let entries = state.kv_store.list(None, usize::MAX);
 
         for entry in entries {
-            let should_delete = self.value_contains_subject(&entry.value, subject_id, search_fields)
-                || entry.key.contains(subject_id);
+            let should_delete =
+                self.value_contains_subject(&entry.value, subject_id, search_fields)
+                    || entry.key.contains(subject_id);
 
             if should_delete {
                 let size = serde_json::to_string(&entry.value)
@@ -600,14 +606,19 @@ impl GdprService {
             if let Ok(result) = state.document_engine.find(&collection_name, &query) {
                 for doc in &result.documents {
                     // Check if document belongs to subject
-                    let should_delete = self.document_belongs_to_subject(doc, subject_id, search_fields);
+                    let should_delete =
+                        self.document_belongs_to_subject(doc, subject_id, search_fields);
 
                     if should_delete {
                         let size = serde_json::to_string(&doc.data)
                             .map(|s| s.len() as u64)
                             .ok();
 
-                        if state.document_engine.delete(&collection_name, &doc.id).is_ok() {
+                        if state
+                            .document_engine
+                            .delete(&collection_name, &doc.id)
+                            .is_ok()
+                        {
                             deleted.push(DeletedItem {
                                 store_type: "document".to_string(),
                                 location: collection_name.clone(),
@@ -645,12 +656,13 @@ impl GdprService {
 
             // Get table schema to find searchable columns
             if let Some(table_info) = state.query_engine.get_table_info(&table_name, None) {
-                let searchable_columns: Vec<&String> = table_info.columns
+                let searchable_columns: Vec<&String> = table_info
+                    .columns
                     .iter()
                     .filter(|c| {
-                        search_fields.iter().any(|f|
-                            c.name.to_lowercase() == f.to_lowercase()
-                        )
+                        search_fields
+                            .iter()
+                            .any(|f| c.name.to_lowercase() == f.to_lowercase())
                     })
                     .map(|c| &c.name)
                     .collect();
@@ -693,9 +705,10 @@ impl GdprService {
         let nodes = state.graph_store.list_nodes();
 
         for node in nodes {
-            let should_delete = self.value_contains_subject(&node.properties, subject_id, search_fields)
-                || node.id.contains(subject_id)
-                || node.label.contains(subject_id);
+            let should_delete =
+                self.value_contains_subject(&node.properties, subject_id, search_fields)
+                    || node.id.contains(subject_id)
+                    || node.label.contains(subject_id);
 
             if should_delete {
                 let size = serde_json::to_string(&node.properties)
@@ -741,9 +754,9 @@ impl GdprService {
                 }
                 false
             }
-            serde_json::Value::Array(arr) => {
-                arr.iter().any(|v| self.value_contains_subject(v, subject_id, search_fields))
-            }
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .any(|v| self.value_contains_subject(v, subject_id, search_fields)),
             _ => false,
         }
     }
@@ -999,8 +1012,9 @@ impl GdprService {
 
         for entry in entries {
             // Check if entry belongs to subject
-            let belongs_to_subject = self.value_contains_subject(&entry.value, subject_id, search_fields)
-                || entry.key.contains(subject_id);
+            let belongs_to_subject =
+                self.value_contains_subject(&entry.value, subject_id, search_fields)
+                    || entry.key.contains(subject_id);
 
             if !belongs_to_subject {
                 continue;
@@ -1060,7 +1074,8 @@ impl GdprService {
 
                     // Check date range filter using document's updated_at if available
                     if let Some(range) = date_range {
-                        if let Some(aegis_document::Value::String(updated)) = doc.get("updated_at") {
+                        if let Some(aegis_document::Value::String(updated)) = doc.get("updated_at")
+                        {
                             if !self.is_within_date_range(updated, range) {
                                 continue;
                             }
@@ -1075,8 +1090,13 @@ impl GdprService {
                         location: collection_name.clone(),
                         item_id: doc.id.to_string(),
                         data: doc_data,
-                        timestamp: doc.get("updated_at")
-                            .and_then(|v| if let aegis_document::Value::String(s) = v { Some(s.clone()) } else { None }),
+                        timestamp: doc.get("updated_at").and_then(|v| {
+                            if let aegis_document::Value::String(s) = v {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        }),
                     });
                 }
             }
@@ -1107,12 +1127,13 @@ impl GdprService {
 
             // Get table schema to find searchable columns
             if let Some(table_info) = state.query_engine.get_table_info(&table_name, None) {
-                let searchable_columns: Vec<&String> = table_info.columns
+                let searchable_columns: Vec<&String> = table_info
+                    .columns
                     .iter()
                     .filter(|c| {
-                        search_fields.iter().any(|f|
-                            c.name.to_lowercase() == f.to_lowercase()
-                        )
+                        search_fields
+                            .iter()
+                            .any(|f| c.name.to_lowercase() == f.to_lowercase())
                     })
                     .map(|c| &c.name)
                     .collect();
@@ -1163,20 +1184,24 @@ impl GdprService {
         let nodes = state.graph_store.list_nodes();
 
         for node in nodes {
-            let belongs_to_subject = self.value_contains_subject(&node.properties, subject_id, search_fields)
-                || node.id.contains(subject_id)
-                || node.label.contains(subject_id);
+            let belongs_to_subject =
+                self.value_contains_subject(&node.properties, subject_id, search_fields)
+                    || node.id.contains(subject_id)
+                    || node.label.contains(subject_id);
 
             if belongs_to_subject {
                 // Get edges connected to this node
                 let edges = state.graph_store.get_edges_for_node(&node.id);
-                let edge_data: Vec<serde_json::Value> = edges.iter()
-                    .map(|e| serde_json::json!({
-                        "id": e.id,
-                        "source": e.source,
-                        "target": e.target,
-                        "relationship": e.relationship,
-                    }))
+                let edge_data: Vec<serde_json::Value> = edges
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "id": e.id,
+                            "source": e.source,
+                            "target": e.target,
+                            "relationship": e.relationship,
+                        })
+                    })
                     .collect();
 
                 exported.push(ExportedItem {
@@ -1226,7 +1251,10 @@ impl GdprService {
     /// Convert a document to JSON.
     fn document_to_json(&self, doc: &aegis_document::Document) -> serde_json::Value {
         let mut map = serde_json::Map::new();
-        map.insert("_id".to_string(), serde_json::Value::String(doc.id.to_string()));
+        map.insert(
+            "_id".to_string(),
+            serde_json::Value::String(doc.id.to_string()),
+        );
         for (key, value) in &doc.data {
             map.insert(key.clone(), self.doc_value_to_json(value));
         }
@@ -1239,11 +1267,9 @@ impl GdprService {
             aegis_document::Value::Null => serde_json::Value::Null,
             aegis_document::Value::Bool(b) => serde_json::Value::Bool(*b),
             aegis_document::Value::Int(i) => serde_json::Value::Number((*i).into()),
-            aegis_document::Value::Float(f) => {
-                serde_json::Number::from_f64(*f)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
-            }
+            aegis_document::Value::Float(f) => serde_json::Number::from_f64(*f)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
             aegis_document::Value::String(s) => serde_json::Value::String(s.clone()),
             aegis_document::Value::Array(arr) => {
                 serde_json::Value::Array(arr.iter().map(|v| self.doc_value_to_json(v)).collect())
@@ -1302,7 +1328,9 @@ impl GdprService {
             // Add data fields
             for key in &all_data_keys {
                 let value = if let serde_json::Value::Object(map) = &item.data {
-                    map.get(key).map(json_value_to_csv_string).unwrap_or_default()
+                    map.get(key)
+                        .map(json_value_to_csv_string)
+                        .unwrap_or_default()
                 } else {
                     String::new()
                 };
@@ -1324,7 +1352,8 @@ impl GdprService {
     ) -> Result<ExportResponse, String> {
         // Generate export ID
         let timestamp = Utc::now();
-        let export_id = format!("EXP-{}-{}",
+        let export_id = format!(
+            "EXP-{}-{}",
             timestamp.format("%Y%m%d%H%M%S"),
             &request.subject_id.chars().take(8).collect::<String>()
         );
@@ -1386,11 +1415,7 @@ impl GdprService {
         all_exported.extend(sql_exported);
 
         // Export from graph store
-        let graph_exported = self.export_from_graph(
-            state,
-            &request.subject_id,
-            &search_fields,
-        );
+        let graph_exported = self.export_from_graph(state, &request.subject_id, &search_fields);
         all_exported.extend(graph_exported);
 
         let total_items = all_exported.len();
@@ -1401,24 +1426,42 @@ impl GdprService {
                 // Group items by store type for better organization
                 let mut grouped: HashMap<String, Vec<&ExportedItem>> = HashMap::new();
                 for item in &all_exported {
-                    grouped.entry(item.store_type.clone()).or_default().push(item);
+                    grouped
+                        .entry(item.store_type.clone())
+                        .or_default()
+                        .push(item);
                 }
 
                 let mut result = serde_json::Map::new();
-                result.insert("subject_id".to_string(), serde_json::Value::String(request.subject_id.clone()));
-                result.insert("export_id".to_string(), serde_json::Value::String(export_id.clone()));
-                result.insert("generated_at".to_string(), serde_json::Value::String(timestamp.to_rfc3339()));
-                result.insert("total_items".to_string(), serde_json::Value::Number(total_items.into()));
+                result.insert(
+                    "subject_id".to_string(),
+                    serde_json::Value::String(request.subject_id.clone()),
+                );
+                result.insert(
+                    "export_id".to_string(),
+                    serde_json::Value::String(export_id.clone()),
+                );
+                result.insert(
+                    "generated_at".to_string(),
+                    serde_json::Value::String(timestamp.to_rfc3339()),
+                );
+                result.insert(
+                    "total_items".to_string(),
+                    serde_json::Value::Number(total_items.into()),
+                );
 
                 let mut data_section = serde_json::Map::new();
                 for (store_type, items) in grouped {
-                    let items_json: Vec<serde_json::Value> = items.iter()
-                        .map(|item| serde_json::json!({
-                            "location": item.location,
-                            "item_id": item.item_id,
-                            "data": item.data,
-                            "timestamp": item.timestamp,
-                        }))
+                    let items_json: Vec<serde_json::Value> = items
+                        .iter()
+                        .map(|item| {
+                            serde_json::json!({
+                                "location": item.location,
+                                "item_id": item.item_id,
+                                "data": item.data,
+                                "timestamp": item.timestamp,
+                            })
+                        })
                         .collect();
                     data_section.insert(store_type, serde_json::Value::Array(items_json));
                 }
@@ -1564,12 +1607,17 @@ pub async fn delete_data_subject(
 pub async fn list_deletion_certificates(
     State(state): State<AppState>,
 ) -> Json<ListCertificatesResponse> {
-    state.activity.log(ActivityType::Query, "List GDPR deletion certificates");
+    state
+        .activity
+        .log(ActivityType::Query, "List GDPR deletion certificates");
 
     let certificates = state.gdpr.audit_log().list_certificates();
     let total = certificates.len();
 
-    Json(ListCertificatesResponse { certificates, total })
+    Json(ListCertificatesResponse {
+        certificates,
+        total,
+    })
 }
 
 /// Get a specific deletion certificate.
@@ -1577,7 +1625,10 @@ pub async fn get_deletion_certificate(
     State(state): State<AppState>,
     Path(cert_id): Path<String>,
 ) -> impl IntoResponse {
-    state.activity.log(ActivityType::Query, &format!("Get GDPR certificate: {}", cert_id));
+    state.activity.log(
+        ActivityType::Query,
+        &format!("Get GDPR certificate: {}", cert_id),
+    );
 
     match state.gdpr.audit_log().get_certificate(&cert_id) {
         Some(cert) => (StatusCode::OK, Json(Some(cert))),
@@ -1590,7 +1641,10 @@ pub async fn verify_deletion_certificate(
     State(state): State<AppState>,
     Path(cert_id): Path<String>,
 ) -> Json<VerifyCertificateResponse> {
-    state.activity.log(ActivityType::Query, &format!("Verify GDPR certificate: {}", cert_id));
+    state.activity.log(
+        ActivityType::Query,
+        &format!("Verify GDPR certificate: {}", cert_id),
+    );
 
     match state.gdpr.audit_log().get_certificate(&cert_id) {
         Some(cert) => {
@@ -1618,16 +1672,19 @@ pub async fn get_deletion_audit(
     State(state): State<AppState>,
     Path(subject_id): Path<String>,
 ) -> Json<Vec<DeletionAuditEntry>> {
-    state.activity.log(ActivityType::Query, &format!("Get GDPR audit for: {}", subject_id));
+    state.activity.log(
+        ActivityType::Query,
+        &format!("Get GDPR audit for: {}", subject_id),
+    );
 
     Json(state.gdpr.audit_log().get_entries_for_subject(&subject_id))
 }
 
 /// Verify the integrity of the deletion audit log.
-pub async fn verify_audit_integrity(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    state.activity.log(ActivityType::Query, "Verify GDPR audit log integrity");
+pub async fn verify_audit_integrity(State(state): State<AppState>) -> impl IntoResponse {
+    state
+        .activity
+        .log(ActivityType::Query, "Verify GDPR audit log integrity");
 
     match state.gdpr.audit_log().verify_integrity() {
         Ok(count) => (
@@ -1681,7 +1738,10 @@ pub async fn export_data_subject(
 
     state.activity.log_with_details(
         ActivityType::Query,
-        &format!("GDPR data export request for subject: {}", request.subject_id),
+        &format!(
+            "GDPR data export request for subject: {}",
+            request.subject_id
+        ),
         None,
         None,
         Some("gdpr"),
@@ -1696,7 +1756,10 @@ pub async fn export_data_subject(
         Ok(response) => {
             state.activity.log_with_details(
                 ActivityType::System,
-                &format!("GDPR data export completed. Export ID: {}", response.export_id),
+                &format!(
+                    "GDPR data export completed. Export ID: {}",
+                    response.export_id
+                ),
                 None,
                 None,
                 Some("gdpr"),
@@ -1774,15 +1837,13 @@ mod tests {
 
     #[test]
     fn test_deletion_certificate_hash() {
-        let items = vec![
-            DeletedItem {
-                store_type: "kv".to_string(),
-                location: "kv_store".to_string(),
-                item_id: "user:123".to_string(),
-                size_bytes: Some(256),
-                deleted_at: "2025-01-26T12:00:00Z".to_string(),
-            },
-        ];
+        let items = vec![DeletedItem {
+            store_type: "kv".to_string(),
+            location: "kv_store".to_string(),
+            item_id: "user:123".to_string(),
+            size_bytes: Some(256),
+            deleted_at: "2025-01-26T12:00:00Z".to_string(),
+        }];
 
         let cert = DeletionCertificate::new(
             "user@example.com".to_string(),
@@ -1803,15 +1864,13 @@ mod tests {
 
     #[test]
     fn test_deletion_certificate_tamper_detection() {
-        let items = vec![
-            DeletedItem {
-                store_type: "kv".to_string(),
-                location: "kv_store".to_string(),
-                item_id: "user:123".to_string(),
-                size_bytes: Some(256),
-                deleted_at: "2025-01-26T12:00:00Z".to_string(),
-            },
-        ];
+        let items = vec![DeletedItem {
+            store_type: "kv".to_string(),
+            location: "kv_store".to_string(),
+            item_id: "user:123".to_string(),
+            size_bytes: Some(256),
+            deleted_at: "2025-01-26T12:00:00Z".to_string(),
+        }];
 
         let mut cert = DeletionCertificate::new(
             "user@example.com".to_string(),
@@ -2035,10 +2094,19 @@ mod tests {
     #[test]
     fn test_json_value_to_csv_string() {
         assert_eq!(json_value_to_csv_string(&serde_json::Value::Null), "");
-        assert_eq!(json_value_to_csv_string(&serde_json::Value::Bool(true)), "true");
+        assert_eq!(
+            json_value_to_csv_string(&serde_json::Value::Bool(true)),
+            "true"
+        );
         assert_eq!(json_value_to_csv_string(&serde_json::json!(42)), "42");
-        assert_eq!(json_value_to_csv_string(&serde_json::json!("hello")), "hello");
-        assert_eq!(json_value_to_csv_string(&serde_json::json!([1, 2, 3])), "[1,2,3]");
+        assert_eq!(
+            json_value_to_csv_string(&serde_json::json!("hello")),
+            "hello"
+        );
+        assert_eq!(
+            json_value_to_csv_string(&serde_json::json!([1, 2, 3])),
+            "[1,2,3]"
+        );
     }
 
     #[test]

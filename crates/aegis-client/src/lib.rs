@@ -15,19 +15,19 @@
 
 pub mod config;
 pub mod connection;
+pub mod error;
 pub mod pool;
 pub mod query;
 pub mod result;
 pub mod transaction;
-pub mod error;
 
 pub use config::{ClientConfig, ConnectionConfig};
 pub use connection::Connection;
+pub use error::ClientError;
 pub use pool::ConnectionPool;
 pub use query::{Query, QueryBuilder};
 pub use result::{QueryResult, Row, Value};
 pub use transaction::Transaction;
-pub use error::ClientError;
 
 /// The main client for interacting with Aegis databases.
 pub struct AegisClient {
@@ -39,10 +39,9 @@ pub struct AegisClient {
 impl AegisClient {
     /// Create a new client with the given configuration.
     pub async fn new(config: ClientConfig) -> Result<Self, ClientError> {
-        let pool = ConnectionPool::with_connection_config(
-            config.pool.clone(),
-            config.connection.clone(),
-        ).await?;
+        let pool =
+            ConnectionPool::with_connection_config(config.pool.clone(), config.connection.clone())
+                .await?;
         Ok(Self { config, pool })
     }
 
@@ -117,7 +116,8 @@ mod tests {
 
     #[test]
     fn test_client_config_from_url() {
-        let config = ClientConfig::from_url("aegis://localhost:9090/testdb").expect("Should parse valid URL");
+        let config = ClientConfig::from_url("aegis://localhost:9090/testdb")
+            .expect("Should parse valid URL");
         assert_eq!(config.connection.host, "localhost");
         assert_eq!(config.connection.port, 9090);
         assert_eq!(config.connection.database, "testdb");

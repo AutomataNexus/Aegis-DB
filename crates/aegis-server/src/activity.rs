@@ -16,7 +16,7 @@
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -283,7 +283,8 @@ impl ActivityLogger {
                         }
 
                         // Verify record hash
-                        let computed_hash = Self::compute_hash(&persisted.activity, &persisted.prev_hash);
+                        let computed_hash =
+                            Self::compute_hash(&persisted.activity, &persisted.prev_hash);
                         if computed_hash != persisted.hash {
                             tracing::error!(
                                 "Record hash mismatch in {:?} for activity '{}': computed '{}', stored '{}'",
@@ -420,10 +421,7 @@ impl ActivityLogger {
             .append(true)
             .open(&new_path)?;
 
-        tracing::info!(
-            "Rotated audit log to file {}",
-            state.current_file_num
-        );
+        tracing::info!("Rotated audit log to file {}", state.current_file_num);
 
         state.writer = Some(BufWriter::new(file));
         state.current_size = 0;
@@ -510,8 +508,7 @@ impl ActivityLogger {
         let mut is_first_record = true;
 
         for (_file_num, path) in &log_files {
-            let file = File::open(path)
-                .map_err(|e| format!("Failed to open {:?}: {}", path, e))?;
+            let file = File::open(path).map_err(|e| format!("Failed to open {:?}: {}", path, e))?;
             let reader = BufReader::new(file);
 
             for (line_num, line) in reader.lines().enumerate() {
@@ -603,8 +600,7 @@ impl ActivityLogger {
         let mut record_count = 0usize;
 
         for (_file_num, path) in &log_files {
-            let file = File::open(path)
-                .map_err(|e| format!("Failed to open {:?}: {}", path, e))?;
+            let file = File::open(path).map_err(|e| format!("Failed to open {:?}: {}", path, e))?;
             let reader = BufReader::new(file);
 
             for (line_num, line) in reader.lines().enumerate() {
@@ -678,26 +674,12 @@ impl ActivityLogger {
 
     /// Log a write activity.
     pub fn log_write(&self, description: &str, user: Option<&str>) {
-        self.log_with_details(
-            ActivityType::Write,
-            description,
-            None,
-            user,
-            None,
-            None,
-        );
+        self.log_with_details(ActivityType::Write, description, None, user, None, None);
     }
 
     /// Log a configuration change.
     pub fn log_config(&self, description: &str, user: Option<&str>) {
-        self.log_with_details(
-            ActivityType::Config,
-            description,
-            None,
-            user,
-            None,
-            None,
-        );
+        self.log_with_details(ActivityType::Config, description, None, user, None, None);
     }
 
     /// Log a node event.
@@ -714,14 +696,7 @@ impl ActivityLogger {
 
     /// Log an authentication event.
     pub fn log_auth(&self, description: &str, user: Option<&str>) {
-        self.log_with_details(
-            ActivityType::Auth,
-            description,
-            None,
-            user,
-            None,
-            None,
-        );
+        self.log_with_details(ActivityType::Auth, description, None, user, None, None);
     }
 
     /// Log a system event.
@@ -903,7 +878,10 @@ fn format_timestamp(timestamp_ms: u64) -> String {
     }
     let day = remaining_days + 1;
 
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 fn is_leap_year(year: u64) -> bool {
@@ -993,8 +971,8 @@ mod tests {
 
         // Create logger and log some activities
         {
-            let logger = ActivityLogger::with_persistence(log_dir.clone())
-                .expect("failed to create logger");
+            let logger =
+                ActivityLogger::with_persistence(log_dir.clone()).expect("failed to create logger");
             logger.log(ActivityType::Query, "SELECT * FROM users");
             logger.log(ActivityType::Write, "INSERT INTO users");
             logger.log(ActivityType::Auth, "User login");
@@ -1006,14 +984,16 @@ mod tests {
         assert!(log_file.exists(), "audit log file should exist");
 
         // Create a new logger and verify it loads the activities
-        let logger2 = ActivityLogger::with_persistence(log_dir)
-            .expect("failed to create second logger");
+        let logger2 =
+            ActivityLogger::with_persistence(log_dir).expect("failed to create second logger");
 
         let recent = logger2.get_recent(10);
         assert_eq!(recent.len(), 3, "should load 3 activities from disk");
 
         // Verify integrity
-        let count = logger2.verify_integrity().expect("integrity check should pass");
+        let count = logger2
+            .verify_integrity()
+            .expect("integrity check should pass");
         assert_eq!(count, 3, "should have 3 verified records");
     }
 
@@ -1022,8 +1002,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let log_dir = temp_dir.path().to_path_buf();
 
-        let logger = ActivityLogger::with_persistence(log_dir.clone())
-            .expect("failed to create logger");
+        let logger =
+            ActivityLogger::with_persistence(log_dir.clone()).expect("failed to create logger");
 
         // Log multiple activities
         for i in 0..5 {
@@ -1067,16 +1047,16 @@ mod tests {
 
         // Create logger and log some activities
         {
-            let logger = ActivityLogger::with_persistence(log_dir.clone())
-                .expect("failed to create logger");
+            let logger =
+                ActivityLogger::with_persistence(log_dir.clone()).expect("failed to create logger");
             logger.log(ActivityType::Query, "Query 1");
             logger.log(ActivityType::Query, "Query 2");
             logger.flush().expect("failed to flush");
         }
 
         // Create a new logger and log more activities
-        let logger2 = ActivityLogger::with_persistence(log_dir)
-            .expect("failed to create second logger");
+        let logger2 =
+            ActivityLogger::with_persistence(log_dir).expect("failed to create second logger");
         let id = logger2.log(ActivityType::Query, "Query 3");
 
         // The new ID should continue from where we left off
@@ -1126,7 +1106,9 @@ mod tests {
 
         // Verify integrity across all remaining files
         // Note: some old files may have been cleaned up, so we use non-strict verification
-        let count = logger.verify_integrity().expect("integrity check should pass");
+        let count = logger
+            .verify_integrity()
+            .expect("integrity check should pass");
         // Count may be less than 20 if old files were cleaned up
         assert!(count > 0, "should have some verified records");
     }
@@ -1215,8 +1197,8 @@ mod tests {
 
         // Create and populate the log
         {
-            let logger = ActivityLogger::with_persistence(log_dir.clone())
-                .expect("failed to create logger");
+            let logger =
+                ActivityLogger::with_persistence(log_dir.clone()).expect("failed to create logger");
             logger.log(ActivityType::Query, "Query 1");
             logger.log(ActivityType::Query, "Query 2");
             logger.log(ActivityType::Query, "Query 3");
@@ -1230,9 +1212,11 @@ mod tests {
         std::fs::write(&log_file, tampered).expect("failed to write");
 
         // Verify integrity should fail
-        let logger2 = ActivityLogger::with_persistence(log_dir)
-            .expect("failed to create logger");
+        let logger2 = ActivityLogger::with_persistence(log_dir).expect("failed to create logger");
         let result = logger2.verify_integrity();
-        assert!(result.is_err(), "integrity check should fail after tampering");
+        assert!(
+            result.is_err(),
+            "integrity check should fail after tampering"
+        );
     }
 }

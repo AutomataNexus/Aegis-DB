@@ -217,7 +217,6 @@ impl EventData {
     }
 }
 
-
 impl From<String> for EventData {
     fn from(s: String) -> Self {
         Self::String(s)

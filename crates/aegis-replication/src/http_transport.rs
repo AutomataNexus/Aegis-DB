@@ -118,9 +118,7 @@ impl HttpTransport {
             .post(&endpoint)
             .json(message)
             .send()
-            .map_err(|e| {
-                TransportError::ConnectionFailed(format!("{}: {}", endpoint, e))
-            })?;
+            .map_err(|e| TransportError::ConnectionFailed(format!("{}: {}", endpoint, e)))?;
 
         Ok(())
     }
@@ -133,15 +131,16 @@ impl Transport for HttpTransport {
     /// The message is serialized as JSON and sent to `{peer_url}/api/v1/cluster/raft`.
     fn send(&self, message: Message) -> Result<(), TransportError> {
         let url = {
-            let urls = self.peer_urls.read().expect("http_transport peer_urls lock poisoned");
-            urls.get(&message.to)
-                .cloned()
-                .ok_or_else(|| {
-                    TransportError::ConnectionFailed(format!(
-                        "No URL configured for node {}",
-                        message.to
-                    ))
-                })?
+            let urls = self
+                .peer_urls
+                .read()
+                .expect("http_transport peer_urls lock poisoned");
+            urls.get(&message.to).cloned().ok_or_else(|| {
+                TransportError::ConnectionFailed(format!(
+                    "No URL configured for node {}",
+                    message.to
+                ))
+            })?
         };
 
         self.send_to_url(&url, &message)
@@ -153,7 +152,10 @@ impl Transport for HttpTransport {
     /// Messages are pushed into this channel by external HTTP handlers
     /// via `push_message()` or the `sender()` handle.
     fn recv(&self) -> Result<Message, TransportError> {
-        let rx = self.incoming_rx.lock().expect("http_transport incoming_rx lock poisoned");
+        let rx = self
+            .incoming_rx
+            .lock()
+            .expect("http_transport incoming_rx lock poisoned");
         rx.recv().map_err(|_| TransportError::Disconnected)
     }
 
@@ -161,7 +163,10 @@ impl Transport for HttpTransport {
     ///
     /// Returns `None` if no message is currently available.
     fn try_recv(&self) -> Option<Message> {
-        let rx = self.incoming_rx.lock().expect("http_transport incoming_rx lock poisoned");
+        let rx = self
+            .incoming_rx
+            .lock()
+            .expect("http_transport incoming_rx lock poisoned");
         rx.try_recv().ok()
     }
 
@@ -275,11 +280,7 @@ mod tests {
         let transport = HttpTransport::new(HashMap::new());
 
         for i in 0..5 {
-            let msg = Message::heartbeat(
-                NodeId::new("node1"),
-                NodeId::new("node2"),
-                i,
-            );
+            let msg = Message::heartbeat(NodeId::new("node1"), NodeId::new("node2"), i);
             transport.push_message(msg).unwrap();
         }
 

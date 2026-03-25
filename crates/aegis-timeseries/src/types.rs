@@ -111,8 +111,7 @@ impl From<HashMap<String, String>> for Tags {
 // =============================================================================
 
 /// Type of metric for semantic interpretation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum MetricType {
     /// Monotonically increasing counter (e.g., request count).
     Counter,
@@ -124,7 +123,6 @@ pub enum MetricType {
     /// Summary statistics (e.g., percentiles).
     Summary,
 }
-
 
 // =============================================================================
 // Metric
@@ -239,7 +237,9 @@ impl Series {
 
     /// Check if points are sorted by timestamp.
     pub fn is_sorted(&self) -> bool {
-        self.points.windows(2).all(|w| w[0].timestamp <= w[1].timestamp)
+        self.points
+            .windows(2)
+            .all(|w| w[0].timestamp <= w[1].timestamp)
     }
 
     /// Get points within a time range.

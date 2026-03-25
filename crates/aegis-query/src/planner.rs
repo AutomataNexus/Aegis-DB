@@ -13,8 +13,8 @@
 //! @author AutomataNexus Development Team
 
 use crate::ast::{
-    BinaryOperator, Expression, FromClause, JoinClause, JoinType,
-    SelectColumn, SelectStatement, Statement, TableReference,
+    BinaryOperator, Expression, FromClause, JoinClause, JoinType, SelectColumn, SelectStatement,
+    SetOperationType, Statement, TableReference,
 };
 use aegis_common::DataType;
 use std::collections::HashMap;
@@ -75,10 +75,20 @@ pub enum PlanNode {
     Insert(InsertNode),
     Update(UpdateNode),
     Delete(DeleteNode),
+    // Set operations
+    SetOperation(SetOperationNode),
     // Transaction control
     BeginTransaction,
     CommitTransaction,
     RollbackTransaction,
+}
+
+/// Set operation node (UNION, INTERSECT, EXCEPT).
+#[derive(Debug, Clone)]
+pub struct SetOperationNode {
+    pub op: SetOperationType,
+    pub left: Box<PlanNode>,
+    pub right: Box<PlanNode>,
 }
 
 // =============================================================================
@@ -236,14 +246,20 @@ pub struct CreateColumnDef {
 /// Table constraint for CREATE TABLE.
 #[derive(Debug, Clone)]
 pub enum CreateTableConstraint {
-    PrimaryKey { columns: Vec<String> },
-    Unique { columns: Vec<String> },
+    PrimaryKey {
+        columns: Vec<String>,
+    },
+    Unique {
+        columns: Vec<String>,
+    },
     ForeignKey {
         columns: Vec<String>,
         ref_table: String,
         ref_columns: Vec<String>,
     },
-    Check { expression: PlanExpression },
+    Check {
+        expression: PlanExpression,
+    },
 }
 
 /// DROP TABLE operation.
@@ -264,12 +280,27 @@ pub struct AlterTableNode {
 #[derive(Debug, Clone)]
 pub enum PlanAlterOperation {
     AddColumn(CreateColumnDef),
-    DropColumn { name: String, if_exists: bool },
-    RenameColumn { old_name: String, new_name: String },
-    AlterColumn { name: String, data_type: Option<DataType>, set_not_null: Option<bool>, set_default: Option<Option<PlanExpression>> },
-    RenameTable { new_name: String },
+    DropColumn {
+        name: String,
+        if_exists: bool,
+    },
+    RenameColumn {
+        old_name: String,
+        new_name: String,
+    },
+    AlterColumn {
+        name: String,
+        data_type: Option<DataType>,
+        set_not_null: Option<bool>,
+        set_default: Option<Option<PlanExpression>>,
+    },
+    RenameTable {
+        new_name: String,
+    },
     AddConstraint(CreateTableConstraint),
-    DropConstraint { name: String },
+    DropConstraint {
+        name: String,
+    },
 }
 
 /// CREATE INDEX operation.
@@ -524,6 +555,7 @@ impl Planner {
             Statement::AlterTable(alter) => self.plan_alter_table(alter),
             Statement::CreateIndex(create) => self.plan_create_index(create),
             Statement::DropIndex(drop) => self.plan_drop_index(drop),
+            Statement::SetOperation(set_op) => self.plan_set_operation(set_op),
             Statement::Begin => Ok(QueryPlan {
                 root: PlanNode::BeginTransaction,
                 estimated_cost: 0.0,
@@ -543,11 +575,20 @@ impl Planner {
     }
 
     /// Plan a CREATE TABLE statement.
-    fn plan_create_table(&self, create: &crate::ast::CreateTableStatement) -> PlannerResult<QueryPlan> {
+    fn plan_create_table(
+        &self,
+        create: &crate::ast::CreateTableStatement,
+    ) -> PlannerResult<QueryPlan> {
         let mut columns: Vec<CreateColumnDef> = Vec::new();
         for col in &create.columns {
-            let primary_key = col.constraints.iter().any(|c| matches!(c, crate::ast::ColumnConstraint::PrimaryKey));
-            let unique = col.constraints.iter().any(|c| matches!(c, crate::ast::ColumnConstraint::Unique));
+            let primary_key = col
+                .constraints
+                .iter()
+                .any(|c| matches!(c, crate::ast::ColumnConstraint::PrimaryKey));
+            let unique = col
+                .constraints
+                .iter()
+                .any(|c| matches!(c, crate::ast::ColumnConstraint::Unique));
 
             let default = match &col.default {
                 Some(e) => Some(self.plan_expression(e)?),
@@ -564,28 +605,36 @@ impl Planner {
             });
         }
 
-        let constraints: Vec<CreateTableConstraint> = create.constraints.iter().map(|c| {
-            match c {
+        let constraints: Vec<CreateTableConstraint> = create
+            .constraints
+            .iter()
+            .map(|c| match c {
                 crate::ast::TableConstraint::PrimaryKey { columns } => {
-                    Ok(CreateTableConstraint::PrimaryKey { columns: columns.clone() })
-                }
-                crate::ast::TableConstraint::Unique { columns } => {
-                    Ok(CreateTableConstraint::Unique { columns: columns.clone() })
-                }
-                crate::ast::TableConstraint::ForeignKey { columns, ref_table, ref_columns } => {
-                    Ok(CreateTableConstraint::ForeignKey {
+                    Ok(CreateTableConstraint::PrimaryKey {
                         columns: columns.clone(),
-                        ref_table: ref_table.clone(),
-                        ref_columns: ref_columns.clone(),
                     })
                 }
+                crate::ast::TableConstraint::Unique { columns } => {
+                    Ok(CreateTableConstraint::Unique {
+                        columns: columns.clone(),
+                    })
+                }
+                crate::ast::TableConstraint::ForeignKey {
+                    columns,
+                    ref_table,
+                    ref_columns,
+                } => Ok(CreateTableConstraint::ForeignKey {
+                    columns: columns.clone(),
+                    ref_table: ref_table.clone(),
+                    ref_columns: ref_columns.clone(),
+                }),
                 crate::ast::TableConstraint::Check { expression } => {
                     Ok(CreateTableConstraint::Check {
                         expression: self.plan_expression(expression)?,
                     })
                 }
-            }
-        }).collect::<PlannerResult<Vec<_>>>()?;
+            })
+            .collect::<PlannerResult<Vec<_>>>()?;
 
         Ok(QueryPlan {
             root: PlanNode::CreateTable(CreateTableNode {
@@ -612,15 +661,24 @@ impl Planner {
     }
 
     /// Plan an ALTER TABLE statement.
-    fn plan_alter_table(&self, alter: &crate::ast::AlterTableStatement) -> PlannerResult<QueryPlan> {
-        let operations = alter.operations.iter().map(|op| {
-            match op {
+    fn plan_alter_table(
+        &self,
+        alter: &crate::ast::AlterTableStatement,
+    ) -> PlannerResult<QueryPlan> {
+        let operations = alter
+            .operations
+            .iter()
+            .map(|op| match op {
                 crate::ast::AlterTableOperation::AddColumn(col) => {
                     Ok(PlanAlterOperation::AddColumn(CreateColumnDef {
                         name: col.name.clone(),
                         data_type: col.data_type.clone(),
                         nullable: col.nullable,
-                        default: col.default.as_ref().map(|e| self.plan_expression(e)).transpose()?,
+                        default: col
+                            .default
+                            .as_ref()
+                            .map(|e| self.plan_expression(e))
+                            .transpose()?,
                         primary_key: false,
                         unique: false,
                     }))
@@ -637,7 +695,12 @@ impl Planner {
                         new_name: new_name.clone(),
                     })
                 }
-                crate::ast::AlterTableOperation::AlterColumn { name, data_type, set_not_null, set_default } => {
+                crate::ast::AlterTableOperation::AlterColumn {
+                    name,
+                    data_type,
+                    set_not_null,
+                    set_default,
+                } => {
                     let default_expr = match set_default {
                         Some(Some(expr)) => Some(Some(self.plan_expression(expr)?)),
                         Some(None) => Some(None),
@@ -658,18 +721,24 @@ impl Planner {
                 crate::ast::AlterTableOperation::AddConstraint(constraint) => {
                     let plan_constraint = match constraint {
                         crate::ast::TableConstraint::PrimaryKey { columns } => {
-                            CreateTableConstraint::PrimaryKey { columns: columns.clone() }
-                        }
-                        crate::ast::TableConstraint::Unique { columns } => {
-                            CreateTableConstraint::Unique { columns: columns.clone() }
-                        }
-                        crate::ast::TableConstraint::ForeignKey { columns, ref_table, ref_columns } => {
-                            CreateTableConstraint::ForeignKey {
+                            CreateTableConstraint::PrimaryKey {
                                 columns: columns.clone(),
-                                ref_table: ref_table.clone(),
-                                ref_columns: ref_columns.clone(),
                             }
                         }
+                        crate::ast::TableConstraint::Unique { columns } => {
+                            CreateTableConstraint::Unique {
+                                columns: columns.clone(),
+                            }
+                        }
+                        crate::ast::TableConstraint::ForeignKey {
+                            columns,
+                            ref_table,
+                            ref_columns,
+                        } => CreateTableConstraint::ForeignKey {
+                            columns: columns.clone(),
+                            ref_table: ref_table.clone(),
+                            ref_columns: ref_columns.clone(),
+                        },
                         crate::ast::TableConstraint::Check { expression } => {
                             CreateTableConstraint::Check {
                                 expression: self.plan_expression(expression)?,
@@ -679,12 +748,10 @@ impl Planner {
                     Ok(PlanAlterOperation::AddConstraint(plan_constraint))
                 }
                 crate::ast::AlterTableOperation::DropConstraint { name } => {
-                    Ok(PlanAlterOperation::DropConstraint {
-                        name: name.clone(),
-                    })
+                    Ok(PlanAlterOperation::DropConstraint { name: name.clone() })
                 }
-            }
-        }).collect::<PlannerResult<Vec<_>>>()?;
+            })
+            .collect::<PlannerResult<Vec<_>>>()?;
 
         Ok(QueryPlan {
             root: PlanNode::AlterTable(AlterTableNode {
@@ -697,7 +764,10 @@ impl Planner {
     }
 
     /// Plan a CREATE INDEX statement.
-    fn plan_create_index(&self, create: &crate::ast::CreateIndexStatement) -> PlannerResult<QueryPlan> {
+    fn plan_create_index(
+        &self,
+        create: &crate::ast::CreateIndexStatement,
+    ) -> PlannerResult<QueryPlan> {
         Ok(QueryPlan {
             root: PlanNode::CreateIndex(CreateIndexNode {
                 index_name: create.name.clone(),
@@ -729,9 +799,14 @@ impl Planner {
 
         let (source, estimated_rows) = match &insert.source {
             crate::ast::InsertSource::Values(rows) => {
-                let values = rows.iter().map(|row| {
-                    row.iter().map(|expr| self.plan_expression(expr)).collect::<PlannerResult<Vec<_>>>()
-                }).collect::<PlannerResult<Vec<_>>>()?;
+                let values = rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|expr| self.plan_expression(expr))
+                            .collect::<PlannerResult<Vec<_>>>()
+                    })
+                    .collect::<PlannerResult<Vec<_>>>()?;
                 let num_rows = values.len() as u64;
                 (InsertPlanSource::Values(values), num_rows)
             }
@@ -739,7 +814,10 @@ impl Planner {
                 // Plan the SELECT subquery
                 let subquery_plan = self.plan_select(select)?;
                 let estimated_rows = subquery_plan.estimated_rows;
-                (InsertPlanSource::Query(Box::new(subquery_plan.root)), estimated_rows)
+                (
+                    InsertPlanSource::Query(Box::new(subquery_plan.root)),
+                    estimated_rows,
+                )
             }
         };
 
@@ -756,16 +834,22 @@ impl Planner {
 
     /// Plan an UPDATE statement.
     fn plan_update(&self, update: &crate::ast::UpdateStatement) -> PlannerResult<QueryPlan> {
-        let assignments: Vec<(String, PlanExpression)> = update.assignments.iter()
+        let assignments: Vec<(String, PlanExpression)> = update
+            .assignments
+            .iter()
             .map(|a| Ok((a.column.clone(), self.plan_expression(&a.value)?)))
             .collect::<PlannerResult<Vec<_>>>()?;
 
-        let where_clause = update.where_clause.as_ref()
+        let where_clause = update
+            .where_clause
+            .as_ref()
             .map(|e| self.plan_expression(e))
             .transpose()?;
 
         // Estimate rows based on table info
-        let estimated_rows = self.schema.get_table(&update.table)
+        let estimated_rows = self
+            .schema
+            .get_table(&update.table)
             .map(|t| t.row_count)
             .unwrap_or(100);
 
@@ -782,12 +866,16 @@ impl Planner {
 
     /// Plan a DELETE statement.
     fn plan_delete(&self, delete: &crate::ast::DeleteStatement) -> PlannerResult<QueryPlan> {
-        let where_clause = delete.where_clause.as_ref()
+        let where_clause = delete
+            .where_clause
+            .as_ref()
             .map(|e| self.plan_expression(e))
             .transpose()?;
 
         // Estimate rows based on table info
-        let estimated_rows = self.schema.get_table(&delete.table)
+        let estimated_rows = self
+            .schema
+            .get_table(&delete.table)
             .map(|t| t.row_count)
             .unwrap_or(100);
 
@@ -797,6 +885,28 @@ impl Planner {
                 where_clause,
             }),
             estimated_cost: estimated_rows as f64,
+            estimated_rows,
+        })
+    }
+
+    /// Plan a set operation (UNION, INTERSECT, EXCEPT).
+    fn plan_set_operation(
+        &self,
+        set_op: &crate::ast::SetOperationStatement,
+    ) -> PlannerResult<QueryPlan> {
+        let left_plan = self.plan(set_op.left.as_ref())?;
+        let right_plan = self.plan(set_op.right.as_ref())?;
+        let estimated_rows = left_plan.estimated_rows + right_plan.estimated_rows;
+        let estimated_cost =
+            left_plan.estimated_cost + right_plan.estimated_cost + estimated_rows as f64;
+
+        Ok(QueryPlan {
+            root: PlanNode::SetOperation(SetOperationNode {
+                op: set_op.op,
+                left: Box::new(left_plan.root),
+                right: Box::new(right_plan.root),
+            }),
+            estimated_cost,
             estimated_rows,
         })
     }
@@ -1157,7 +1267,11 @@ impl Planner {
                 target_type: data_type.clone(),
             }),
 
-            Expression::Case { operand, conditions, else_result } => {
+            Expression::Case {
+                operand,
+                conditions,
+                else_result,
+            } => {
                 let planned_operand = operand
                     .as_ref()
                     .map(|e| self.plan_expression(e))
@@ -1184,7 +1298,11 @@ impl Planner {
                 })
             }
 
-            Expression::InList { expr, list, negated } => {
+            Expression::InList {
+                expr,
+                list,
+                negated,
+            } => {
                 let planned_list = list
                     .iter()
                     .map(|e| self.plan_expression(e))
@@ -1197,20 +1315,33 @@ impl Planner {
                 })
             }
 
-            Expression::Between { expr, low, high, negated } => Ok(PlanExpression::Between {
+            Expression::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => Ok(PlanExpression::Between {
                 expr: Box::new(self.plan_expression(expr)?),
                 low: Box::new(self.plan_expression(low)?),
                 high: Box::new(self.plan_expression(high)?),
                 negated: *negated,
             }),
 
-            Expression::Like { expr, pattern, negated } => Ok(PlanExpression::Like {
+            Expression::Like {
+                expr,
+                pattern,
+                negated,
+            } => Ok(PlanExpression::Like {
                 expr: Box::new(self.plan_expression(expr)?),
                 pattern: Box::new(self.plan_expression(pattern)?),
                 negated: *negated,
             }),
 
-            Expression::InSubquery { expr, subquery, negated } => {
+            Expression::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => {
                 let subquery_plan = self.plan_select(subquery)?;
                 Ok(PlanExpression::InSubquery {
                     expr: Box::new(self.plan_expression(expr)?),
@@ -1331,20 +1462,35 @@ impl Planner {
                 (rows as f64, rows)
             }
             PlanNode::Update(update) => {
-                let rows = self.schema.get_table(&update.table_name)
+                let rows = self
+                    .schema
+                    .get_table(&update.table_name)
                     .map(|t| t.row_count)
                     .unwrap_or(100);
                 (rows as f64, rows)
             }
             PlanNode::Delete(delete) => {
-                let rows = self.schema.get_table(&delete.table_name)
+                let rows = self
+                    .schema
+                    .get_table(&delete.table_name)
                     .map(|t| t.row_count)
                     .unwrap_or(100);
                 (rows as f64, rows)
             }
 
+            // Set operations
+            PlanNode::SetOperation(set_op) => {
+                let (left_cost, left_rows) = self.estimate_cost(&set_op.left);
+                let (right_cost, right_rows) = self.estimate_cost(&set_op.right);
+                let rows = left_rows + right_rows;
+                let cost = left_cost + right_cost + rows as f64;
+                (cost, rows)
+            }
+
             // Transaction control
-            PlanNode::BeginTransaction | PlanNode::CommitTransaction | PlanNode::RollbackTransaction => (0.0, 0),
+            PlanNode::BeginTransaction
+            | PlanNode::CommitTransaction
+            | PlanNode::RollbackTransaction => (0.0, 0),
         }
     }
 }
@@ -1517,5 +1663,48 @@ mod tests {
             },
             _ => panic!("Expected limit node"),
         }
+    }
+
+    #[test]
+    fn test_plan_set_operation_union() {
+        let schema = create_test_schema();
+        let planner = Planner::new(schema);
+
+        let set_op = crate::ast::SetOperationStatement {
+            op: SetOperationType::Union,
+            left: Box::new(Statement::Select(SelectStatement {
+                columns: vec![SelectColumn::AllColumns],
+                from: Some(FromClause {
+                    source: TableReference::Table {
+                        name: "users".to_string(),
+                        alias: None,
+                    },
+                    joins: vec![],
+                }),
+                ..Default::default()
+            })),
+            right: Box::new(Statement::Select(SelectStatement {
+                columns: vec![SelectColumn::AllColumns],
+                from: Some(FromClause {
+                    source: TableReference::Table {
+                        name: "orders".to_string(),
+                        alias: None,
+                    },
+                    joins: vec![],
+                }),
+                ..Default::default()
+            })),
+        };
+
+        let plan = planner.plan(&Statement::SetOperation(set_op)).unwrap();
+
+        match &plan.root {
+            PlanNode::SetOperation(node) => {
+                assert_eq!(node.op, SetOperationType::Union);
+            }
+            _ => panic!("Expected SetOperation node"),
+        }
+        assert!(plan.estimated_rows > 0);
+        assert!(plan.estimated_cost > 0.0);
     }
 }

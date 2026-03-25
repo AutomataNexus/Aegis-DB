@@ -144,18 +144,22 @@ impl Analyzer {
                 self.analyze_create_table(create)?;
                 Ok(AnalyzedStatement::CreateTable(create.clone()))
             }
-            Statement::DropTable(drop) => {
-                Ok(AnalyzedStatement::DropTable(drop.clone()))
-            }
-            Statement::AlterTable(alter) => {
-                Ok(AnalyzedStatement::AlterTable(alter.clone()))
-            }
+            Statement::DropTable(drop) => Ok(AnalyzedStatement::DropTable(drop.clone())),
+            Statement::AlterTable(alter) => Ok(AnalyzedStatement::AlterTable(alter.clone())),
             Statement::CreateIndex(create) => {
                 self.analyze_create_index(create)?;
                 Ok(AnalyzedStatement::CreateIndex(create.clone()))
             }
-            Statement::DropIndex(drop) => {
-                Ok(AnalyzedStatement::DropIndex(drop.clone()))
+            Statement::DropIndex(drop) => Ok(AnalyzedStatement::DropIndex(drop.clone())),
+            Statement::SetOperation(set_op) => {
+                // Analyze both sides of the set operation
+                let left = self.analyze(set_op.left.as_ref())?;
+                let right = self.analyze(set_op.right.as_ref())?;
+                Ok(AnalyzedStatement::SetOperation {
+                    op: set_op.op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                })
             }
             Statement::Begin => Ok(AnalyzedStatement::Begin),
             Statement::Commit => Ok(AnalyzedStatement::Commit),
@@ -222,9 +226,10 @@ impl Analyzer {
     }
 
     fn analyze_insert(&self, insert: &InsertStatement) -> Result<()> {
-        let table = self.catalog.get_table(&insert.table).ok_or_else(|| {
-            AegisError::TableNotFound(insert.table.clone())
-        })?;
+        let table = self
+            .catalog
+            .get_table(&insert.table)
+            .ok_or_else(|| AegisError::TableNotFound(insert.table.clone()))?;
 
         if let Some(ref columns) = insert.columns {
             for col_name in columns {
@@ -238,9 +243,10 @@ impl Analyzer {
     }
 
     fn analyze_update(&self, update: &UpdateStatement) -> Result<()> {
-        let table = self.catalog.get_table(&update.table).ok_or_else(|| {
-            AegisError::TableNotFound(update.table.clone())
-        })?;
+        let table = self
+            .catalog
+            .get_table(&update.table)
+            .ok_or_else(|| AegisError::TableNotFound(update.table.clone()))?;
 
         for assignment in &update.assignments {
             if !table.column_exists(&assignment.column) {
@@ -269,9 +275,10 @@ impl Analyzer {
     }
 
     fn analyze_create_index(&self, create: &CreateIndexStatement) -> Result<()> {
-        let table = self.catalog.get_table(&create.table).ok_or_else(|| {
-            AegisError::TableNotFound(create.table.clone())
-        })?;
+        let table = self
+            .catalog
+            .get_table(&create.table)
+            .ok_or_else(|| AegisError::TableNotFound(create.table.clone()))?;
 
         for col_name in &create.columns {
             if !table.column_exists(col_name) {
@@ -295,9 +302,10 @@ impl Analyzer {
     fn add_table_to_scope(&self, table_ref: &TableReference, scope: &mut Scope) -> Result<()> {
         match table_ref {
             TableReference::Table { name, alias } => {
-                let table = self.catalog.get_table(name).ok_or_else(|| {
-                    AegisError::TableNotFound(name.clone())
-                })?;
+                let table = self
+                    .catalog
+                    .get_table(name)
+                    .ok_or_else(|| AegisError::TableNotFound(name.clone()))?;
 
                 let alias_name = alias.as_ref().unwrap_or(name);
                 scope.tables.insert(alias_name.clone(), name.clone());
@@ -373,7 +381,11 @@ impl Analyzer {
             Expression::Between { .. } => Ok(DataType::Boolean),
             Expression::Like { .. } => Ok(DataType::Boolean),
             Expression::Cast { data_type, .. } => Ok(data_type.clone()),
-            Expression::Case { conditions, else_result, .. } => {
+            Expression::Case {
+                conditions,
+                else_result,
+                ..
+            } => {
                 if let Some((_, then_expr)) = conditions.first() {
                     self.infer_type(then_expr, scope)
                 } else if let Some(else_expr) = else_result {
@@ -483,6 +495,11 @@ pub enum AnalyzedStatement {
     AlterTable(AlterTableStatement),
     CreateIndex(CreateIndexStatement),
     DropIndex(DropIndexStatement),
+    SetOperation {
+        op: SetOperationType,
+        left: Box<AnalyzedStatement>,
+        right: Box<AnalyzedStatement>,
+    },
     Begin,
     Commit,
     Rollback,
@@ -572,7 +589,9 @@ mod tests {
         let analyzer = Analyzer::new(catalog);
         let parser = Parser::new();
 
-        let stmt = parser.parse_single("SELECT nonexistent FROM users").unwrap();
+        let stmt = parser
+            .parse_single("SELECT nonexistent FROM users")
+            .unwrap();
         let result = analyzer.analyze(&stmt);
 
         assert!(matches!(result, Err(AegisError::ColumnNotFound(_))));

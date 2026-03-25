@@ -570,28 +570,23 @@ impl BreachDetector {
             let path = dir.join("breach_incidents.json");
             if path.exists() {
                 match std::fs::read_to_string(&path) {
-                    Ok(contents) => {
-                        match serde_json::from_str::<Vec<BreachIncident>>(&contents) {
-                            Ok(loaded) => {
-                                let count = loaded.len();
-                                for inc in loaded {
-                                    incidents.push_back(inc);
-                                }
-                                counter = (count as u64).saturating_add(1);
-                                tracing::info!(
-                                    "Loaded {} breach incidents from disk",
-                                    count
-                                );
+                    Ok(contents) => match serde_json::from_str::<Vec<BreachIncident>>(&contents) {
+                        Ok(loaded) => {
+                            let count = loaded.len();
+                            for inc in loaded {
+                                incidents.push_back(inc);
                             }
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to parse breach incidents from {}: {}",
-                                    path.display(),
-                                    e
-                                );
-                            }
+                            counter = (count as u64).saturating_add(1);
+                            tracing::info!("Loaded {} breach incidents from disk", count);
                         }
-                    }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to parse breach incidents from {}: {}",
+                                path.display(),
+                                e
+                            );
+                        }
+                    },
                     Err(e) => {
                         tracing::error!(
                             "Failed to read breach incidents from {}: {}",
@@ -642,7 +637,11 @@ impl BreachDetector {
         match serde_json::to_string_pretty(&vec) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
-                    tracing::error!("Failed to write breach incidents to {}: {}", path.display(), e);
+                    tracing::error!(
+                        "Failed to write breach incidents to {}: {}",
+                        path.display(),
+                        e
+                    );
                 }
             }
             Err(e) => {
@@ -834,7 +833,12 @@ impl BreachDetector {
     }
 
     /// Record an admin action from an IP.
-    pub fn record_admin_action(&self, user: &str, action: &str, ip: &str) -> Option<BreachIncident> {
+    pub fn record_admin_action(
+        &self,
+        user: &str,
+        action: &str,
+        ip: &str,
+    ) -> Option<BreachIncident> {
         let config = self.config.read();
         let trusted_ips = config.trusted_admin_ips.clone();
         drop(config);
@@ -1077,12 +1081,9 @@ impl BreachDetector {
 
     /// Create a high severity incident.
     fn create_high_severity_incident(&self, event: &SecurityEvent) -> Option<BreachIncident> {
-        let mut incident = BreachIncident::new(
-            event.event_type,
-            BreachSeverity::High,
-            &event.description,
-        )
-        .with_related_event(&event.id);
+        let mut incident =
+            BreachIncident::new(event.event_type, BreachSeverity::High, &event.description)
+                .with_related_event(&event.id);
 
         if let Some(ref user) = event.user {
             incident = incident.with_affected_subject(user);
@@ -1594,7 +1595,9 @@ pub async fn list_breaches(
         _ => None,
     });
 
-    let incidents = state.breach_detector.get_incidents(status, severity, params.limit);
+    let incidents = state
+        .breach_detector
+        .get_incidents(status, severity, params.limit);
     let total = incidents.len();
     let stats = state.breach_detector.get_stats();
 
@@ -1612,14 +1615,20 @@ pub async fn get_breach(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match state.breach_detector.get_incident(&id) {
-        Some(incident) => (StatusCode::OK, Json(serde_json::json!({
-            "success": true,
-            "incident": incident,
-        }))),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "success": false,
-            "error": format!("Incident '{}' not found", id),
-        }))),
+        Some(incident) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "success": true,
+                "incident": incident,
+            })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Incident '{}' not found", id),
+            })),
+        ),
     }
 }
 
@@ -1630,23 +1639,32 @@ pub async fn acknowledge_breach(
     Path(id): Path<String>,
     Json(request): Json<AcknowledgeRequest>,
 ) -> impl IntoResponse {
-    match state.breach_detector.acknowledge_incident(&id, &request.acknowledged_by) {
+    match state
+        .breach_detector
+        .acknowledge_incident(&id, &request.acknowledged_by)
+    {
         Some(incident) => {
             tracing::info!(
                 "Breach incident {} acknowledged by {}",
                 id,
                 request.acknowledged_by
             );
-            (StatusCode::OK, Json(serde_json::json!({
-                "success": true,
-                "incident": incident,
-                "message": "Incident acknowledged successfully",
-            })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": true,
+                    "incident": incident,
+                    "message": "Incident acknowledged successfully",
+                })),
+            )
         }
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "success": false,
-            "error": format!("Incident '{}' not found", id),
-        }))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Incident '{}' not found", id),
+            })),
+        ),
     }
 }
 
@@ -1657,20 +1675,34 @@ pub async fn resolve_breach(
     Path(id): Path<String>,
     Json(request): Json<ResolveRequest>,
 ) -> impl IntoResponse {
-    match state.breach_detector.resolve_incident(&id, &request.resolution_notes, request.false_positive) {
+    match state.breach_detector.resolve_incident(
+        &id,
+        &request.resolution_notes,
+        request.false_positive,
+    ) {
         Some(incident) => {
-            let status_str = if request.false_positive { "false positive" } else { "resolved" };
+            let status_str = if request.false_positive {
+                "false positive"
+            } else {
+                "resolved"
+            };
             tracing::info!("Breach incident {} marked as {}", id, status_str);
-            (StatusCode::OK, Json(serde_json::json!({
-                "success": true,
-                "incident": incident,
-                "message": format!("Incident marked as {}", status_str),
-            })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": true,
+                    "incident": incident,
+                    "message": format!("Incident marked as {}", status_str),
+                })),
+            )
         }
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "success": false,
-            "error": format!("Incident '{}' not found", id),
-        }))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Incident '{}' not found", id),
+            })),
+        ),
     }
 }
 
@@ -1681,14 +1713,20 @@ pub async fn get_breach_report(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match state.breach_detector.generate_report(&id) {
-        Some(report) => (StatusCode::OK, Json(serde_json::json!({
-            "success": true,
-            "report": report,
-        }))),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "success": false,
-            "error": format!("Incident '{}' not found", id),
-        }))),
+        Some(report) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "success": true,
+                "report": report,
+            })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Incident '{}' not found", id),
+            })),
+        ),
     }
 }
 
@@ -1698,7 +1736,9 @@ pub async fn list_security_events(
     State(state): State<AppState>,
     Query(params): Query<ListEventsQuery>,
 ) -> Json<SecurityEventsResponse> {
-    let events = state.breach_detector.list_events(params.event_type.as_deref(), params.limit);
+    let events = state
+        .breach_detector
+        .list_events(params.event_type.as_deref(), params.limit);
     let total = events.len();
 
     Json(SecurityEventsResponse { events, total })
@@ -1706,17 +1746,13 @@ pub async fn list_security_events(
 
 /// Get breach detection statistics.
 /// GET /api/v1/compliance/breaches/stats
-pub async fn get_breach_stats(
-    State(state): State<AppState>,
-) -> Json<BreachStats> {
+pub async fn get_breach_stats(State(state): State<AppState>) -> Json<BreachStats> {
     Json(state.breach_detector.get_stats())
 }
 
 /// Manually trigger a cleanup of old events and patterns.
 /// POST /api/v1/compliance/breaches/cleanup
-pub async fn trigger_cleanup(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+pub async fn trigger_cleanup(State(state): State<AppState>) -> Json<serde_json::Value> {
     state.breach_detector.cleanup();
     Json(serde_json::json!({
         "success": true,
@@ -1795,7 +1831,10 @@ mod tests {
 
         assert!(incident.is_some());
         let incident = incident.unwrap();
-        assert_eq!(incident.incident_type, SecurityEventType::UnauthorizedAccess);
+        assert_eq!(
+            incident.incident_type,
+            SecurityEventType::UnauthorizedAccess
+        );
     }
 
     #[test]
@@ -1838,7 +1877,10 @@ mod tests {
         assert!(incident.is_some());
 
         let incident = incident.unwrap();
-        assert_eq!(incident.incident_type, SecurityEventType::AdminFromUnknownIp);
+        assert_eq!(
+            incident.incident_type,
+            SecurityEventType::AdminFromUnknownIp
+        );
         assert_eq!(incident.severity, BreachSeverity::High);
     }
 
@@ -1902,11 +1944,8 @@ mod tests {
 
     #[test]
     fn test_requires_immediate_notification() {
-        let low_incident = BreachIncident::new(
-            SecurityEventType::FailedLogin,
-            BreachSeverity::Low,
-            "test",
-        );
+        let low_incident =
+            BreachIncident::new(SecurityEventType::FailedLogin, BreachSeverity::Low, "test");
         assert!(!low_incident.requires_immediate_notification());
 
         let high_incident = BreachIncident::new(

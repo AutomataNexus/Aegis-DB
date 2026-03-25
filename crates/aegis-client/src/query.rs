@@ -124,49 +124,57 @@ impl QueryBuilder {
 
     /// Add a WHERE condition.
     pub fn where_eq(mut self, column: &str, value: impl Into<Value>) -> Self {
-        self.conditions.push(Condition::Eq(column.to_string(), value.into()));
+        self.conditions
+            .push(Condition::Eq(column.to_string(), value.into()));
         self
     }
 
     /// Add a WHERE != condition.
     pub fn where_ne(mut self, column: &str, value: impl Into<Value>) -> Self {
-        self.conditions.push(Condition::Ne(column.to_string(), value.into()));
+        self.conditions
+            .push(Condition::Ne(column.to_string(), value.into()));
         self
     }
 
     /// Add a WHERE > condition.
     pub fn where_gt(mut self, column: &str, value: impl Into<Value>) -> Self {
-        self.conditions.push(Condition::Gt(column.to_string(), value.into()));
+        self.conditions
+            .push(Condition::Gt(column.to_string(), value.into()));
         self
     }
 
     /// Add a WHERE >= condition.
     pub fn where_gte(mut self, column: &str, value: impl Into<Value>) -> Self {
-        self.conditions.push(Condition::Gte(column.to_string(), value.into()));
+        self.conditions
+            .push(Condition::Gte(column.to_string(), value.into()));
         self
     }
 
     /// Add a WHERE < condition.
     pub fn where_lt(mut self, column: &str, value: impl Into<Value>) -> Self {
-        self.conditions.push(Condition::Lt(column.to_string(), value.into()));
+        self.conditions
+            .push(Condition::Lt(column.to_string(), value.into()));
         self
     }
 
     /// Add a WHERE <= condition.
     pub fn where_lte(mut self, column: &str, value: impl Into<Value>) -> Self {
-        self.conditions.push(Condition::Lte(column.to_string(), value.into()));
+        self.conditions
+            .push(Condition::Lte(column.to_string(), value.into()));
         self
     }
 
     /// Add a WHERE LIKE condition.
     pub fn where_like(mut self, column: &str, pattern: &str) -> Self {
-        self.conditions.push(Condition::Like(column.to_string(), pattern.to_string()));
+        self.conditions
+            .push(Condition::Like(column.to_string(), pattern.to_string()));
         self
     }
 
     /// Add a WHERE IN condition.
     pub fn where_in(mut self, column: &str, values: Vec<Value>) -> Self {
-        self.conditions.push(Condition::In(column.to_string(), values));
+        self.conditions
+            .push(Condition::In(column.to_string(), values));
         self
     }
 
@@ -178,7 +186,8 @@ impl QueryBuilder {
 
     /// Add a WHERE IS NOT NULL condition.
     pub fn where_not_null(mut self, column: &str) -> Self {
-        self.conditions.push(Condition::IsNotNull(column.to_string()));
+        self.conditions
+            .push(Condition::IsNotNull(column.to_string()));
         self
     }
 
@@ -196,6 +205,26 @@ impl QueryBuilder {
     pub fn left_join(mut self, table: &str, on: &str) -> Self {
         self.joins.push(Join {
             join_type: JoinType::Left,
+            table: table.to_string(),
+            on: on.to_string(),
+        });
+        self
+    }
+
+    /// Add a RIGHT JOIN clause.
+    pub fn right_join(mut self, table: &str, on: &str) -> Self {
+        self.joins.push(Join {
+            join_type: JoinType::Right,
+            table: table.to_string(),
+            on: on.to_string(),
+        });
+        self
+    }
+
+    /// Add a FULL OUTER JOIN clause.
+    pub fn full_join(mut self, table: &str, on: &str) -> Self {
+        self.joins.push(Join {
+            join_type: JoinType::Full,
             table: table.to_string(),
             on: on.to_string(),
         });
@@ -383,11 +412,7 @@ impl QueryBuilder {
 
         sql.push_str(" WHERE ");
 
-        let conditions: Vec<String> = self
-            .conditions
-            .iter()
-            .map(|c| c.to_sql(params))
-            .collect();
+        let conditions: Vec<String> = self.conditions.iter().map(|c| c.to_sql(params)).collect();
 
         sql.push_str(&conditions.join(" AND "));
     }
@@ -403,11 +428,7 @@ impl QueryBuilder {
         if !self.having.is_empty() {
             sql.push_str(" HAVING ");
 
-            let conditions: Vec<String> = self
-                .having
-                .iter()
-                .map(|c| c.to_sql(params))
-                .collect();
+            let conditions: Vec<String> = self.having.iter().map(|c| c.to_sql(params)).collect();
 
             sql.push_str(&conditions.join(" AND "));
         }
@@ -518,7 +539,6 @@ struct Join {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum JoinType {
     Inner,
     Left,
@@ -613,7 +633,10 @@ mod tests {
         let query = QueryBuilder::new()
             .insert_into("users")
             .columns(&["name", "email"])
-            .values(vec![Value::String("Alice".to_string()), Value::String("alice@example.com".to_string())])
+            .values(vec![
+                Value::String("Alice".to_string()),
+                Value::String("alice@example.com".to_string()),
+            ])
             .build();
 
         assert!(query.sql.starts_with("INSERT INTO users"));
@@ -653,7 +676,9 @@ mod tests {
             .join("orders", "users.id = orders.user_id")
             .build();
 
-        assert!(query.sql.contains("INNER JOIN orders ON users.id = orders.user_id"));
+        assert!(query
+            .sql
+            .contains("INNER JOIN orders ON users.id = orders.user_id"));
     }
 
     #[test]

@@ -14,7 +14,7 @@
 //! @author AutomataNexus Development Team
 
 use crate::page::{Page, PageType};
-use aegis_common::{PageId, Result, AegisError};
+use aegis_common::{AegisError, PageId, Result};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -332,7 +332,9 @@ mod tests {
     #[test]
     fn test_buffer_pool_new_page() {
         let pool = BufferPool::with_capacity(10);
-        let handle = pool.new_page(PageId(1), PageType::Data).expect("new_page should succeed");
+        let handle = pool
+            .new_page(PageId(1), PageType::Data)
+            .expect("new_page should succeed");
 
         assert_eq!(handle.page_id(), PageId(1));
     }
@@ -341,9 +343,12 @@ mod tests {
     fn test_buffer_pool_fetch_page() {
         let pool = BufferPool::with_capacity(10);
 
-        pool.new_page(PageId(1), PageType::Data).expect("new_page should succeed");
+        pool.new_page(PageId(1), PageType::Data)
+            .expect("new_page should succeed");
 
-        let handle = pool.fetch_page(PageId(1)).expect("fetch_page should succeed");
+        let handle = pool
+            .fetch_page(PageId(1))
+            .expect("fetch_page should succeed");
         assert_eq!(handle.page_id(), PageId(1));
     }
 
@@ -351,15 +356,23 @@ mod tests {
     fn test_buffer_pool_eviction() {
         let pool = BufferPool::with_capacity(3);
 
-        let _h1 = pool.new_page(PageId(1), PageType::Data).expect("new_page 1 should succeed");
-        let _h2 = pool.new_page(PageId(2), PageType::Data).expect("new_page 2 should succeed");
-        let _h3 = pool.new_page(PageId(3), PageType::Data).expect("new_page 3 should succeed");
+        let _h1 = pool
+            .new_page(PageId(1), PageType::Data)
+            .expect("new_page 1 should succeed");
+        let _h2 = pool
+            .new_page(PageId(2), PageType::Data)
+            .expect("new_page 2 should succeed");
+        let _h3 = pool
+            .new_page(PageId(3), PageType::Data)
+            .expect("new_page 3 should succeed");
 
         drop(_h1);
         drop(_h2);
         drop(_h3);
 
-        let _h4 = pool.new_page(PageId(4), PageType::Data).expect("new_page 4 after eviction should succeed");
+        let _h4 = pool
+            .new_page(PageId(4), PageType::Data)
+            .expect("new_page 4 after eviction should succeed");
 
         let stats = pool.stats();
         assert_eq!(stats.used_frames, 3);
@@ -374,8 +387,12 @@ mod tests {
         assert_eq!(stats.used_frames, 0);
         assert_eq!(stats.free_frames, 10);
 
-        let _h1 = pool.new_page(PageId(1), PageType::Data).expect("new_page 1 should succeed");
-        let _h2 = pool.new_page(PageId(2), PageType::Data).expect("new_page 2 should succeed");
+        let _h1 = pool
+            .new_page(PageId(1), PageType::Data)
+            .expect("new_page 1 should succeed");
+        let _h2 = pool
+            .new_page(PageId(2), PageType::Data)
+            .expect("new_page 2 should succeed");
 
         let stats = pool.stats();
         assert_eq!(stats.used_frames, 2);

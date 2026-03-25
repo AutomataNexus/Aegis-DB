@@ -6,9 +6,9 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use aegis_server::{create_router, AppState, ServerConfig, ClusterTlsConfig};
 use aegis_server::backup::BackupManager;
 use aegis_server::secrets::{self, SecretsProvider};
+use aegis_server::{create_router, AppState, ClusterTlsConfig, ServerConfig};
 use axum_server::tls_rustls::RustlsConfig;
 use clap::Parser;
 use std::net::SocketAddr;
@@ -129,12 +129,29 @@ async fn main() {
         tracing::warn!("╚══════════════════════════════════════════════════════════════════════╝");
     }
 
-    // Initialize secrets manager (supports Vault or env vars)
-    let secrets_manager = secrets::init_secrets_manager().await;
+    // Initialize built-in vault
+    let vault_data_dir = args
+        .data_dir
+        .as_ref()
+        .map(|d| std::path::PathBuf::from(d).join("vault"));
+    let built_in_vault = std::sync::Arc::new(aegis_vault::AegisVault::new_auto(vault_data_dir));
+    tracing::info!(
+        "Built-in vault initialized (sealed: {})",
+        built_in_vault.is_sealed()
+    );
+
+    // Initialize secrets manager (built-in vault → external Vault → env vars)
+    let secrets_manager = secrets::init_secrets_manager(Some(built_in_vault)).await;
 
     // Parse peer addresses
-    let peers: Vec<String> = args.peers
-        .map(|p| p.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+    let peers: Vec<String> = args
+        .peers
+        .map(|p| {
+            p.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
 
     // Build cluster TLS configuration if enabled
@@ -144,8 +161,14 @@ async fn main() {
         Some(ClusterTlsConfig {
             enabled,
             ca_cert_path: args.cluster_ca_cert.clone(),
-            client_cert_path: args.cluster_client_cert.clone().or_else(|| args.tls_cert.clone()),
-            client_key_path: args.cluster_client_key.clone().or_else(|| args.tls_key.clone()),
+            client_cert_path: args
+                .cluster_client_cert
+                .clone()
+                .or_else(|| args.tls_cert.clone()),
+            client_key_path: args
+                .cluster_client_key
+                .clone()
+                .or_else(|| args.tls_key.clone()),
             danger_accept_invalid_certs: args.cluster_tls_insecure,
         })
     } else {
@@ -166,7 +189,9 @@ async fn main() {
     if let Some(ref data_dir) = args.data_dir {
         tracing::info!("Persistence enabled, data directory: {}", data_dir);
     } else {
-        tracing::warn!("No data directory specified, running in-memory only (data will be lost on restart)");
+        tracing::warn!(
+            "No data directory specified, running in-memory only (data will be lost on restart)"
+        );
     }
 
     if !peers.is_empty() {
@@ -196,6 +221,17 @@ async fn main() {
     }
 
     let state = AppState::new(config);
+
+    // Warn loudly at startup if no admin user is configured
+    if state.auth.list_users().is_empty() {
+        tracing::warn!("==========================================================");
+        tracing::warn!("SECURITY WARNING: No admin user configured!");
+        tracing::warn!("All API endpoints are accessible without authentication.");
+        tracing::warn!("Create an admin user or set AEGIS_ADMIN_USERNAME and");
+        tracing::warn!("AEGIS_ADMIN_PASSWORD environment variables to secure the server.");
+        tracing::warn!("==========================================================");
+    }
+
     let state_for_shutdown = state.clone();
     let app = create_router(state.clone());
 
@@ -246,7 +282,11 @@ async fn main() {
 
                     match manager.create_backup(true, Some("auto-scheduler"), false, None) {
                         Ok(info) => {
-                            tracing::info!("Auto-backup created: {} ({} files)", info.id, info.files_count);
+                            tracing::info!(
+                                "Auto-backup created: {} ({} files)",
+                                info.id,
+                                info.files_count
+                            );
 
                             // Clean up old backups beyond retention count
                             if let Ok(mut backups) = manager.list_backups() {
@@ -257,7 +297,11 @@ async fn main() {
                                     backups.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
                                     for old in &backups[max_backups..] {
                                         if let Err(e) = manager.delete_backup(&old.id) {
-                                            tracing::warn!("Failed to delete old backup {}: {}", old.id, e);
+                                            tracing::warn!(
+                                                "Failed to delete old backup {}: {}",
+                                                old.id,
+                                                e
+                                            );
                                         } else {
                                             tracing::info!("Deleted expired backup: {}", old.id);
                                         }
@@ -299,20 +343,38 @@ async fn main() {
     // Determine TLS configuration
     let tls_config = if args.tls {
         // Try command line args first, then environment/Vault
-        let cert_path = args.tls_cert
+        let cert_path = match args
+            .tls_cert
             .or_else(|| secrets_manager.get(secrets::keys::TLS_CERT_PATH))
-            .expect("TLS enabled but no certificate path provided. Use --tls-cert or set AEGIS_TLS_CERT");
+        {
+            Some(p) => p,
+            None => {
+                tracing::error!("TLS enabled but no certificate path provided. Use --tls-cert or set AEGIS_TLS_CERT");
+                std::process::exit(1);
+            }
+        };
 
-        let key_path = args.tls_key
+        let key_path = match args
+            .tls_key
             .or_else(|| secrets_manager.get(secrets::keys::TLS_KEY_PATH))
-            .expect("TLS enabled but no key path provided. Use --tls-key or set AEGIS_TLS_KEY");
+        {
+            Some(p) => p,
+            None => {
+                tracing::error!(
+                    "TLS enabled but no key path provided. Use --tls-key or set AEGIS_TLS_KEY"
+                );
+                std::process::exit(1);
+            }
+        };
 
         // Verify files exist
         if !PathBuf::from(&cert_path).exists() {
-            panic!("TLS certificate file not found: {}", cert_path);
+            tracing::error!("TLS certificate file not found: {}", cert_path);
+            std::process::exit(1);
         }
         if !PathBuf::from(&key_path).exists() {
-            panic!("TLS key file not found: {}", key_path);
+            tracing::error!("TLS key file not found: {}", key_path);
+            std::process::exit(1);
         }
 
         Some((cert_path, key_path))
@@ -389,7 +451,9 @@ fn build_cluster_client(config: &ClusterTlsConfig) -> Result<reqwest::Client, re
     }
 
     // Add client certificate for mTLS if provided
-    if let (Some(ref cert_path), Some(ref key_path)) = (&config.client_cert_path, &config.client_key_path) {
+    if let (Some(ref cert_path), Some(ref key_path)) =
+        (&config.client_cert_path, &config.client_key_path)
+    {
         if let (Ok(cert_pem), Ok(key_pem)) = (std::fs::read(cert_path), std::fs::read(key_path)) {
             // Combine cert and key into a single PEM for reqwest Identity
             let mut combined_pem = cert_pem;
@@ -431,7 +495,10 @@ async fn join_peer(state: &AppState, peer_addr: &str) {
             match build_cluster_client(cluster_tls) {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!("Failed to build TLS client for cluster communication: {}", e);
+                    tracing::error!(
+                        "Failed to build TLS client for cluster communication: {}",
+                        e
+                    );
                     return;
                 }
             }
@@ -448,7 +515,13 @@ async fn join_peer(state: &AppState, peer_addr: &str) {
         "address": self_info.address,
     });
 
-    match client.post(&url).json(&body).timeout(std::time::Duration::from_secs(5)).send().await {
+    match client
+        .post(&url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(data) = response.json::<serde_json::Value>().await {
@@ -456,16 +529,26 @@ async fn join_peer(state: &AppState, peer_addr: &str) {
                     // Register any peers returned by the join response
                     if let Some(peers) = data.get("peers").and_then(|p| p.as_array()) {
                         for peer in peers {
-                            if let (Some(id), Some(addr)) = (peer.get("id").and_then(|v| v.as_str()), peer.get("address").and_then(|v| v.as_str())) {
+                            if let (Some(id), Some(addr)) = (
+                                peer.get("id").and_then(|v| v.as_str()),
+                                peer.get("address").and_then(|v| v.as_str()),
+                            ) {
                                 if addr != self_info.address {
-                                    let name = peer.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                    let name = peer
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
                                     state.admin.register_peer(aegis_server::admin::PeerNode {
                                         id: id.to_string(),
                                         name,
                                         address: addr.to_string(),
                                         status: aegis_server::admin::NodeStatus::Online,
                                         role: aegis_server::admin::NodeRole::Follower,
-                                        last_seen: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                                        last_seen: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis()
+                                            as u64,
                                         version: env!("CARGO_PKG_VERSION").to_string(),
                                         uptime_seconds: 0,
                                         metrics: None,
@@ -477,7 +560,11 @@ async fn join_peer(state: &AppState, peer_addr: &str) {
                     }
                 }
             } else {
-                tracing::warn!("Failed to join peer at {}: HTTP {}", peer_addr, response.status());
+                tracing::warn!(
+                    "Failed to join peer at {}: HTTP {}",
+                    peer_addr,
+                    response.status()
+                );
             }
         }
         Err(e) => {
@@ -519,10 +606,20 @@ async fn send_heartbeats(state: &AppState) {
             "metrics": self_info.metrics,
         });
 
-        match client.post(&url).json(&body).timeout(std::time::Duration::from_secs(3)).send().await {
+        match client
+            .post(&url)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await
+        {
             Ok(response) => {
                 if !response.status().is_success() {
-                    tracing::debug!("Heartbeat to {} failed: HTTP {}", peer.address, response.status());
+                    tracing::debug!(
+                        "Heartbeat to {} failed: HTTP {}",
+                        peer.address,
+                        response.status()
+                    );
                     state.admin.mark_peer_offline(&peer.id);
                 }
             }

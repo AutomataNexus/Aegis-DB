@@ -409,7 +409,10 @@ impl Summary {
     pub fn reset(&self) {
         self.count.store(0, Ordering::Relaxed);
         *self.sum.write().expect("Summary sum RwLock poisoned") = 0.0;
-        self.values.write().expect("Summary values RwLock poisoned").clear();
+        self.values
+            .write()
+            .expect("Summary values RwLock poisoned")
+            .clear();
     }
 }
 
@@ -440,7 +443,10 @@ impl MetricRegistry {
 
     /// Register or get a counter.
     pub fn counter(&self, name: &str) -> Arc<Counter> {
-        let mut counters = self.counters.write().expect("MetricRegistry counters RwLock poisoned");
+        let mut counters = self
+            .counters
+            .write()
+            .expect("MetricRegistry counters RwLock poisoned");
         counters
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Counter::new()))
@@ -448,13 +454,12 @@ impl MetricRegistry {
     }
 
     /// Register or get a counter with labels.
-    pub fn counter_with_labels(
-        &self,
-        name: &str,
-        labels: HashMap<String, String>,
-    ) -> Arc<Counter> {
+    pub fn counter_with_labels(&self, name: &str, labels: HashMap<String, String>) -> Arc<Counter> {
         let key = Self::labeled_key(name, &labels);
-        let mut counters = self.counters.write().expect("MetricRegistry counters RwLock poisoned");
+        let mut counters = self
+            .counters
+            .write()
+            .expect("MetricRegistry counters RwLock poisoned");
         counters
             .entry(key)
             .or_insert_with(|| Arc::new(Counter::with_labels(labels)))
@@ -463,7 +468,10 @@ impl MetricRegistry {
 
     /// Register or get a gauge.
     pub fn gauge(&self, name: &str) -> Arc<Gauge> {
-        let mut gauges = self.gauges.write().expect("MetricRegistry gauges RwLock poisoned");
+        let mut gauges = self
+            .gauges
+            .write()
+            .expect("MetricRegistry gauges RwLock poisoned");
         gauges
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Gauge::new()))
@@ -473,7 +481,10 @@ impl MetricRegistry {
     /// Register or get a gauge with labels.
     pub fn gauge_with_labels(&self, name: &str, labels: HashMap<String, String>) -> Arc<Gauge> {
         let key = Self::labeled_key(name, &labels);
-        let mut gauges = self.gauges.write().expect("MetricRegistry gauges RwLock poisoned");
+        let mut gauges = self
+            .gauges
+            .write()
+            .expect("MetricRegistry gauges RwLock poisoned");
         gauges
             .entry(key)
             .or_insert_with(|| Arc::new(Gauge::with_labels(labels)))
@@ -482,7 +493,10 @@ impl MetricRegistry {
 
     /// Register or get a histogram.
     pub fn histogram(&self, name: &str) -> Arc<Histogram> {
-        let mut histograms = self.histograms.write().expect("MetricRegistry histograms RwLock poisoned");
+        let mut histograms = self
+            .histograms
+            .write()
+            .expect("MetricRegistry histograms RwLock poisoned");
         histograms
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Histogram::new()))
@@ -491,7 +505,10 @@ impl MetricRegistry {
 
     /// Register or get a histogram with custom buckets.
     pub fn histogram_with_buckets(&self, name: &str, buckets: Vec<f64>) -> Arc<Histogram> {
-        let mut histograms = self.histograms.write().expect("MetricRegistry histograms RwLock poisoned");
+        let mut histograms = self
+            .histograms
+            .write()
+            .expect("MetricRegistry histograms RwLock poisoned");
         histograms
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Histogram::with_buckets(buckets)))
@@ -500,7 +517,10 @@ impl MetricRegistry {
 
     /// Register or get a summary.
     pub fn summary(&self, name: &str) -> Arc<Summary> {
-        let mut summaries = self.summaries.write().expect("MetricRegistry summaries RwLock poisoned");
+        let mut summaries = self
+            .summaries
+            .write()
+            .expect("MetricRegistry summaries RwLock poisoned");
         summaries
             .entry(name.to_string())
             .or_insert_with(|| Arc::new(Summary::new()))
@@ -552,7 +572,12 @@ impl MetricRegistry {
         let mut output = String::new();
 
         // Export counters
-        for (name, counter) in self.counters.read().expect("MetricRegistry counters RwLock poisoned").iter() {
+        for (name, counter) in self
+            .counters
+            .read()
+            .expect("MetricRegistry counters RwLock poisoned")
+            .iter()
+        {
             output.push_str(&format!(
                 "# TYPE {} counter\n{} {}\n",
                 name,
@@ -562,7 +587,12 @@ impl MetricRegistry {
         }
 
         // Export gauges
-        for (name, gauge) in self.gauges.read().expect("MetricRegistry gauges RwLock poisoned").iter() {
+        for (name, gauge) in self
+            .gauges
+            .read()
+            .expect("MetricRegistry gauges RwLock poisoned")
+            .iter()
+        {
             output.push_str(&format!(
                 "# TYPE {} gauge\n{} {}\n",
                 name,
@@ -572,11 +602,19 @@ impl MetricRegistry {
         }
 
         // Export histograms
-        for (name, histogram) in self.histograms.read().expect("MetricRegistry histograms RwLock poisoned").iter() {
+        for (name, histogram) in self
+            .histograms
+            .read()
+            .expect("MetricRegistry histograms RwLock poisoned")
+            .iter()
+        {
             output.push_str(&format!("# TYPE {} histogram\n", name));
             let value = histogram.value();
             for (boundary, count) in &value.buckets {
-                output.push_str(&format!("{}_bucket{{le=\"{}\"}} {}\n", name, boundary, count));
+                output.push_str(&format!(
+                    "{}_bucket{{le=\"{}\"}} {}\n",
+                    name, boundary, count
+                ));
             }
             output.push_str(&format!("{}_bucket{{le=\"+Inf\"}} {}\n", name, value.count));
             output.push_str(&format!("{}_sum {}\n", name, value.sum));
@@ -584,7 +622,12 @@ impl MetricRegistry {
         }
 
         // Export summaries
-        for (name, summary) in self.summaries.read().expect("MetricRegistry summaries RwLock poisoned").iter() {
+        for (name, summary) in self
+            .summaries
+            .read()
+            .expect("MetricRegistry summaries RwLock poisoned")
+            .iter()
+        {
             output.push_str(&format!("# TYPE {} summary\n", name));
             let value = summary.value();
             for (quantile, v) in &value.quantiles {

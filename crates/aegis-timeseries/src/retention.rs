@@ -108,10 +108,30 @@ impl MultiTierRetention {
     pub fn monitoring() -> Self {
         Self {
             tiers: vec![
-                RetentionTier::new("raw", Duration::hours(24), Duration::zero(), AggregateFunction::Last),
-                RetentionTier::new("5min", Duration::days(7), Duration::minutes(5), AggregateFunction::Avg),
-                RetentionTier::new("1hour", Duration::days(30), Duration::hours(1), AggregateFunction::Avg),
-                RetentionTier::new("1day", Duration::days(365), Duration::days(1), AggregateFunction::Avg),
+                RetentionTier::new(
+                    "raw",
+                    Duration::hours(24),
+                    Duration::zero(),
+                    AggregateFunction::Last,
+                ),
+                RetentionTier::new(
+                    "5min",
+                    Duration::days(7),
+                    Duration::minutes(5),
+                    AggregateFunction::Avg,
+                ),
+                RetentionTier::new(
+                    "1hour",
+                    Duration::days(30),
+                    Duration::hours(1),
+                    AggregateFunction::Avg,
+                ),
+                RetentionTier::new(
+                    "1day",
+                    Duration::days(365),
+                    Duration::days(1),
+                    AggregateFunction::Avg,
+                ),
             ],
             final_retention: Duration::days(365),
         }
@@ -121,10 +141,30 @@ impl MultiTierRetention {
     pub fn iot() -> Self {
         Self {
             tiers: vec![
-                RetentionTier::new("raw", Duration::hours(1), Duration::zero(), AggregateFunction::Last),
-                RetentionTier::new("1min", Duration::days(1), Duration::minutes(1), AggregateFunction::Avg),
-                RetentionTier::new("15min", Duration::days(7), Duration::minutes(15), AggregateFunction::Avg),
-                RetentionTier::new("1hour", Duration::days(90), Duration::hours(1), AggregateFunction::Avg),
+                RetentionTier::new(
+                    "raw",
+                    Duration::hours(1),
+                    Duration::zero(),
+                    AggregateFunction::Last,
+                ),
+                RetentionTier::new(
+                    "1min",
+                    Duration::days(1),
+                    Duration::minutes(1),
+                    AggregateFunction::Avg,
+                ),
+                RetentionTier::new(
+                    "15min",
+                    Duration::days(7),
+                    Duration::minutes(15),
+                    AggregateFunction::Avg,
+                ),
+                RetentionTier::new(
+                    "1hour",
+                    Duration::days(90),
+                    Duration::hours(1),
+                    AggregateFunction::Avg,
+                ),
             ],
             final_retention: Duration::days(90),
         }

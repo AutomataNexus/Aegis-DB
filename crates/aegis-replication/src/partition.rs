@@ -172,9 +172,7 @@ impl PartitionStrategy {
     /// Get the partition for a key.
     pub fn partition_for_key(&self, key: &PartitionKey) -> u32 {
         match self {
-            Self::Hash { num_partitions, .. } => {
-                (key.hash_value() % *num_partitions as u64) as u32
-            }
+            Self::Hash { num_partitions, .. } => (key.hash_value() % *num_partitions as u64) as u32,
             Self::Range { boundaries, .. } => {
                 let hash = key.hash_value();
                 for (i, boundary) in boundaries.iter().enumerate() {
@@ -270,8 +268,8 @@ impl TimeInterval {
             Self::Hour => 3600,
             Self::Day => 86400,
             Self::Week => 604800,
-            Self::Month => 2592000,  // 30 days
-            Self::Year => 31536000,  // 365 days
+            Self::Month => 2592000, // 30 days
+            Self::Year => 31536000, // 365 days
             Self::Custom(s) => *s,
         }
     }
@@ -424,7 +422,10 @@ impl KeyExtractor {
     }
 
     /// Extract a partition key from a map of values.
-    pub fn extract(&self, values: &std::collections::HashMap<String, String>) -> Option<PartitionKey> {
+    pub fn extract(
+        &self,
+        values: &std::collections::HashMap<String, String>,
+    ) -> Option<PartitionKey> {
         if self.columns.len() == 1 {
             values
                 .get(&self.columns[0])
@@ -563,10 +564,7 @@ mod tests {
 
     #[test]
     fn test_key_extractor_composite() {
-        let extractor = KeyExtractor::new(vec![
-            "tenant_id".to_string(),
-            "user_id".to_string(),
-        ]);
+        let extractor = KeyExtractor::new(vec!["tenant_id".to_string(), "user_id".to_string()]);
 
         let mut values = std::collections::HashMap::new();
         values.insert("tenant_id".to_string(), "t1".to_string());

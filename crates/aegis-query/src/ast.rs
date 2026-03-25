@@ -32,9 +32,31 @@ pub enum Statement {
     AlterTable(AlterTableStatement),
     CreateIndex(CreateIndexStatement),
     DropIndex(DropIndexStatement),
+    SetOperation(SetOperationStatement),
     Begin,
     Commit,
     Rollback,
+}
+
+// =============================================================================
+// Set Operations
+// =============================================================================
+
+/// Type of set operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetOperationType {
+    Union,
+    UnionAll,
+    Intersect,
+    Except,
+}
+
+/// A set operation combining two queries.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetOperationStatement {
+    pub op: SetOperationType,
+    pub left: Box<Statement>,
+    pub right: Box<Statement>,
 }
 
 // =============================================================================
@@ -42,8 +64,7 @@ pub enum Statement {
 // =============================================================================
 
 /// A SELECT query.
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SelectStatement {
     pub distinct: bool,
     pub columns: Vec<SelectColumn>,
@@ -56,13 +77,15 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
 }
 
-
 /// A column in SELECT list.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SelectColumn {
     AllColumns,
     TableAllColumns(String),
-    Expression { expr: Expression, alias: Option<String> },
+    Expression {
+        expr: Expression,
+        alias: Option<String>,
+    },
 }
 
 /// FROM clause.
@@ -75,8 +98,14 @@ pub struct FromClause {
 /// Reference to a table or subquery.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableReference {
-    Table { name: String, alias: Option<String> },
-    Subquery { query: Box<SelectStatement>, alias: String },
+    Table {
+        name: String,
+        alias: Option<String>,
+    },
+    Subquery {
+        query: Box<SelectStatement>,
+        alias: String,
+    },
 }
 
 /// JOIN clause.
@@ -190,14 +219,20 @@ pub enum ColumnConstraint {
 /// Table-level constraint.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableConstraint {
-    PrimaryKey { columns: Vec<String> },
-    Unique { columns: Vec<String> },
+    PrimaryKey {
+        columns: Vec<String>,
+    },
+    Unique {
+        columns: Vec<String>,
+    },
     ForeignKey {
         columns: Vec<String>,
         ref_table: String,
         ref_columns: Vec<String>,
     },
-    Check { expression: Expression },
+    Check {
+        expression: Expression,
+    },
 }
 
 /// DROP TABLE statement.
@@ -218,12 +253,27 @@ pub struct AlterTableStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AlterTableOperation {
     AddColumn(ColumnDefinition),
-    DropColumn { name: String, if_exists: bool },
-    RenameColumn { old_name: String, new_name: String },
-    AlterColumn { name: String, data_type: Option<DataType>, set_not_null: Option<bool>, set_default: Option<Option<Expression>> },
-    RenameTable { new_name: String },
+    DropColumn {
+        name: String,
+        if_exists: bool,
+    },
+    RenameColumn {
+        old_name: String,
+        new_name: String,
+    },
+    AlterColumn {
+        name: String,
+        data_type: Option<DataType>,
+        set_not_null: Option<bool>,
+        set_default: Option<Option<Expression>>,
+    },
+    RenameTable {
+        new_name: String,
+    },
     AddConstraint(TableConstraint),
-    DropConstraint { name: String },
+    DropConstraint {
+        name: String,
+    },
 }
 
 /// CREATE INDEX statement.

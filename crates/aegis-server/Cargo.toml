@@ -26,6 +26,8 @@ aegis-document = { workspace = true }
 aegis-timeseries = { workspace = true }
 aegis-streaming = { workspace = true }
 aegis-updates = { workspace = true }
+aegis-vault = { workspace = true }
+aegis-shield = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }

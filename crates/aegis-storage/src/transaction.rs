@@ -13,7 +13,7 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use aegis_common::{TransactionId, Result, AegisError};
+use aegis_common::{AegisError, Result, TransactionId};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -405,7 +405,9 @@ impl TransactionManager {
                 .ok_or_else(|| AegisError::Transaction("Transaction not found".to_string()))?;
 
             if tx.state != TransactionState::Active {
-                return Err(AegisError::Transaction("Transaction not active".to_string()));
+                return Err(AegisError::Transaction(
+                    "Transaction not active".to_string(),
+                ));
             }
 
             if tx.isolation_level == IsolationLevel::Serializable {
@@ -484,7 +486,9 @@ impl TransactionManager {
             .ok_or_else(|| AegisError::Transaction("Transaction not found".to_string()))?;
 
         if !tx.is_active() {
-            return Err(AegisError::Transaction("Transaction not active".to_string()));
+            return Err(AegisError::Transaction(
+                "Transaction not active".to_string(),
+            ));
         }
 
         let versions = self.versions.read();
@@ -514,7 +518,9 @@ impl TransactionManager {
                 .ok_or_else(|| AegisError::Transaction("Transaction not found".to_string()))?;
 
             if !tx.is_active() {
-                return Err(AegisError::Transaction("Transaction not active".to_string()));
+                return Err(AegisError::Transaction(
+                    "Transaction not active".to_string(),
+                ));
             }
 
             tx.add_to_write_set(key.clone());
@@ -925,7 +931,10 @@ mod tests {
     #[test]
     fn test_gc_preserves_active_transaction_visible_versions() {
         let tm = TransactionManager::new();
-        let key = VersionKey { table_id: 1, row_id: 1 };
+        let key = VersionKey {
+            table_id: 1,
+            row_id: 1,
+        };
 
         // Create first version
         let tx1 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
@@ -959,7 +968,10 @@ mod tests {
     #[test]
     fn test_gc_removes_aborted_versions() {
         let tm = TransactionManager::new();
-        let key = VersionKey { table_id: 1, row_id: 1 };
+        let key = VersionKey {
+            table_id: 1,
+            row_id: 1,
+        };
 
         // Create first version
         let tx1 = tm.begin(IsolationLevel::RepeatableRead).unwrap();
@@ -990,7 +1002,10 @@ mod tests {
     #[test]
     fn test_stats_includes_version_count() {
         let tm = TransactionManager::new();
-        let key = VersionKey { table_id: 1, row_id: 1 };
+        let key = VersionKey {
+            table_id: 1,
+            row_id: 1,
+        };
 
         assert_eq!(tm.stats().version_count, 0);
 
@@ -1011,7 +1026,10 @@ mod tests {
     #[test]
     fn test_run_gc_if_needed() {
         let tm = TransactionManager::new();
-        let key = VersionKey { table_id: 1, row_id: 1 };
+        let key = VersionKey {
+            table_id: 1,
+            row_id: 1,
+        };
 
         // Should not run GC with high threshold
         assert!(tm.run_gc_if_needed(100).is_none());
@@ -1019,7 +1037,8 @@ mod tests {
         // Create some versions
         for i in 0..5 {
             let tx = tm.begin(IsolationLevel::RepeatableRead).unwrap();
-            tm.write(tx, key.clone(), format!("v{}", i).into_bytes()).unwrap();
+            tm.write(tx, key.clone(), format!("v{}", i).into_bytes())
+                .unwrap();
             tm.commit(tx).unwrap();
         }
 

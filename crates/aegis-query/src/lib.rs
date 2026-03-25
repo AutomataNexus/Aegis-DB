@@ -13,16 +13,18 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-pub mod parser;
-pub mod ast;
 pub mod analyzer;
-pub mod planner;
+pub mod ast;
 pub mod executor;
 pub mod index;
+pub mod parser;
+pub mod planner;
 
-pub use parser::Parser;
-pub use ast::*;
 pub use analyzer::Analyzer;
-pub use planner::{QueryPlan, Planner};
+pub use ast::*;
 pub use executor::Executor;
-pub use index::{BTreeIndex, HashIndex, IndexType, IndexKey, IndexValue, TableIndexManager, IndexError};
+pub use index::{
+    BTreeIndex, HashIndex, IndexError, IndexKey, IndexType, IndexValue, TableIndexManager,
+};
+pub use parser::Parser;
+pub use planner::{Planner, QueryPlan};

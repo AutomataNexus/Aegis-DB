@@ -164,12 +164,11 @@ impl Value {
 
         match self {
             Self::Object(obj) => obj.get(key).and_then(|v| v.get_path_parts(rest)),
-            Self::Array(arr) => {
-                key.parse::<usize>()
-                    .ok()
-                    .and_then(|idx| arr.get(idx))
-                    .and_then(|v| v.get_path_parts(rest))
-            }
+            Self::Array(arr) => key
+                .parse::<usize>()
+                .ok()
+                .and_then(|idx| arr.get(idx))
+                .and_then(|v| v.get_path_parts(rest)),
             _ => None,
         }
     }
@@ -190,9 +189,11 @@ impl Value {
             }
             JsonValue::String(s) => Self::String(s),
             JsonValue::Array(arr) => Self::Array(arr.into_iter().map(Self::from_json).collect()),
-            JsonValue::Object(obj) => {
-                Self::Object(obj.into_iter().map(|(k, v)| (k, Self::from_json(v))).collect())
-            }
+            JsonValue::Object(obj) => Self::Object(
+                obj.into_iter()
+                    .map(|(k, v)| (k, Self::from_json(v)))
+                    .collect(),
+            ),
         }
     }
 
@@ -202,11 +203,9 @@ impl Value {
             Self::Null => JsonValue::Null,
             Self::Bool(b) => JsonValue::Bool(*b),
             Self::Int(n) => JsonValue::Number((*n).into()),
-            Self::Float(f) => {
-                serde_json::Number::from_f64(*f)
-                    .map(JsonValue::Number)
-                    .unwrap_or(JsonValue::Null)
-            }
+            Self::Float(f) => serde_json::Number::from_f64(*f)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null),
             Self::String(s) => JsonValue::String(s.clone()),
             Self::Array(arr) => JsonValue::Array(arr.iter().map(|v| v.to_json()).collect()),
             Self::Object(obj) => {
@@ -215,7 +214,6 @@ impl Value {
         }
     }
 }
-
 
 impl From<bool> for Value {
     fn from(b: bool) -> Self {
@@ -262,6 +260,34 @@ impl From<Vec<Value>> for Value {
 impl From<HashMap<String, Value>> for Value {
     fn from(obj: HashMap<String, Value>) -> Self {
         Self::Object(obj)
+    }
+}
+
+/// Compare two optional Value references for sorting.
+/// None values sort last. Numeric types are compared cross-type.
+pub fn compare_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(va), Some(vb)) => compare_value_inner(va, vb),
+    }
+}
+
+fn compare_value_inner(a: &Value, b: &Value) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Value::Null, Value::Null) => Ordering::Equal,
+        (Value::Null, _) => Ordering::Less,
+        (_, Value::Null) => Ordering::Greater,
+        (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+        (Value::Int(a), Value::Int(b)) => a.cmp(b),
+        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Value::Int(a), Value::Float(b)) => (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Value::Float(a), Value::Int(b)) => a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal),
+        (Value::String(a), Value::String(b)) => a.cmp(b),
+        _ => Ordering::Equal,
     }
 }
 
@@ -353,9 +379,7 @@ impl Document {
     pub fn get(&self, key: &str) -> Option<&Value> {
         if key.contains('.') {
             let parts: Vec<&str> = key.splitn(2, '.').collect();
-            self.data
-                .get(parts[0])
-                .and_then(|v| v.get_path(parts[1]))
+            self.data.get(parts[0]).and_then(|v| v.get_path(parts[1]))
         } else {
             self.data.get(key)
         }

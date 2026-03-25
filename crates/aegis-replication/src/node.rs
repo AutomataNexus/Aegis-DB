@@ -58,8 +58,7 @@ impl From<&str> for NodeId {
 // =============================================================================
 
 /// Status of a node in the cluster.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum NodeStatus {
     /// Node is starting up.
     #[default]
@@ -76,14 +75,12 @@ pub enum NodeStatus {
     Left,
 }
 
-
 // =============================================================================
 // Node Role
 // =============================================================================
 
 /// Role of a node in the Raft cluster.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum NodeRole {
     /// Follower node that replicates from leader.
     #[default]
@@ -93,7 +90,6 @@ pub enum NodeRole {
     /// Leader node that handles writes.
     Leader,
 }
-
 
 // =============================================================================
 // Node Info

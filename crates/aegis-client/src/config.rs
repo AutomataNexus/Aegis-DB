@@ -14,15 +14,13 @@ use std::time::Duration;
 // =============================================================================
 
 /// Complete client configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClientConfig {
     pub connection: ConnectionConfig,
     pub pool: PoolConfig,
     pub retry: RetryConfig,
     pub timeout: TimeoutConfig,
 }
-
 
 impl ClientConfig {
     /// Create a new client configuration.
@@ -44,9 +42,7 @@ impl ClientConfig {
             .strip_prefix("aegis://")
             .ok_or_else(|| ClientError::InvalidUrl("URL must start with aegis://".to_string()))?;
 
-        let (auth_host, path) = url
-            .split_once('/')
-            .unwrap_or((url, ""));
+        let (auth_host, path) = url.split_once('/').unwrap_or((url, ""));
 
         let (auth, host_port) = if auth_host.contains('@') {
             let parts: Vec<&str> = auth_host.splitn(2, '@').collect();
@@ -176,8 +172,7 @@ impl ConnectionConfig {
 // =============================================================================
 
 /// SSL connection mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SslMode {
     Disable,
     #[default]
@@ -186,7 +181,6 @@ pub enum SslMode {
     VerifyCa,
     VerifyFull,
 }
-
 
 impl SslMode {
     pub fn as_str(&self) -> &'static str {
@@ -255,8 +249,7 @@ impl Default for RetryConfig {
 impl RetryConfig {
     /// Calculate delay for a given retry attempt.
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let delay_ms = self.initial_delay.as_millis() as f64
-            * self.multiplier.powi(attempt as i32);
+        let delay_ms = self.initial_delay.as_millis() as f64 * self.multiplier.powi(attempt as i32);
         let delay = Duration::from_millis(delay_ms as u64);
         delay.min(self.max_delay)
     }
@@ -302,7 +295,8 @@ mod tests {
 
     #[test]
     fn test_from_url_simple() {
-        let config = ClientConfig::from_url("aegis://localhost:9090/testdb").expect("Should parse simple URL");
+        let config = ClientConfig::from_url("aegis://localhost:9090/testdb")
+            .expect("Should parse simple URL");
         assert_eq!(config.connection.host, "localhost");
         assert_eq!(config.connection.port, 9090);
         assert_eq!(config.connection.database, "testdb");
@@ -310,7 +304,8 @@ mod tests {
 
     #[test]
     fn test_from_url_with_auth() {
-        let config = ClientConfig::from_url("aegis://user:pass@localhost:9090/testdb").expect("Should parse URL with auth");
+        let config = ClientConfig::from_url("aegis://user:pass@localhost:9090/testdb")
+            .expect("Should parse URL with auth");
         assert_eq!(config.connection.host, "localhost");
         assert_eq!(config.connection.username, Some("user".to_string()));
         assert_eq!(config.connection.password, Some("pass".to_string()));
@@ -318,7 +313,8 @@ mod tests {
 
     #[test]
     fn test_from_url_default_port() {
-        let config = ClientConfig::from_url("aegis://localhost/testdb").expect("Should parse URL with default port");
+        let config = ClientConfig::from_url("aegis://localhost/testdb")
+            .expect("Should parse URL with default port");
         assert_eq!(config.connection.port, 9090);
     }
 

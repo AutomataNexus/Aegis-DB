@@ -107,51 +107,39 @@ impl Filter {
     /// Check if a document matches this filter.
     pub fn matches(&self, doc: &Document) -> bool {
         match self {
-            Self::Eq { field, value } => {
-                doc.get(field).map(|v| v == value).unwrap_or(false)
-            }
-            Self::Ne { field, value } => {
-                doc.get(field).map(|v| v != value).unwrap_or(true)
-            }
-            Self::Gt { field, value } => {
-                doc.get(field)
-                    .map(|v| compare_values(v, value) == Some(std::cmp::Ordering::Greater))
-                    .unwrap_or(false)
-            }
-            Self::Gte { field, value } => {
-                doc.get(field)
-                    .map(|v| {
-                        matches!(
-                            compare_values(v, value),
-                            Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
-                        )
-                    })
-                    .unwrap_or(false)
-            }
-            Self::Lt { field, value } => {
-                doc.get(field)
-                    .map(|v| compare_values(v, value) == Some(std::cmp::Ordering::Less))
-                    .unwrap_or(false)
-            }
-            Self::Lte { field, value } => {
-                doc.get(field)
-                    .map(|v| {
-                        matches!(
-                            compare_values(v, value),
-                            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
-                        )
-                    })
-                    .unwrap_or(false)
-            }
+            Self::Eq { field, value } => doc.get(field).map(|v| v == value).unwrap_or(false),
+            Self::Ne { field, value } => doc.get(field).map(|v| v != value).unwrap_or(true),
+            Self::Gt { field, value } => doc
+                .get(field)
+                .map(|v| compare_values(v, value) == Some(std::cmp::Ordering::Greater))
+                .unwrap_or(false),
+            Self::Gte { field, value } => doc
+                .get(field)
+                .map(|v| {
+                    matches!(
+                        compare_values(v, value),
+                        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                    )
+                })
+                .unwrap_or(false),
+            Self::Lt { field, value } => doc
+                .get(field)
+                .map(|v| compare_values(v, value) == Some(std::cmp::Ordering::Less))
+                .unwrap_or(false),
+            Self::Lte { field, value } => doc
+                .get(field)
+                .map(|v| {
+                    matches!(
+                        compare_values(v, value),
+                        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                    )
+                })
+                .unwrap_or(false),
             Self::In { field, values } => {
-                doc.get(field)
-                    .map(|v| values.contains(v))
-                    .unwrap_or(false)
+                doc.get(field).map(|v| values.contains(v)).unwrap_or(false)
             }
             Self::Nin { field, values } => {
-                doc.get(field)
-                    .map(|v| !values.contains(v))
-                    .unwrap_or(true)
+                doc.get(field).map(|v| !values.contains(v)).unwrap_or(true)
             }
             Self::Exists { field, exists } => doc.contains(field) == *exists,
             Self::Regex { field, pattern } => {
@@ -524,9 +512,7 @@ mod tests {
 
         assert!(query.matches(&doc));
 
-        let query = QueryBuilder::new()
-            .eq("name", "Bob")
-            .build();
+        let query = QueryBuilder::new().eq("name", "Bob").build();
 
         assert!(!query.matches(&doc));
     }

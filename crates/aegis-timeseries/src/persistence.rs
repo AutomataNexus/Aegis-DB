@@ -121,8 +121,8 @@ impl PersistenceManager {
             return Ok(None);
         }
 
-        let data = std::fs::read(&data_path)
-            .map_err(|e| PersistenceError::IoError(e.to_string()))?;
+        let data =
+            std::fs::read(&data_path).map_err(|e| PersistenceError::IoError(e.to_string()))?;
 
         if data.is_empty() {
             return Ok(None);

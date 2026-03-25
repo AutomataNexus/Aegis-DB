@@ -6,10 +6,10 @@
 //! @author AutomataNexus Development Team
 
 use crate::event::{Event, EventFilter};
-use crate::subscriber::SubscriberId;
+use crate::subscriber::{AckMode, SubscriberId};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
-use std::sync::RwLock;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 
 // =============================================================================
@@ -146,43 +146,7 @@ impl Channel {
 
     /// Subscribe to the channel.
     pub fn subscribe(&self, subscriber_id: SubscriberId) -> Result<ChannelReceiver, ChannelError> {
-        let subscribers = self
-            .subscribers
-            .read()
-            .expect("subscribers RwLock poisoned in subscribe (read)");
-        if subscribers.len() >= self.config.max_subscribers {
-            return Err(ChannelError::TooManySubscribers);
-        }
-        drop(subscribers);
-
-        let receiver = self.sender.subscribe();
-
-        {
-            let mut subscribers = self
-                .subscribers
-                .write()
-                .expect("subscribers RwLock poisoned in subscribe (write)");
-            subscribers.insert(
-                subscriber_id.clone(),
-                SubscriberInfo {
-                    filter: None,
-                    subscribed_at: current_timestamp(),
-                },
-            );
-        }
-
-        {
-            let mut stats = self
-                .stats
-                .write()
-                .expect("stats RwLock poisoned in subscribe");
-            stats.subscriber_count += 1;
-        }
-
-        Ok(ChannelReceiver {
-            receiver,
-            filter: None,
-        })
+        self.subscribe_with_ack_mode(subscriber_id, None, AckMode::Auto)
     }
 
     /// Subscribe with a filter.
@@ -191,10 +155,20 @@ impl Channel {
         subscriber_id: SubscriberId,
         filter: EventFilter,
     ) -> Result<ChannelReceiver, ChannelError> {
+        self.subscribe_with_ack_mode(subscriber_id, Some(filter), AckMode::Auto)
+    }
+
+    /// Subscribe with a specific ack mode.
+    pub fn subscribe_with_ack_mode(
+        &self,
+        subscriber_id: SubscriberId,
+        filter: Option<EventFilter>,
+        ack_mode: AckMode,
+    ) -> Result<ChannelReceiver, ChannelError> {
         let subscribers = self
             .subscribers
             .read()
-            .expect("subscribers RwLock poisoned in subscribe_with_filter (read)");
+            .expect("subscribers RwLock poisoned in subscribe_with_ack_mode (read)");
         if subscribers.len() >= self.config.max_subscribers {
             return Err(ChannelError::TooManySubscribers);
         }
@@ -206,11 +180,11 @@ impl Channel {
             let mut subscribers = self
                 .subscribers
                 .write()
-                .expect("subscribers RwLock poisoned in subscribe_with_filter (write)");
+                .expect("subscribers RwLock poisoned in subscribe_with_ack_mode (write)");
             subscribers.insert(
                 subscriber_id.clone(),
                 SubscriberInfo {
-                    filter: Some(filter.clone()),
+                    filter: filter.clone(),
                     subscribed_at: current_timestamp(),
                 },
             );
@@ -220,13 +194,19 @@ impl Channel {
             let mut stats = self
                 .stats
                 .write()
-                .expect("stats RwLock poisoned in subscribe_with_filter");
+                .expect("stats RwLock poisoned in subscribe_with_ack_mode");
             stats.subscriber_count += 1;
         }
 
         Ok(ChannelReceiver {
             receiver,
-            filter: Some(filter),
+            filter,
+            ack_mode,
+            next_offset: 0,
+            ack_state: Arc::new(RwLock::new(AckState {
+                unacked: HashMap::new(),
+                acked: HashSet::new(),
+            })),
         })
     }
 
@@ -278,10 +258,7 @@ impl Channel {
 
     /// Get channel statistics.
     pub fn stats(&self) -> ChannelStats {
-        let stats = self
-            .stats
-            .read()
-            .expect("stats RwLock poisoned in stats");
+        let stats = self.stats.read().expect("stats RwLock poisoned in stats");
         stats.clone()
     }
 
@@ -299,14 +276,42 @@ impl Channel {
 // Channel Receiver
 // =============================================================================
 
+/// Shared state for tracking unacknowledged messages across clones.
+#[derive(Debug)]
+struct AckState {
+    /// Messages that have been delivered but not yet acknowledged, keyed by offset.
+    unacked: HashMap<u64, Event>,
+    /// The set of offsets that have been acknowledged.
+    acked: HashSet<u64>,
+}
+
 /// Receiver for channel events.
 pub struct ChannelReceiver {
     receiver: broadcast::Receiver<Event>,
     filter: Option<EventFilter>,
+    ack_mode: AckMode,
+    /// Monotonically increasing offset assigned to each received message.
+    next_offset: u64,
+    /// Shared ack tracking state (used when ack_mode is Manual).
+    ack_state: Arc<RwLock<AckState>>,
 }
 
 impl ChannelReceiver {
+    /// Get the current ack mode for this receiver.
+    pub fn ack_mode(&self) -> AckMode {
+        self.ack_mode
+    }
+
+    /// Get the next offset that will be assigned (i.e., total messages received so far).
+    pub fn current_offset(&self) -> u64 {
+        self.next_offset
+    }
+
     /// Receive the next event.
+    ///
+    /// When `AckMode::Auto`, messages are automatically acknowledged on receive.
+    /// When `AckMode::Manual`, messages are tracked as unacknowledged and must be
+    /// explicitly acknowledged via [`ack`]. When `AckMode::None`, no tracking is performed.
     pub async fn recv(&mut self) -> Result<Event, ChannelError> {
         loop {
             match self.receiver.recv().await {
@@ -316,6 +321,31 @@ impl ChannelReceiver {
                             continue;
                         }
                     }
+                    let offset = self.next_offset;
+                    self.next_offset += 1;
+
+                    match self.ack_mode {
+                        AckMode::Auto => {
+                            // Auto-ack: record as already acknowledged
+                            let mut state = self
+                                .ack_state
+                                .write()
+                                .expect("ack_state RwLock poisoned in recv");
+                            state.acked.insert(offset);
+                        }
+                        AckMode::Manual => {
+                            // Track as unacked for manual acknowledgment
+                            let mut state = self
+                                .ack_state
+                                .write()
+                                .expect("ack_state RwLock poisoned in recv");
+                            state.unacked.insert(offset, event.clone());
+                        }
+                        AckMode::None => {
+                            // No tracking
+                        }
+                    }
+
                     return Ok(event);
                 }
                 Err(broadcast::error::RecvError::Closed) => {
@@ -338,6 +368,27 @@ impl ChannelReceiver {
                             continue;
                         }
                     }
+                    let offset = self.next_offset;
+                    self.next_offset += 1;
+
+                    match self.ack_mode {
+                        AckMode::Auto => {
+                            let mut state = self
+                                .ack_state
+                                .write()
+                                .expect("ack_state RwLock poisoned in try_recv");
+                            state.acked.insert(offset);
+                        }
+                        AckMode::Manual => {
+                            let mut state = self
+                                .ack_state
+                                .write()
+                                .expect("ack_state RwLock poisoned in try_recv");
+                            state.unacked.insert(offset, event.clone());
+                        }
+                        AckMode::None => {}
+                    }
+
                     return Ok(Some(event));
                 }
                 Err(broadcast::error::TryRecvError::Empty) => {
@@ -351,6 +402,62 @@ impl ChannelReceiver {
                 }
             }
         }
+    }
+
+    /// Acknowledge a message by its offset.
+    ///
+    /// Only meaningful when `AckMode::Manual`. Removes the message from the
+    /// unacknowledged set. Returns an error if the offset is not found.
+    pub fn ack(&self, offset: u64) -> Result<(), ChannelError> {
+        let mut state = self
+            .ack_state
+            .write()
+            .expect("ack_state RwLock poisoned in ack");
+        if state.unacked.remove(&offset).is_some() {
+            state.acked.insert(offset);
+            Ok(())
+        } else if state.acked.contains(&offset) {
+            // Already acked, idempotent
+            Ok(())
+        } else {
+            Err(ChannelError::NotFound(offset))
+        }
+    }
+
+    /// Get the number of unacknowledged messages.
+    pub fn unacked_count(&self) -> usize {
+        let state = self
+            .ack_state
+            .read()
+            .expect("ack_state RwLock poisoned in unacked_count");
+        state.unacked.len()
+    }
+
+    /// Get the number of acknowledged messages.
+    pub fn acked_count(&self) -> usize {
+        let state = self
+            .ack_state
+            .read()
+            .expect("ack_state RwLock poisoned in acked_count");
+        state.acked.len()
+    }
+
+    /// Get all unacknowledged messages for re-delivery.
+    ///
+    /// Returns a vector of (offset, event) pairs for messages that have been
+    /// received but not yet acknowledged.
+    pub fn get_unacked_messages(&self) -> Vec<(u64, Event)> {
+        let state = self
+            .ack_state
+            .read()
+            .expect("ack_state RwLock poisoned in get_unacked_messages");
+        let mut messages: Vec<(u64, Event)> = state
+            .unacked
+            .iter()
+            .map(|(offset, event)| (*offset, event.clone()))
+            .collect();
+        messages.sort_by_key(|(offset, _)| *offset);
+        messages
     }
 }
 
@@ -388,6 +495,8 @@ pub enum ChannelError {
     Closed,
     Lagged(u64),
     SendFailed,
+    /// The message at the given offset was not found in unacked messages.
+    NotFound(u64),
 }
 
 impl std::fmt::Display for ChannelError {
@@ -397,6 +506,9 @@ impl std::fmt::Display for ChannelError {
             Self::Closed => write!(f, "Channel is closed"),
             Self::Lagged(n) => write!(f, "Receiver lagged by {} messages", n),
             Self::SendFailed => write!(f, "Failed to send event"),
+            Self::NotFound(offset) => {
+                write!(f, "Message at offset {} not found in unacked set", offset)
+            }
         }
     }
 }
@@ -455,11 +567,7 @@ mod tests {
         let channel = Channel::with_config("history_test", config);
 
         for i in 0..5 {
-            let event = Event::new(
-                crate::event::EventType::Created,
-                "test",
-                EventData::Int(i),
-            );
+            let event = Event::new(crate::event::EventType::Created, "test", EventData::Int(i));
             channel.publish(event).unwrap();
         }
 
@@ -480,5 +588,148 @@ mod tests {
 
         let result = channel.subscribe(SubscriberId::new("sub3"));
         assert!(matches!(result, Err(ChannelError::TooManySubscribers)));
+    }
+
+    #[tokio::test]
+    async fn test_auto_ack_mode() {
+        use crate::subscriber::AckMode;
+
+        let channel = Channel::new("auto_ack_test");
+        let sub_id = SubscriberId::new("sub1");
+
+        let mut receiver = channel
+            .subscribe_with_ack_mode(sub_id, None, AckMode::Auto)
+            .unwrap();
+
+        assert_eq!(receiver.ack_mode(), AckMode::Auto);
+
+        let event = Event::new(
+            crate::event::EventType::Created,
+            "test",
+            EventData::String("auto".to_string()),
+        );
+        channel.publish(event).unwrap();
+
+        let _received = receiver.recv().await.unwrap();
+
+        // With Auto ack, the message should be immediately acked
+        assert_eq!(receiver.unacked_count(), 0);
+        assert_eq!(receiver.acked_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_manual_ack_mode() {
+        use crate::subscriber::AckMode;
+
+        let channel = Channel::new("manual_ack_test");
+        let sub_id = SubscriberId::new("sub1");
+
+        let mut receiver = channel
+            .subscribe_with_ack_mode(sub_id, None, AckMode::Manual)
+            .unwrap();
+
+        assert_eq!(receiver.ack_mode(), AckMode::Manual);
+
+        // Publish two events
+        for i in 0..2 {
+            let event = Event::new(crate::event::EventType::Created, "test", EventData::Int(i));
+            channel.publish(event).unwrap();
+        }
+
+        // Receive both events
+        let _ev0 = receiver.recv().await.unwrap();
+        let _ev1 = receiver.recv().await.unwrap();
+
+        // Both should be unacked
+        assert_eq!(receiver.unacked_count(), 2);
+        assert_eq!(receiver.acked_count(), 0);
+
+        // Ack the first message (offset 0)
+        receiver.ack(0).unwrap();
+        assert_eq!(receiver.unacked_count(), 1);
+        assert_eq!(receiver.acked_count(), 1);
+
+        // Ack the second message (offset 1)
+        receiver.ack(1).unwrap();
+        assert_eq!(receiver.unacked_count(), 0);
+        assert_eq!(receiver.acked_count(), 2);
+
+        // Acking again is idempotent
+        receiver.ack(0).unwrap();
+        assert_eq!(receiver.acked_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_manual_ack_redelivery() {
+        use crate::subscriber::AckMode;
+
+        let channel = Channel::new("redeliver_test");
+        let sub_id = SubscriberId::new("sub1");
+
+        let mut receiver = channel
+            .subscribe_with_ack_mode(sub_id, None, AckMode::Manual)
+            .unwrap();
+
+        // Publish events
+        for i in 0..3 {
+            let event = Event::new(crate::event::EventType::Created, "test", EventData::Int(i));
+            channel.publish(event).unwrap();
+        }
+
+        // Receive all three
+        let _ev0 = receiver.recv().await.unwrap();
+        let _ev1 = receiver.recv().await.unwrap();
+        let _ev2 = receiver.recv().await.unwrap();
+
+        // Ack only offset 1
+        receiver.ack(1).unwrap();
+
+        // Get unacked messages for re-delivery
+        let unacked = receiver.get_unacked_messages();
+        assert_eq!(unacked.len(), 2);
+        // Should be sorted by offset
+        assert_eq!(unacked[0].0, 0);
+        assert_eq!(unacked[1].0, 2);
+    }
+
+    #[tokio::test]
+    async fn test_ack_not_found() {
+        use crate::subscriber::AckMode;
+
+        let channel = Channel::new("ack_notfound_test");
+        let sub_id = SubscriberId::new("sub1");
+
+        let receiver = channel
+            .subscribe_with_ack_mode(sub_id, None, AckMode::Manual)
+            .unwrap();
+
+        // Acking an offset that was never received
+        let result = receiver.ack(999);
+        assert!(matches!(result, Err(ChannelError::NotFound(999))));
+    }
+
+    #[tokio::test]
+    async fn test_none_ack_mode() {
+        use crate::subscriber::AckMode;
+
+        let channel = Channel::new("none_ack_test");
+        let sub_id = SubscriberId::new("sub1");
+
+        let mut receiver = channel
+            .subscribe_with_ack_mode(sub_id, None, AckMode::None)
+            .unwrap();
+
+        let event = Event::new(
+            crate::event::EventType::Created,
+            "test",
+            EventData::String("none".to_string()),
+        );
+        channel.publish(event).unwrap();
+
+        let _received = receiver.recv().await.unwrap();
+
+        // With None ack mode, no tracking at all
+        assert_eq!(receiver.unacked_count(), 0);
+        assert_eq!(receiver.acked_count(), 0);
     }
 }

@@ -40,7 +40,9 @@ impl Parser {
         let ast = SqlParser::parse_sql(&self.dialect, sql)
             .map_err(|e| AegisError::Parse(e.to_string()))?;
 
-        ast.into_iter().map(|stmt| self.convert_statement(stmt)).collect()
+        ast.into_iter()
+            .map(|stmt| self.convert_statement(stmt))
+            .collect()
     }
 
     /// Parse a single statement.
@@ -53,20 +55,27 @@ impl Parser {
             )));
         }
         // Safe to use expect here: we verified statements.len() == 1 above
-        Ok(statements.into_iter().next().expect("statements verified to have exactly 1 element"))
+        Ok(statements
+            .into_iter()
+            .next()
+            .expect("statements verified to have exactly 1 element"))
     }
 
     fn convert_statement(&self, stmt: sp::Statement) -> Result<Statement> {
         match stmt {
-            sp::Statement::Query(query) => {
-                let select = self.convert_query(*query)?;
-                Ok(Statement::Select(select))
-            }
+            sp::Statement::Query(query) => self.convert_query_to_statement(*query),
             sp::Statement::Insert(insert) => {
                 let insert_stmt = self.convert_insert(insert)?;
                 Ok(Statement::Insert(insert_stmt))
             }
-            sp::Statement::Update { table, assignments, from: _, selection, returning: _, .. } => {
+            sp::Statement::Update {
+                table,
+                assignments,
+                from: _,
+                selection,
+                returning: _,
+                ..
+            } => {
                 let update_stmt = self.convert_update(table, assignments, selection)?;
                 Ok(Statement::Update(update_stmt))
             }
@@ -78,14 +87,19 @@ impl Parser {
                 let create_stmt = self.convert_create_table(create)?;
                 Ok(Statement::CreateTable(create_stmt))
             }
-            sp::Statement::Drop { object_type, if_exists, names, .. } => {
-                self.convert_drop(object_type, if_exists, names)
-            }
+            sp::Statement::Drop {
+                object_type,
+                if_exists,
+                names,
+                ..
+            } => self.convert_drop(object_type, if_exists, names),
             sp::Statement::CreateIndex(create) => {
                 let create_stmt = self.convert_create_index(create)?;
                 Ok(Statement::CreateIndex(create_stmt))
             }
-            sp::Statement::AlterTable { name, operations, .. } => {
+            sp::Statement::AlterTable {
+                name, operations, ..
+            } => {
                 let alter_stmt = self.convert_alter_table(name, operations)?;
                 Ok(Statement::AlterTable(alter_stmt))
             }
@@ -96,6 +110,56 @@ impl Parser {
                 "Unsupported statement type: {:?}",
                 stmt
             ))),
+        }
+    }
+
+    /// Convert a query that may be a set operation into a Statement.
+    /// Returns Statement::SetOperation for UNION/INTERSECT/EXCEPT,
+    /// or Statement::Select for plain SELECTs.
+    fn convert_query_to_statement(&self, query: sp::Query) -> Result<Statement> {
+        if matches!(query.body.as_ref(), sp::SetExpr::SetOperation { .. }) {
+            // Destructure the set operation
+            match *query.body {
+                sp::SetExpr::SetOperation {
+                    op,
+                    set_quantifier,
+                    left,
+                    right,
+                } => {
+                    let op_type = match (op, set_quantifier) {
+                        (sp::SetOperator::Union, sp::SetQuantifier::All) => {
+                            SetOperationType::UnionAll
+                        }
+                        (sp::SetOperator::Union, _) => SetOperationType::Union,
+                        (sp::SetOperator::Intersect, _) => SetOperationType::Intersect,
+                        (sp::SetOperator::Except, _) => SetOperationType::Except,
+                    };
+                    let make_query = |body: Box<sp::SetExpr>| sp::Query {
+                        body,
+                        order_by: None,
+                        limit: None,
+                        offset: None,
+                        fetch: None,
+                        with: None,
+                        limit_by: vec![],
+                        for_clause: None,
+                        settings: None,
+                        format_clause: None,
+                        locks: vec![],
+                    };
+                    let left_stmt = self.convert_query_to_statement(make_query(left))?;
+                    let right_stmt = self.convert_query_to_statement(make_query(right))?;
+                    Ok(Statement::SetOperation(SetOperationStatement {
+                        op: op_type,
+                        left: Box::new(left_stmt),
+                        right: Box::new(right_stmt),
+                    }))
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            let select = self.convert_query(query)?;
+            Ok(Statement::Select(select))
         }
     }
 
@@ -143,10 +207,7 @@ impl Parser {
             .transpose()?
             .unwrap_or_default();
 
-        let limit = query
-            .limit
-            .map(|e| self.extract_limit(e))
-            .transpose()?;
+        let limit = query.limit.map(|e| self.extract_limit(e)).transpose()?;
 
         let offset = query
             .offset
@@ -184,7 +245,9 @@ impl Parser {
     }
 
     fn convert_from(&self, from: &[sp::TableWithJoins]) -> Result<FromClause> {
-        let first = from.first().ok_or_else(|| AegisError::Parse("Empty FROM".to_string()))?;
+        let first = from
+            .first()
+            .ok_or_else(|| AegisError::Parse("Empty FROM".to_string()))?;
 
         let source = self.convert_table_factor(&first.relation)?;
 
@@ -202,7 +265,9 @@ impl Parser {
                 name: name.to_string(),
                 alias: alias.as_ref().map(|a| a.name.value.clone()),
             }),
-            sp::TableFactor::Derived { subquery, alias, .. } => {
+            sp::TableFactor::Derived {
+                subquery, alias, ..
+            } => {
                 let alias_name = alias
                     .as_ref()
                     .map(|a| a.name.value.clone())
@@ -313,7 +378,11 @@ impl Parser {
                 expr: Box::new(self.convert_expr(*expr)?),
                 negated: true,
             }),
-            sp::Expr::InList { expr, list, negated } => Ok(Expression::InList {
+            sp::Expr::InList {
+                expr,
+                list,
+                negated,
+            } => Ok(Expression::InList {
                 expr: Box::new(self.convert_expr(*expr)?),
                 list: list
                     .into_iter()
@@ -321,13 +390,23 @@ impl Parser {
                     .collect::<Result<Vec<_>>>()?,
                 negated,
             }),
-            sp::Expr::Between { expr, low, high, negated } => Ok(Expression::Between {
+            sp::Expr::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => Ok(Expression::Between {
                 expr: Box::new(self.convert_expr(*expr)?),
                 low: Box::new(self.convert_expr(*low)?),
                 high: Box::new(self.convert_expr(*high)?),
                 negated,
             }),
-            sp::Expr::Like { expr, pattern, negated, .. } => Ok(Expression::Like {
+            sp::Expr::Like {
+                expr,
+                pattern,
+                negated,
+                ..
+            } => Ok(Expression::Like {
                 expr: Box::new(self.convert_expr(*expr)?),
                 pattern: Box::new(self.convert_expr(*pattern)?),
                 negated,
@@ -345,14 +424,23 @@ impl Parser {
             sp::Value::Boolean(b) => Literal::Boolean(b),
             sp::Value::Number(n, _) => {
                 if n.contains('.') {
-                    Literal::Float(n.parse().map_err(|_| AegisError::Parse("Invalid float".to_string()))?)
+                    Literal::Float(
+                        n.parse()
+                            .map_err(|_| AegisError::Parse("Invalid float".to_string()))?,
+                    )
                 } else {
-                    Literal::Integer(n.parse().map_err(|_| AegisError::Parse("Invalid integer".to_string()))?)
+                    Literal::Integer(
+                        n.parse()
+                            .map_err(|_| AegisError::Parse("Invalid integer".to_string()))?,
+                    )
                 }
             }
-            sp::Value::SingleQuotedString(s) | sp::Value::DoubleQuotedString(s) => Literal::String(s),
+            sp::Value::SingleQuotedString(s) | sp::Value::DoubleQuotedString(s) => {
+                Literal::String(s)
+            }
             sp::Value::Placeholder(s) if s.starts_with('$') => {
-                let idx: usize = s[1..].parse()
+                let idx: usize = s[1..]
+                    .parse()
                     .map_err(|_| AegisError::Parse(format!("Invalid placeholder: {}", s)))?;
                 return Ok(Expression::Placeholder(idx));
             }
@@ -386,7 +474,10 @@ impl Parser {
             sp::UnaryOperator::Not => Ok(UnaryOperator::Not),
             sp::UnaryOperator::Minus => Ok(UnaryOperator::Negative),
             sp::UnaryOperator::Plus => Ok(UnaryOperator::Positive),
-            _ => Err(AegisError::Parse(format!("Unsupported unary operator: {:?}", op))),
+            _ => Err(AegisError::Parse(format!(
+                "Unsupported unary operator: {:?}",
+                op
+            ))),
         }
     }
 
@@ -440,15 +531,17 @@ impl Parser {
             .into_iter()
             .map(|a| {
                 let column = match a.target {
-                    sp::AssignmentTarget::ColumnName(names) => {
-                        names.0.into_iter().map(|i| i.value).collect::<Vec<_>>().join(".")
-                    }
-                    sp::AssignmentTarget::Tuple(cols) => {
-                        cols.into_iter()
-                            .map(|c| c.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }
+                    sp::AssignmentTarget::ColumnName(names) => names
+                        .0
+                        .into_iter()
+                        .map(|i| i.value)
+                        .collect::<Vec<_>>()
+                        .join("."),
+                    sp::AssignmentTarget::Tuple(cols) => cols
+                        .into_iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 };
                 Ok(Assignment {
                     column,
@@ -468,22 +561,20 @@ impl Parser {
 
     fn convert_delete(&self, delete: sp::Delete) -> Result<DeleteStatement> {
         let table = match delete.from {
-            sp::FromTable::WithFromKeyword(tables) => {
-                tables.first()
-                    .map(|t| match &t.relation {
-                        sp::TableFactor::Table { name, .. } => name.to_string(),
-                        _ => String::new(),
-                    })
-                    .ok_or_else(|| AegisError::Parse("DELETE missing table".to_string()))?
-            }
-            sp::FromTable::WithoutKeyword(tables) => {
-                tables.first()
-                    .map(|t| match &t.relation {
-                        sp::TableFactor::Table { name, .. } => name.to_string(),
-                        _ => String::new(),
-                    })
-                    .ok_or_else(|| AegisError::Parse("DELETE missing table".to_string()))?
-            }
+            sp::FromTable::WithFromKeyword(tables) => tables
+                .first()
+                .map(|t| match &t.relation {
+                    sp::TableFactor::Table { name, .. } => name.to_string(),
+                    _ => String::new(),
+                })
+                .ok_or_else(|| AegisError::Parse("DELETE missing table".to_string()))?,
+            sp::FromTable::WithoutKeyword(tables) => tables
+                .first()
+                .map(|t| match &t.relation {
+                    sp::TableFactor::Table { name, .. } => name.to_string(),
+                    _ => String::new(),
+                })
+                .ok_or_else(|| AegisError::Parse("DELETE missing table".to_string()))?,
         };
 
         let where_clause = delete.selection.map(|e| self.convert_expr(e)).transpose()?;
@@ -502,9 +593,10 @@ impl Parser {
                 Ok(ColumnDefinition {
                     name: col.name.value,
                     data_type: self.convert_data_type(&col.data_type)?,
-                    nullable: !col.options.iter().any(|o| {
-                        matches!(o.option, sp::ColumnOption::NotNull)
-                    }),
+                    nullable: !col
+                        .options
+                        .iter()
+                        .any(|o| matches!(o.option, sp::ColumnOption::NotNull)),
                     default: col
                         .options
                         .iter()
@@ -538,14 +630,12 @@ impl Parser {
             .ok_or_else(|| AegisError::Parse("DROP missing name".to_string()))?;
 
         match object_type {
-            sp::ObjectType::Table => Ok(Statement::DropTable(DropTableStatement {
-                name,
-                if_exists,
-            })),
-            sp::ObjectType::Index => Ok(Statement::DropIndex(DropIndexStatement {
-                name,
-                if_exists,
-            })),
+            sp::ObjectType::Table => {
+                Ok(Statement::DropTable(DropTableStatement { name, if_exists }))
+            }
+            sp::ObjectType::Index => {
+                Ok(Statement::DropIndex(DropIndexStatement { name, if_exists }))
+            }
             _ => Err(AegisError::Parse(format!(
                 "Unsupported DROP object type: {:?}",
                 object_type
@@ -598,9 +688,10 @@ impl Parser {
                 let col = ColumnDefinition {
                     name: column_def.name.value.clone(),
                     data_type: self.convert_data_type(&column_def.data_type)?,
-                    nullable: !column_def.options.iter().any(|o| {
-                        matches!(o.option, sp::ColumnOption::NotNull)
-                    }),
+                    nullable: !column_def
+                        .options
+                        .iter()
+                        .any(|o| matches!(o.option, sp::ColumnOption::NotNull)),
                     default: column_def
                         .options
                         .iter()
@@ -613,75 +704,68 @@ impl Parser {
                 };
                 Ok(AlterTableOperation::AddColumn(col))
             }
-            sp::AlterTableOperation::DropColumn { column_name, if_exists, .. } => {
-                Ok(AlterTableOperation::DropColumn {
-                    name: column_name.value,
-                    if_exists,
-                })
-            }
-            sp::AlterTableOperation::RenameColumn { old_column_name, new_column_name } => {
-                Ok(AlterTableOperation::RenameColumn {
-                    old_name: old_column_name.value,
-                    new_name: new_column_name.value,
-                })
-            }
+            sp::AlterTableOperation::DropColumn {
+                column_name,
+                if_exists,
+                ..
+            } => Ok(AlterTableOperation::DropColumn {
+                name: column_name.value,
+                if_exists,
+            }),
+            sp::AlterTableOperation::RenameColumn {
+                old_column_name,
+                new_column_name,
+            } => Ok(AlterTableOperation::RenameColumn {
+                old_name: old_column_name.value,
+                new_name: new_column_name.value,
+            }),
             sp::AlterTableOperation::RenameTable { table_name } => {
                 Ok(AlterTableOperation::RenameTable {
                     new_name: table_name.to_string(),
                 })
             }
-            sp::AlterTableOperation::AlterColumn { column_name, op } => {
-                match op {
-                    sp::AlterColumnOperation::SetDataType { data_type, .. } => {
-                        Ok(AlterTableOperation::AlterColumn {
-                            name: column_name.value,
-                            data_type: Some(self.convert_data_type(&data_type)?),
-                            set_not_null: None,
-                            set_default: None,
-                        })
-                    }
-                    sp::AlterColumnOperation::SetNotNull => {
-                        Ok(AlterTableOperation::AlterColumn {
-                            name: column_name.value,
-                            data_type: None,
-                            set_not_null: Some(true),
-                            set_default: None,
-                        })
-                    }
-                    sp::AlterColumnOperation::DropNotNull => {
-                        Ok(AlterTableOperation::AlterColumn {
-                            name: column_name.value,
-                            data_type: None,
-                            set_not_null: Some(false),
-                            set_default: None,
-                        })
-                    }
-                    sp::AlterColumnOperation::SetDefault { value } => {
-                        Ok(AlterTableOperation::AlterColumn {
-                            name: column_name.value,
-                            data_type: None,
-                            set_not_null: None,
-                            set_default: Some(Some(self.convert_expr(value)?)),
-                        })
-                    }
-                    sp::AlterColumnOperation::DropDefault => {
-                        Ok(AlterTableOperation::AlterColumn {
-                            name: column_name.value,
-                            data_type: None,
-                            set_not_null: None,
-                            set_default: Some(None),
-                        })
-                    }
-                    _ => Err(AegisError::Parse(format!(
-                        "Unsupported ALTER COLUMN operation: {:?}",
-                        op
-                    ))),
+            sp::AlterTableOperation::AlterColumn { column_name, op } => match op {
+                sp::AlterColumnOperation::SetDataType { data_type, .. } => {
+                    Ok(AlterTableOperation::AlterColumn {
+                        name: column_name.value,
+                        data_type: Some(self.convert_data_type(&data_type)?),
+                        set_not_null: None,
+                        set_default: None,
+                    })
                 }
-            }
+                sp::AlterColumnOperation::SetNotNull => Ok(AlterTableOperation::AlterColumn {
+                    name: column_name.value,
+                    data_type: None,
+                    set_not_null: Some(true),
+                    set_default: None,
+                }),
+                sp::AlterColumnOperation::DropNotNull => Ok(AlterTableOperation::AlterColumn {
+                    name: column_name.value,
+                    data_type: None,
+                    set_not_null: Some(false),
+                    set_default: None,
+                }),
+                sp::AlterColumnOperation::SetDefault { value } => {
+                    Ok(AlterTableOperation::AlterColumn {
+                        name: column_name.value,
+                        data_type: None,
+                        set_not_null: None,
+                        set_default: Some(Some(self.convert_expr(value)?)),
+                    })
+                }
+                sp::AlterColumnOperation::DropDefault => Ok(AlterTableOperation::AlterColumn {
+                    name: column_name.value,
+                    data_type: None,
+                    set_not_null: None,
+                    set_default: Some(None),
+                }),
+                _ => Err(AegisError::Parse(format!(
+                    "Unsupported ALTER COLUMN operation: {:?}",
+                    op
+                ))),
+            },
             sp::AlterTableOperation::DropConstraint { name, .. } => {
-                Ok(AlterTableOperation::DropConstraint {
-                    name: name.value,
-                })
+                Ok(AlterTableOperation::DropConstraint { name: name.value })
             }
             _ => Err(AegisError::Parse(format!(
                 "Unsupported ALTER TABLE operation: {:?}",
@@ -710,21 +794,23 @@ impl Parser {
                 Ok(DataType::Decimal { precision, scale })
             }
             sp::DataType::Char(len) => {
-                let size = len.as_ref().and_then(|l| {
-                    match l {
+                let size = len
+                    .as_ref()
+                    .and_then(|l| match l {
                         sp::CharacterLength::IntegerLength { length, .. } => Some(*length as u16),
                         sp::CharacterLength::Max => None,
-                    }
-                }).unwrap_or(1);
+                    })
+                    .unwrap_or(1);
                 Ok(DataType::Char(size))
             }
             sp::DataType::Varchar(len) => {
-                let size = len.as_ref().and_then(|l| {
-                    match l {
+                let size = len
+                    .as_ref()
+                    .and_then(|l| match l {
                         sp::CharacterLength::IntegerLength { length, .. } => Some(*length as u16),
                         sp::CharacterLength::Max => None,
-                    }
-                }).unwrap_or(255);
+                    })
+                    .unwrap_or(255);
                 Ok(DataType::Varchar(size))
             }
             sp::DataType::Text => Ok(DataType::Text),
@@ -734,7 +820,10 @@ impl Parser {
             sp::DataType::Timestamp(..) => Ok(DataType::Timestamp),
             sp::DataType::JSON => Ok(DataType::Json),
             sp::DataType::Uuid => Ok(DataType::Uuid),
-            _ => Err(AegisError::Parse(format!("Unsupported data type: {:?}", dt))),
+            _ => Err(AegisError::Parse(format!(
+                "Unsupported data type: {:?}",
+                dt
+            ))),
         }
     }
 
@@ -818,7 +907,10 @@ mod tests {
         match stmt {
             Statement::Insert(insert) => {
                 assert_eq!(insert.table, "users");
-                assert_eq!(insert.columns, Some(vec!["name".to_string(), "age".to_string()]));
+                assert_eq!(
+                    insert.columns,
+                    Some(vec!["name".to_string(), "age".to_string()])
+                );
             }
             _ => panic!("Expected INSERT statement"),
         }
@@ -885,8 +977,79 @@ mod tests {
     fn test_parse_transaction_statements() {
         let parser = Parser::new();
 
-        assert!(matches!(parser.parse_single("BEGIN").unwrap(), Statement::Begin));
-        assert!(matches!(parser.parse_single("COMMIT").unwrap(), Statement::Commit));
-        assert!(matches!(parser.parse_single("ROLLBACK").unwrap(), Statement::Rollback));
+        assert!(matches!(
+            parser.parse_single("BEGIN").unwrap(),
+            Statement::Begin
+        ));
+        assert!(matches!(
+            parser.parse_single("COMMIT").unwrap(),
+            Statement::Commit
+        ));
+        assert!(matches!(
+            parser.parse_single("ROLLBACK").unwrap(),
+            Statement::Rollback
+        ));
+    }
+
+    #[test]
+    fn test_parse_union() {
+        let parser = Parser::new();
+        let stmt = parser
+            .parse_single("SELECT id FROM users UNION SELECT id FROM orders")
+            .unwrap();
+
+        match stmt {
+            Statement::SetOperation(set_op) => {
+                assert_eq!(set_op.op, SetOperationType::Union);
+                assert!(matches!(*set_op.left, Statement::Select(_)));
+                assert!(matches!(*set_op.right, Statement::Select(_)));
+            }
+            _ => panic!("Expected SetOperation statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_union_all() {
+        let parser = Parser::new();
+        let stmt = parser
+            .parse_single("SELECT id FROM users UNION ALL SELECT id FROM orders")
+            .unwrap();
+
+        match stmt {
+            Statement::SetOperation(set_op) => {
+                assert_eq!(set_op.op, SetOperationType::UnionAll);
+            }
+            _ => panic!("Expected SetOperation statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_intersect() {
+        let parser = Parser::new();
+        let stmt = parser
+            .parse_single("SELECT id FROM users INTERSECT SELECT id FROM orders")
+            .unwrap();
+
+        match stmt {
+            Statement::SetOperation(set_op) => {
+                assert_eq!(set_op.op, SetOperationType::Intersect);
+            }
+            _ => panic!("Expected SetOperation statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_except() {
+        let parser = Parser::new();
+        let stmt = parser
+            .parse_single("SELECT id FROM users EXCEPT SELECT id FROM orders")
+            .unwrap();
+
+        match stmt {
+            Statement::SetOperation(set_op) => {
+                assert_eq!(set_op.op, SetOperationType::Except);
+            }
+            _ => panic!("Expected SetOperation statement"),
+        }
     }
 }

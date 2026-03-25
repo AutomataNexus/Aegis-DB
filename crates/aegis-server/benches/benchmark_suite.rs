@@ -6,9 +6,7 @@
 //!
 //! Run: cargo bench -p aegis-server
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::*;
 use serde_json::json;
 use std::sync::Arc;
@@ -32,28 +30,19 @@ fn new_state() -> Arc<AppState> {
 
 fn setup_accounts_table(engine: &QueryEngine, count: usize) {
     engine
-        .execute(
-            "CREATE TABLE accounts (id INT, balance INT)",
-            None,
-        )
+        .execute("CREATE TABLE accounts (id INT, balance INT)", None)
         .expect("create accounts table");
 
     // Batch insert accounts — each with balance of 10000
     for i in 0..count {
         engine
-            .execute(
-                &format!("INSERT INTO accounts VALUES ({}, 10000)", i),
-                None,
-            )
+            .execute(&format!("INSERT INTO accounts VALUES ({}, 10000)", i), None)
             .expect("insert account");
     }
 
     // Create index on id column for O(log n) lookups instead of O(n) scans
     engine
-        .execute(
-            "CREATE INDEX idx_accounts_id ON accounts(id)",
-            None,
-        )
+        .execute("CREATE INDEX idx_accounts_id ON accounts(id)", None)
         .expect("create accounts index");
 }
 
@@ -87,7 +76,10 @@ fn sql_insert_benchmark(c: &mut Criterion) {
     group.bench_function("single_row", |b| {
         let engine = new_engine();
         engine
-            .execute("CREATE TABLE insert_test (id INT, name VARCHAR(100), value INT)", None)
+            .execute(
+                "CREATE TABLE insert_test (id INT, name VARCHAR(100), value INT)",
+                None,
+            )
             .unwrap();
         let mut counter = 0u64;
 
@@ -222,16 +214,26 @@ fn fund_transfer_benchmark(c: &mut Criterion) {
             let receiver_val = Value::Integer(receiver as i64);
 
             // Debit sender: balance = balance - 1
-            executor.execute_update_indexed_fn(
-                "accounts", "id", &sender_val, balance_col_idx,
-                |v| if let Value::Integer(n) = v { Value::Integer(n - 1) } else { v.clone() },
-            ).unwrap();
+            executor
+                .execute_update_indexed_fn("accounts", "id", &sender_val, balance_col_idx, |v| {
+                    if let Value::Integer(n) = v {
+                        Value::Integer(n - 1)
+                    } else {
+                        v.clone()
+                    }
+                })
+                .unwrap();
 
             // Credit receiver: balance = balance + 1
-            executor.execute_update_indexed_fn(
-                "accounts", "id", &receiver_val, balance_col_idx,
-                |v| if let Value::Integer(n) = v { Value::Integer(n + 1) } else { v.clone() },
-            ).unwrap();
+            executor
+                .execute_update_indexed_fn("accounts", "id", &receiver_val, balance_col_idx, |v| {
+                    if let Value::Integer(n) = v {
+                        Value::Integer(n + 1)
+                    } else {
+                        v.clone()
+                    }
+                })
+                .unwrap();
 
             black_box(());
         });
@@ -257,16 +259,26 @@ fn fund_transfer_benchmark(c: &mut Criterion) {
             let receiver_val = Value::Integer(receiver as i64);
 
             // Debit sender: balance = balance - 1
-            executor.execute_update_indexed_fn(
-                "accounts", "id", &sender_val, balance_col_idx,
-                |v| if let Value::Integer(n) = v { Value::Integer(n - 1) } else { v.clone() },
-            ).unwrap();
+            executor
+                .execute_update_indexed_fn("accounts", "id", &sender_val, balance_col_idx, |v| {
+                    if let Value::Integer(n) = v {
+                        Value::Integer(n - 1)
+                    } else {
+                        v.clone()
+                    }
+                })
+                .unwrap();
 
             // Credit receiver: balance = balance + 1
-            executor.execute_update_indexed_fn(
-                "accounts", "id", &receiver_val, balance_col_idx,
-                |v| if let Value::Integer(n) = v { Value::Integer(n + 1) } else { v.clone() },
-            ).unwrap();
+            executor
+                .execute_update_indexed_fn("accounts", "id", &receiver_val, balance_col_idx, |v| {
+                    if let Value::Integer(n) = v {
+                        Value::Integer(n + 1)
+                    } else {
+                        v.clone()
+                    }
+                })
+                .unwrap();
 
             black_box(());
         });
@@ -291,21 +303,17 @@ fn kv_benchmark(c: &mut Criterion) {
             _ => "unknown",
         };
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("set", label),
-            &value_size,
-            |b, &size| {
-                let store = KvStore::new();
-                let value_str: String = "x".repeat(size);
-                let mut counter = 0u64;
+        group.bench_with_input(BenchmarkId::new("set", label), &value_size, |b, &size| {
+            let store = KvStore::new();
+            let value_str: String = "x".repeat(size);
+            let mut counter = 0u64;
 
-                b.iter(|| {
-                    counter += 1;
-                    let key = format!("key_{}", counter);
-                    black_box(store.set(key, json!(value_str), None));
-                });
-            },
-        );
+            b.iter(|| {
+                counter += 1;
+                let key = format!("key_{}", counter);
+                black_box(store.set(key, json!(value_str), None));
+            });
+        });
     }
 
     // KV Get (from pre-populated store)
@@ -317,25 +325,21 @@ fn kv_benchmark(c: &mut Criterion) {
             _ => "unknown",
         };
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("get", label),
-            &value_size,
-            |b, &size| {
-                let store = KvStore::new();
-                let value_str: String = "x".repeat(size);
+        group.bench_with_input(BenchmarkId::new("get", label), &value_size, |b, &size| {
+            let store = KvStore::new();
+            let value_str: String = "x".repeat(size);
 
-                // Pre-populate 10k keys
-                for i in 0..10_000 {
-                    store.set(format!("key_{}", i), json!(value_str), None);
-                }
+            // Pre-populate 10k keys
+            for i in 0..10_000 {
+                store.set(format!("key_{}", i), json!(value_str), None);
+            }
 
-                let mut rng = StdRng::seed_from_u64(42);
-                b.iter(|| {
-                    let key = format!("key_{}", rng.gen_range(0..10_000));
-                    black_box(store.get(&key));
-                });
-            },
-        );
+            let mut rng = StdRng::seed_from_u64(42);
+            b.iter(|| {
+                let key = format!("key_{}", rng.gen_range(0..10_000));
+                black_box(store.get(&key));
+            });
+        });
     }
 
     // KV Delete
@@ -384,10 +388,7 @@ fn concurrent_mixed_benchmark(c: &mut Criterion) {
                         .unwrap();
                     for i in 0..1000 {
                         s.query_engine
-                            .execute(
-                                &format!("INSERT INTO mixed VALUES ({}, {})", i, i),
-                                None,
-                            )
+                            .execute(&format!("INSERT INTO mixed VALUES ({}, {})", i, i), None)
                             .unwrap();
                     }
                     s
@@ -405,10 +406,7 @@ fn concurrent_mixed_benchmark(c: &mut Criterion) {
                                 for _ in 0..ops_per_task {
                                     if rng.gen_ratio(80, 100) {
                                         let id = rng.gen_range(0..1000);
-                                        let sql = format!(
-                                            "SELECT * FROM mixed WHERE id = {}",
-                                            id
-                                        );
+                                        let sql = format!("SELECT * FROM mixed WHERE id = {}", id);
                                         let _ = s.query_engine.execute(&sql, None);
                                     } else {
                                         let id = rng.gen_range(0..1000);

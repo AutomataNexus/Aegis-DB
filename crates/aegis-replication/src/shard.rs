@@ -40,8 +40,7 @@ impl std::fmt::Display for ShardId {
 // =============================================================================
 
 /// State of a shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ShardState {
     /// Shard is being created.
     #[default]
@@ -59,7 +58,6 @@ pub enum ShardState {
     /// Shard is being deleted.
     Deleting,
 }
-
 
 // =============================================================================
 // Shard
@@ -217,14 +215,17 @@ impl ShardManager {
     pub fn create_shard(&self, id: ShardId, primary_node: NodeId) -> Shard {
         let shard = Shard::new(id.clone(), primary_node.clone());
 
-        let mut shards = self.shards.write().expect("shard manager shards lock poisoned");
+        let mut shards = self
+            .shards
+            .write()
+            .expect("shard manager shards lock poisoned");
         shards.insert(id.clone(), shard.clone());
 
-        let mut node_shards = self.node_shards.write().expect("shard manager node_shards lock poisoned");
-        node_shards
-            .entry(primary_node)
-            .or_default()
-            .push(id);
+        let mut node_shards = self
+            .node_shards
+            .write()
+            .expect("shard manager node_shards lock poisoned");
+        node_shards.entry(primary_node).or_default().push(id);
 
         shard
     }
@@ -239,26 +240,38 @@ impl ShardManager {
     ) -> Shard {
         let shard = Shard::with_range(id.clone(), primary_node.clone(), start, end);
 
-        let mut shards = self.shards.write().expect("shard manager shards lock poisoned");
+        let mut shards = self
+            .shards
+            .write()
+            .expect("shard manager shards lock poisoned");
         shards.insert(id.clone(), shard.clone());
 
-        let mut node_shards = self.node_shards.write().expect("shard manager node_shards lock poisoned");
-        node_shards
-            .entry(primary_node)
-            .or_default()
-            .push(id);
+        let mut node_shards = self
+            .node_shards
+            .write()
+            .expect("shard manager node_shards lock poisoned");
+        node_shards.entry(primary_node).or_default().push(id);
 
         shard
     }
 
     /// Get a shard by ID.
     pub fn get_shard(&self, id: &ShardId) -> Option<Shard> {
-        self.shards.read().expect("shard manager shards lock poisoned").get(id).cloned()
+        self.shards
+            .read()
+            .expect("shard manager shards lock poisoned")
+            .get(id)
+            .cloned()
     }
 
     /// Get all shards.
     pub fn get_all_shards(&self) -> Vec<Shard> {
-        self.shards.read().expect("shard manager shards lock poisoned").values().cloned().collect()
+        self.shards
+            .read()
+            .expect("shard manager shards lock poisoned")
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Get shards for a node.
@@ -273,7 +286,10 @@ impl ShardManager {
 
     /// Update shard state.
     pub fn update_shard_state(&self, id: &ShardId, state: ShardState) -> bool {
-        let mut shards = self.shards.write().expect("shard manager shards lock poisoned");
+        let mut shards = self
+            .shards
+            .write()
+            .expect("shard manager shards lock poisoned");
         if let Some(shard) = shards.get_mut(id) {
             shard.set_state(state);
             true
@@ -284,11 +300,17 @@ impl ShardManager {
 
     /// Add a replica to a shard.
     pub fn add_replica(&self, shard_id: &ShardId, node_id: NodeId) -> bool {
-        let mut shards = self.shards.write().expect("shard manager shards lock poisoned");
+        let mut shards = self
+            .shards
+            .write()
+            .expect("shard manager shards lock poisoned");
         if let Some(shard) = shards.get_mut(shard_id) {
             shard.add_replica(node_id.clone());
 
-            let mut node_shards = self.node_shards.write().expect("shard manager node_shards lock poisoned");
+            let mut node_shards = self
+                .node_shards
+                .write()
+                .expect("shard manager node_shards lock poisoned");
             node_shards
                 .entry(node_id)
                 .or_default()
@@ -302,10 +324,16 @@ impl ShardManager {
 
     /// Remove a shard.
     pub fn remove_shard(&self, id: &ShardId) -> Option<Shard> {
-        let mut shards = self.shards.write().expect("shard manager shards lock poisoned");
+        let mut shards = self
+            .shards
+            .write()
+            .expect("shard manager shards lock poisoned");
         let shard = shards.remove(id)?;
 
-        let mut node_shards = self.node_shards.write().expect("shard manager node_shards lock poisoned");
+        let mut node_shards = self
+            .node_shards
+            .write()
+            .expect("shard manager node_shards lock poisoned");
 
         // Remove from primary
         if let Some(shards) = node_shards.get_mut(&shard.primary_node) {
@@ -324,7 +352,10 @@ impl ShardManager {
 
     /// Get the shard for a key hash.
     pub fn get_shard_for_key(&self, key_hash: u64) -> Option<Shard> {
-        let shards = self.shards.read().expect("shard manager shards lock poisoned");
+        let shards = self
+            .shards
+            .read()
+            .expect("shard manager shards lock poisoned");
 
         // Simple modulo-based shard selection
         let shard_id = ShardId::new((key_hash % self.num_shards as u64) as u32);
@@ -344,7 +375,10 @@ impl ShardManager {
 
     /// Get shard count.
     pub fn shard_count(&self) -> usize {
-        self.shards.read().expect("shard manager shards lock poisoned").len()
+        self.shards
+            .read()
+            .expect("shard manager shards lock poisoned")
+            .len()
     }
 
     /// Initialize shards for a set of nodes.
@@ -382,7 +416,10 @@ impl ShardManager {
 
     /// Get shard statistics.
     pub fn stats(&self) -> ShardManagerStats {
-        let shards = self.shards.read().expect("shard manager shards lock poisoned");
+        let shards = self
+            .shards
+            .read()
+            .expect("shard manager shards lock poisoned");
 
         let active = shards.values().filter(|s| s.is_active()).count();
         let migrating = shards

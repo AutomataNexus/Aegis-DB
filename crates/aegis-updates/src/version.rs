@@ -70,20 +70,16 @@ mod tests {
 
     #[test]
     fn test_cluster_consistent() {
-        let info = ClusterVersionInfo::from_nodes(vec![
-            make_node("a", "0.1.8"),
-            make_node("b", "0.1.8"),
-        ]);
+        let info =
+            ClusterVersionInfo::from_nodes(vec![make_node("a", "0.1.8"), make_node("b", "0.1.8")]);
         assert!(info.consistent);
         assert_eq!(info.distinct_versions(), vec!["0.1.8"]);
     }
 
     #[test]
     fn test_cluster_inconsistent() {
-        let info = ClusterVersionInfo::from_nodes(vec![
-            make_node("a", "0.1.8"),
-            make_node("b", "0.1.9"),
-        ]);
+        let info =
+            ClusterVersionInfo::from_nodes(vec![make_node("a", "0.1.8"), make_node("b", "0.1.9")]);
         assert!(!info.consistent);
         assert_eq!(info.distinct_versions(), vec!["0.1.8", "0.1.9"]);
     }

@@ -15,34 +15,41 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-pub mod raft;
-pub mod log;
-pub mod state;
-pub mod node;
 pub mod cluster;
-pub mod transport;
-pub mod http_transport;
+pub mod crdt;
 pub mod engine;
 pub mod hash;
-pub mod shard;
+pub mod http_transport;
+pub mod log;
+pub mod node;
 pub mod partition;
+pub mod raft;
 pub mod router;
+pub mod shard;
+pub mod state;
 pub mod transaction;
+pub mod transport;
 pub mod vector_clock;
-pub mod crdt;
 
-pub use raft::{RaftNode, RaftState, RaftConfig};
-pub use log::{LogEntry, LogIndex, ReplicatedLog};
-pub use state::{StateMachine, StateMachineBackend, DatabaseStateMachine, DatabaseOperationHandler, NoOpDatabaseHandler, Command, CommandType, CommandResult, Snapshot};
-pub use node::{NodeId, NodeInfo, NodeStatus};
 pub use cluster::{Cluster, ClusterConfig, ClusterState};
-pub use transport::{Message, MessageType, Transport};
-pub use http_transport::HttpTransport;
+pub use crdt::{GCounter, GSet, LWWMap, LWWRegister, MVRegister, ORSet, PNCounter, TwoPSet, CRDT};
 pub use engine::ReplicationEngine;
 pub use hash::{ConsistentHash, HashRing, VirtualNode};
+pub use http_transport::HttpTransport;
+pub use log::{LogEntry, LogIndex, ReplicatedLog};
+pub use node::{NodeId, NodeInfo, NodeStatus};
+pub use partition::{PartitionKey, PartitionRange, PartitionStrategy};
+pub use raft::{RaftConfig, RaftNode, RaftState};
+pub use router::{RouteDecision, RoutingTable, ShardRouter};
 pub use shard::{Shard, ShardId, ShardManager, ShardState};
-pub use partition::{PartitionKey, PartitionStrategy, PartitionRange};
-pub use router::{ShardRouter, RoutingTable, RouteDecision};
-pub use transaction::{TransactionId, TransactionState, TransactionCoordinator, DistributedTransaction};
-pub use vector_clock::{VectorClock, VectorClockOrdering, HybridClock, HybridTimestamp, LamportClock};
-pub use crdt::{CRDT, GCounter, PNCounter, GSet, TwoPSet, LWWRegister, MVRegister, ORSet, LWWMap};
+pub use state::{
+    Command, CommandResult, CommandType, DatabaseOperationHandler, DatabaseStateMachine,
+    NoOpDatabaseHandler, Snapshot, StateMachine, StateMachineBackend,
+};
+pub use transaction::{
+    DistributedTransaction, TransactionCoordinator, TransactionId, TransactionState,
+};
+pub use transport::{Message, MessageType, Transport};
+pub use vector_clock::{
+    HybridClock, HybridTimestamp, LamportClock, VectorClock, VectorClockOrdering,
+};
