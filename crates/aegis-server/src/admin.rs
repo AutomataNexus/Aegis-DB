@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
-use sysinfo::{System, Disks};
+use sysinfo::{Disks, System};
 
 // =============================================================================
 // Cluster Info
@@ -495,7 +495,13 @@ impl AdminService {
     }
 
     /// Create admin service with custom node config.
-    pub fn with_config(node_id: &str, node_name: Option<String>, bind_address: &str, cluster_name: &str, peers: Vec<String>) -> Self {
+    pub fn with_config(
+        node_id: &str,
+        node_name: Option<String>,
+        bind_address: &str,
+        cluster_name: &str,
+        peers: Vec<String>,
+    ) -> Self {
         Self {
             start_time: std::time::Instant::now(),
             node_id: node_id.to_string(),
@@ -532,12 +538,18 @@ impl AdminService {
 
     /// Get configured peer addresses.
     pub fn peer_addresses(&self) -> Vec<String> {
-        self.peer_addresses.read().expect("peer_addresses lock poisoned").clone()
+        self.peer_addresses
+            .read()
+            .expect("peer_addresses lock poisoned")
+            .clone()
     }
 
     /// Add a peer address.
     pub fn add_peer_address(&self, address: String) {
-        let mut addrs = self.peer_addresses.write().expect("peer_addresses lock poisoned");
+        let mut addrs = self
+            .peer_addresses
+            .write()
+            .expect("peer_addresses lock poisoned");
         if !addrs.contains(&address) && address != self.bind_address {
             addrs.push(address);
         }
@@ -547,7 +559,10 @@ impl AdminService {
     pub fn register_peer(&self, peer: PeerNode) {
         let mut peers = self.peers.write().expect("peers lock poisoned");
         // Update if exists, otherwise add
-        if let Some(existing) = peers.iter_mut().find(|p| p.id == peer.id || p.address == peer.address) {
+        if let Some(existing) = peers
+            .iter_mut()
+            .find(|p| p.id == peer.id || p.address == peer.address)
+        {
             *existing = peer;
         } else {
             peers.push(peer);
@@ -576,9 +591,14 @@ impl AdminService {
     /// Get node info for this node (for peer registration).
     pub fn get_self_info(&self) -> PeerNode {
         let uptime = self.start_time.elapsed().as_secs();
-        let (cpu_usage, memory_used, memory_total, disk_used, disk_total) = self.get_system_metrics();
+        let (cpu_usage, memory_used, memory_total, disk_used, disk_total) =
+            self.get_system_metrics();
         let total_queries = self.total_queries.load(Ordering::Relaxed);
-        let qps = if uptime > 0 { total_queries as f64 / uptime as f64 } else { 0.0 };
+        let qps = if uptime > 0 {
+            total_queries as f64 / uptime as f64
+        } else {
+            0.0
+        };
         let (p50, p90, p95, p99, max) = self.calculate_latency_percentiles();
 
         PeerNode {
@@ -614,7 +634,8 @@ impl AdminService {
     /// Record a query execution for statistics.
     pub fn record_query(&self, duration_ms: f64, success: bool) {
         self.total_queries.fetch_add(1, Ordering::Relaxed);
-        self.total_query_time_ns.fetch_add((duration_ms * 1_000_000.0) as u64, Ordering::Relaxed);
+        self.total_query_time_ns
+            .fetch_add((duration_ms * 1_000_000.0) as u64, Ordering::Relaxed);
 
         if !success {
             self.failed_queries.fetch_add(1, Ordering::Relaxed);
@@ -657,19 +678,28 @@ impl AdminService {
         sys.refresh_all();
 
         // Get CPU usage (average across all CPUs)
-        let cpu_usage = sys.cpus().iter()
+        let cpu_usage = sys
+            .cpus()
+            .iter()
             .map(|cpu| cpu.cpu_usage() as f64)
-            .sum::<f64>() / sys.cpus().len().max(1) as f64;
+            .sum::<f64>()
+            / sys.cpus().len().max(1) as f64;
 
         let memory_used = sys.used_memory();
         let memory_total = sys.total_memory();
 
         // Get disk metrics
         let disks = Disks::new_with_refreshed_list();
-        let (disk_used, disk_total) = disks.list().iter()
-            .fold((0u64, 0u64), |(used, total), disk| {
-                (used + (disk.total_space() - disk.available_space()), total + disk.total_space())
-            });
+        let (disk_used, disk_total) =
+            disks
+                .list()
+                .iter()
+                .fold((0u64, 0u64), |(used, total), disk| {
+                    (
+                        used + (disk.total_space() - disk.available_space()),
+                        total + disk.total_space(),
+                    )
+                });
 
         (cpu_usage, memory_used, memory_total, disk_used, disk_total)
     }
@@ -677,7 +707,10 @@ impl AdminService {
     /// Get cluster information.
     pub fn get_cluster_info(&self) -> ClusterInfo {
         let peers = self.peers.read().expect("peers lock poisoned");
-        let online_peers = peers.iter().filter(|p| p.status == NodeStatus::Online).count();
+        let online_peers = peers
+            .iter()
+            .filter(|p| p.status == NodeStatus::Online)
+            .count();
         let total_nodes = 1 + peers.len(); // self + peers
         let healthy_nodes = 1 + online_peers; // self is always healthy if running
 
@@ -701,7 +734,8 @@ impl AdminService {
 
     /// Get dashboard summary with real metrics.
     pub fn get_dashboard_summary(&self) -> DashboardSummary {
-        let (cpu_usage, memory_used, memory_total, disk_used, disk_total) = self.get_system_metrics();
+        let (cpu_usage, memory_used, memory_total, disk_used, disk_total) =
+            self.get_system_metrics();
         let memory_percent = if memory_total > 0 {
             (memory_used as f64 / memory_total as f64) * 100.0
         } else {
@@ -715,7 +749,11 @@ impl AdminService {
 
         let uptime = self.start_time.elapsed().as_secs();
         let total_queries = self.total_queries.load(Ordering::Relaxed);
-        let qps = if uptime > 0 { total_queries as f64 / uptime as f64 } else { 0.0 };
+        let qps = if uptime > 0 {
+            total_queries as f64 / uptime as f64
+        } else {
+            0.0
+        };
         let total_time_ns = self.total_query_time_ns.load(Ordering::Relaxed);
         let avg_latency = if total_queries > 0 {
             (total_time_ns as f64 / total_queries as f64) / 1_000_000.0
@@ -743,7 +781,7 @@ impl AdminService {
                 used_bytes: disk_used,
                 usage_percent: storage_percent,
                 database_count: 1, // Single default database
-                table_count: 0, // Would need schema tracking
+                table_count: 0,    // Would need schema tracking
             },
             alerts: AlertSummary {
                 total: 0,
@@ -757,50 +795,67 @@ impl AdminService {
     /// Get list of all nodes (self + peers).
     pub fn get_nodes(&self) -> Vec<NodeInfo> {
         let uptime = self.start_time.elapsed().as_secs();
-        let (cpu_usage, memory_used, memory_total, disk_used, disk_total) = self.get_system_metrics();
+        let (cpu_usage, memory_used, memory_total, disk_used, disk_total) =
+            self.get_system_metrics();
 
         let total_queries = self.total_queries.load(Ordering::Relaxed);
-        let qps = if uptime > 0 { total_queries as f64 / uptime as f64 } else { 0.0 };
+        let qps = if uptime > 0 {
+            total_queries as f64 / uptime as f64
+        } else {
+            0.0
+        };
 
         // Calculate latency percentiles
         let (p50, p90, p95, p99, max) = self.calculate_latency_percentiles();
 
         // Start with self
-        let mut nodes = vec![
-            NodeInfo {
-                id: format!("{}{}", self.node_id, self.node_name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default()),
-                address: self.bind_address.clone(),
-                role: NodeRole::Leader,
-                status: NodeStatus::Online,
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                uptime_seconds: uptime,
-                last_heartbeat: Self::now(),
-                metrics: NodeMetrics {
-                    cpu_usage_percent: cpu_usage,
-                    memory_usage_bytes: memory_used,
-                    memory_total_bytes: memory_total,
-                    disk_usage_bytes: disk_used,
-                    disk_total_bytes: disk_total,
-                    connections_active: self.active_connections.load(Ordering::Relaxed),
-                    queries_per_second: qps,
-                    network_bytes_in: self.bytes_in.load(Ordering::Relaxed),
-                    network_bytes_out: self.bytes_out.load(Ordering::Relaxed),
-                    network_packets_in: 0,
-                    network_packets_out: 0,
-                    latency_p50_ms: p50,
-                    latency_p90_ms: p90,
-                    latency_p95_ms: p95,
-                    latency_p99_ms: p99,
-                    latency_max_ms: max,
-                },
+        let mut nodes = vec![NodeInfo {
+            id: format!(
+                "{}{}",
+                self.node_id,
+                self.node_name
+                    .as_ref()
+                    .map(|n| format!(" ({})", n))
+                    .unwrap_or_default()
+            ),
+            address: self.bind_address.clone(),
+            role: NodeRole::Leader,
+            status: NodeStatus::Online,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            uptime_seconds: uptime,
+            last_heartbeat: Self::now(),
+            metrics: NodeMetrics {
+                cpu_usage_percent: cpu_usage,
+                memory_usage_bytes: memory_used,
+                memory_total_bytes: memory_total,
+                disk_usage_bytes: disk_used,
+                disk_total_bytes: disk_total,
+                connections_active: self.active_connections.load(Ordering::Relaxed),
+                queries_per_second: qps,
+                network_bytes_in: self.bytes_in.load(Ordering::Relaxed),
+                network_bytes_out: self.bytes_out.load(Ordering::Relaxed),
+                network_packets_in: 0,
+                network_packets_out: 0,
+                latency_p50_ms: p50,
+                latency_p90_ms: p90,
+                latency_p95_ms: p95,
+                latency_p99_ms: p99,
+                latency_max_ms: max,
             },
-        ];
+        }];
 
         // Add peer nodes
         let peers = self.peers.read().expect("peers lock poisoned");
         for peer in peers.iter() {
             nodes.push(NodeInfo {
-                id: format!("{}{}", peer.id, peer.name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default()),
+                id: format!(
+                    "{}{}",
+                    peer.id,
+                    peer.name
+                        .as_ref()
+                        .map(|n| format!(" ({})", n))
+                        .unwrap_or_default()
+                ),
                 address: peer.address.clone(),
                 role: peer.role,
                 status: peer.status,
@@ -849,7 +904,9 @@ impl AdminService {
     pub fn get_storage_info(&self) -> StorageInfo {
         let disks = Disks::new_with_refreshed_list();
 
-        let (total, available) = disks.list().iter()
+        let (total, available) = disks
+            .list()
+            .iter()
             .fold((0u64, 0u64), |(total, avail), disk| {
                 (total + disk.total_space(), avail + disk.available_space())
             });
@@ -877,7 +934,11 @@ impl AdminService {
     pub fn get_query_stats(&self) -> QueryStats {
         let uptime = self.start_time.elapsed().as_secs();
         let total_queries = self.total_queries.load(Ordering::Relaxed);
-        let qps = if uptime > 0 { total_queries as f64 / uptime as f64 } else { 0.0 };
+        let qps = if uptime > 0 {
+            total_queries as f64 / uptime as f64
+        } else {
+            0.0
+        };
 
         let total_time_ns = self.total_query_time_ns.load(Ordering::Relaxed);
         let avg_duration = if total_queries > 0 {

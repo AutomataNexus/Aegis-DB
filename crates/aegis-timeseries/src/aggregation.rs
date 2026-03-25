@@ -227,7 +227,8 @@ impl Downsampler {
         let millis = timestamp.timestamp_millis();
         let interval_millis = self.interval.num_milliseconds();
         let bucket_millis = (millis / interval_millis) * interval_millis;
-        DateTime::from_timestamp_millis(bucket_millis).expect("failed to create DateTime from bucket timestamp")
+        DateTime::from_timestamp_millis(bucket_millis)
+            .expect("failed to create DateTime from bucket timestamp")
     }
 }
 
@@ -258,9 +259,7 @@ impl RollingWindow {
             let window_start_time = point.timestamp - self.window_size;
 
             // Advance the window start pointer forward (O(1) amortized)
-            while window_start_idx < i
-                && points[window_start_idx].timestamp < window_start_time
-            {
+            while window_start_idx < i && points[window_start_idx].timestamp < window_start_time {
                 window_start_idx += 1;
             }
 
@@ -315,7 +314,8 @@ mod tests {
 
     #[test]
     fn test_downsampler() {
-        let base_time = DateTime::from_timestamp(1700000000, 0).expect("failed to create test base_time");
+        let base_time =
+            DateTime::from_timestamp(1700000000, 0).expect("failed to create test base_time");
         let points: Vec<DataPoint> = (0..100)
             .map(|i| DataPoint {
                 timestamp: base_time + Duration::seconds(i),

@@ -33,14 +33,11 @@ pub struct StagedBinary {
 pub async fn download_binary(url: &str, dest: &Path) -> Result<PathBuf, UpdateError> {
     info!(url = url, dest = %dest.display(), "Downloading binary");
 
-    tokio::fs::create_dir_all(dest).await.map_err(|e| {
-        UpdateError::Io(format!("Failed to create download directory: {e}"))
-    })?;
+    tokio::fs::create_dir_all(dest)
+        .await
+        .map_err(|e| UpdateError::Io(format!("Failed to create download directory: {e}")))?;
 
-    let file_name = url
-        .rsplit('/')
-        .next()
-        .unwrap_or("aegis-server");
+    let file_name = url.rsplit('/').next().unwrap_or("aegis-server");
     let download_path = dest.join(file_name);
 
     let client = reqwest::Client::new();
@@ -58,23 +55,26 @@ pub async fn download_binary(url: &str, dest: &Path) -> Result<PathBuf, UpdateEr
     }
 
     let mut file = tokio::fs::File::create(&download_path).await.map_err(|e| {
-        UpdateError::Io(format!("Failed to create file {}: {e}", download_path.display()))
+        UpdateError::Io(format!(
+            "Failed to create file {}: {e}",
+            download_path.display()
+        ))
     })?;
 
     let mut stream = response.bytes_stream();
     let mut total_bytes: u64 = 0;
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| {
-            UpdateError::DownloadFailed(format!("Stream error: {e}"))
-        })?;
-        file.write_all(&chunk).await.map_err(|e| {
-            UpdateError::Io(format!("Write error: {e}"))
-        })?;
+        let chunk = chunk.map_err(|e| UpdateError::DownloadFailed(format!("Stream error: {e}")))?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| UpdateError::Io(format!("Write error: {e}")))?;
         total_bytes += chunk.len() as u64;
     }
 
-    file.flush().await.map_err(|e| UpdateError::Io(format!("Flush error: {e}")))?;
+    file.flush()
+        .await
+        .map_err(|e| UpdateError::Io(format!("Flush error: {e}")))?;
 
     info!(
         path = %download_path.display(),
@@ -89,9 +89,8 @@ pub async fn download_binary(url: &str, dest: &Path) -> Result<PathBuf, UpdateEr
 ///
 /// Returns `true` if the digests match, `false` otherwise.
 pub fn verify_sha256(path: &Path, expected: &str) -> Result<bool, UpdateError> {
-    let data = std::fs::read(path).map_err(|e| {
-        UpdateError::Io(format!("Failed to read {}: {e}", path.display()))
-    })?;
+    let data = std::fs::read(path)
+        .map_err(|e| UpdateError::Io(format!("Failed to read {}: {e}", path.display())))?;
 
     let mut hasher = Sha256::new();
     hasher.update(&data);
@@ -112,10 +111,7 @@ pub fn verify_sha256(path: &Path, expected: &str) -> Result<bool, UpdateError> {
 }
 
 /// Copy the downloaded binary into the staging directory and return a `StagedBinary`.
-pub fn stage_binary(
-    download_path: &Path,
-    stage_dir: &Path,
-) -> Result<StagedBinary, UpdateError> {
+pub fn stage_binary(download_path: &Path, stage_dir: &Path) -> Result<StagedBinary, UpdateError> {
     std::fs::create_dir_all(stage_dir).map_err(|e| {
         UpdateError::StagingFailed(format!("Failed to create staging directory: {e}"))
     })?;
@@ -135,9 +131,8 @@ pub fn stage_binary(
     })?;
 
     // Compute sha256 of staged binary
-    let data = std::fs::read(&staged_path).map_err(|e| {
-        UpdateError::Io(format!("Failed to read staged binary: {e}"))
-    })?;
+    let data = std::fs::read(&staged_path)
+        .map_err(|e| UpdateError::Io(format!("Failed to read staged binary: {e}")))?;
     let mut hasher = Sha256::new();
     hasher.update(&data);
     let sha256 = hex::encode(hasher.finalize());
@@ -170,9 +165,8 @@ pub fn backup_current_binary(
     current_path: &Path,
     backup_dir: &Path,
 ) -> Result<PathBuf, UpdateError> {
-    std::fs::create_dir_all(backup_dir).map_err(|e| {
-        UpdateError::Io(format!("Failed to create backup directory: {e}"))
-    })?;
+    std::fs::create_dir_all(backup_dir)
+        .map_err(|e| UpdateError::Io(format!("Failed to create backup directory: {e}")))?;
 
     let timestamp = Utc::now().format("%Y%m%d%H%M%S");
     let file_name = current_path
@@ -218,9 +212,7 @@ pub fn apply_binary(staged: &StagedBinary, target: &Path) -> Result<(), UpdateEr
         Err(_rename_err) => {
             // Fallback: copy then remove staged
             std::fs::copy(&staged.path, target).map_err(|e| {
-                UpdateError::StagingFailed(format!(
-                    "Failed to copy staged binary to target: {e}"
-                ))
+                UpdateError::StagingFailed(format!("Failed to copy staged binary to target: {e}"))
             })?;
             let _ = std::fs::remove_file(&staged.path);
 

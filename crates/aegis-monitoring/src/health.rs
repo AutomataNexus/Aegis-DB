@@ -16,8 +16,7 @@ use sysinfo::{Disks, System};
 // =============================================================================
 
 /// Health status of a component.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HealthStatus {
     /// Component is healthy.
     Healthy,
@@ -51,7 +50,6 @@ impl HealthStatus {
         }
     }
 }
-
 
 // =============================================================================
 // Health Check Result
@@ -276,10 +274,7 @@ impl HealthCheck for DiskHealthCheck {
         if free_bytes < self.min_free_bytes {
             HealthCheckResult::unhealthy(
                 self.name(),
-                &format!(
-                    "Disk space low: {} bytes free on {}",
-                    free_bytes, self.path
-                ),
+                &format!("Disk space low: {} bytes free on {}", free_bytes, self.path),
             )
             .with_detail("free_bytes", &free_bytes.to_string())
             .with_detail("total_bytes", &total_bytes.to_string())
@@ -334,12 +329,18 @@ impl HealthCheck for ConnectionPoolHealthCheck {
         if usage >= 95.0 {
             HealthCheckResult::unhealthy(
                 self.name(),
-                &format!("Connection pool {} exhausted: {}/{}", self.pool_name, active, self.max_connections),
+                &format!(
+                    "Connection pool {} exhausted: {}/{}",
+                    self.pool_name, active, self.max_connections
+                ),
             )
         } else if usage >= 80.0 {
             HealthCheckResult::degraded(
                 self.name(),
-                &format!("Connection pool {} high usage: {:.1}%", self.pool_name, usage),
+                &format!(
+                    "Connection pool {} high usage: {:.1}%",
+                    self.pool_name, usage
+                ),
             )
         } else {
             HealthCheckResult::healthy(self.name())
@@ -386,7 +387,10 @@ impl HealthCheck for LatencyHealthCheck {
         if latency_ms > self.max_latency_ms {
             HealthCheckResult::unhealthy(
                 &self.name,
-                &format!("Latency {}ms exceeds threshold {}ms", latency_ms, self.max_latency_ms),
+                &format!(
+                    "Latency {}ms exceeds threshold {}ms",
+                    latency_ms, self.max_latency_ms
+                ),
             )
             .with_duration(check_duration)
         } else if latency_ms > self.max_latency_ms / 2 {
@@ -426,12 +430,18 @@ impl HealthChecker {
 
     /// Add a health check.
     pub fn add_check(&self, check: Arc<dyn HealthCheck>) {
-        self.checks.write().expect("HealthChecker checks RwLock poisoned").push(check);
+        self.checks
+            .write()
+            .expect("HealthChecker checks RwLock poisoned")
+            .push(check);
     }
 
     /// Run all health checks.
     pub fn run_checks(&self) -> Vec<HealthCheckResult> {
-        let checks = self.checks.read().expect("HealthChecker checks RwLock poisoned");
+        let checks = self
+            .checks
+            .read()
+            .expect("HealthChecker checks RwLock poisoned");
         let mut results = Vec::with_capacity(checks.len());
 
         for check in checks.iter() {
@@ -445,14 +455,23 @@ impl HealthChecker {
                 .insert(check.name().to_string(), result);
         }
 
-        *self.last_run.write().expect("HealthChecker last_run RwLock poisoned") = Some(Instant::now());
+        *self
+            .last_run
+            .write()
+            .expect("HealthChecker last_run RwLock poisoned") = Some(Instant::now());
         results
     }
 
     /// Get the overall health status.
     pub fn overall_status(&self) -> HealthStatus {
-        let results = self.results.read().expect("HealthChecker results RwLock poisoned");
-        let checks = self.checks.read().expect("HealthChecker checks RwLock poisoned");
+        let results = self
+            .results
+            .read()
+            .expect("HealthChecker results RwLock poisoned");
+        let checks = self
+            .checks
+            .read()
+            .expect("HealthChecker checks RwLock poisoned");
 
         let mut status = HealthStatus::Healthy;
 
@@ -477,12 +496,19 @@ impl HealthChecker {
 
     /// Get results for a specific check.
     pub fn get_result(&self, name: &str) -> Option<HealthCheckResult> {
-        self.results.read().expect("HealthChecker results RwLock poisoned").get(name).cloned()
+        self.results
+            .read()
+            .expect("HealthChecker results RwLock poisoned")
+            .get(name)
+            .cloned()
     }
 
     /// Get all results.
     pub fn get_all_results(&self) -> HashMap<String, HealthCheckResult> {
-        self.results.read().expect("HealthChecker results RwLock poisoned").clone()
+        self.results
+            .read()
+            .expect("HealthChecker results RwLock poisoned")
+            .clone()
     }
 
     /// Get the comprehensive health report.
@@ -524,7 +550,10 @@ impl HealthReport {
 
     /// Get the number of healthy checks.
     pub fn healthy_count(&self) -> usize {
-        self.checks.values().filter(|r| r.status.is_healthy()).count()
+        self.checks
+            .values()
+            .filter(|r| r.status.is_healthy())
+            .count()
     }
 
     /// Get the number of unhealthy checks.
@@ -557,17 +586,26 @@ impl ProbeChecker {
 
     /// Add a liveness check.
     pub fn add_liveness_check(&self, check: Arc<dyn HealthCheck>) {
-        self.liveness_checks.write().expect("ProbeChecker liveness_checks RwLock poisoned").push(check);
+        self.liveness_checks
+            .write()
+            .expect("ProbeChecker liveness_checks RwLock poisoned")
+            .push(check);
     }
 
     /// Add a readiness check.
     pub fn add_readiness_check(&self, check: Arc<dyn HealthCheck>) {
-        self.readiness_checks.write().expect("ProbeChecker readiness_checks RwLock poisoned").push(check);
+        self.readiness_checks
+            .write()
+            .expect("ProbeChecker readiness_checks RwLock poisoned")
+            .push(check);
     }
 
     /// Check liveness.
     pub fn check_liveness(&self) -> bool {
-        let checks = self.liveness_checks.read().expect("ProbeChecker liveness_checks RwLock poisoned");
+        let checks = self
+            .liveness_checks
+            .read()
+            .expect("ProbeChecker liveness_checks RwLock poisoned");
         for check in checks.iter() {
             let result = check.check();
             if result.status == HealthStatus::Unhealthy {
@@ -579,7 +617,10 @@ impl ProbeChecker {
 
     /// Check readiness.
     pub fn check_readiness(&self) -> bool {
-        let checks = self.readiness_checks.read().expect("ProbeChecker readiness_checks RwLock poisoned");
+        let checks = self
+            .readiness_checks
+            .read()
+            .expect("ProbeChecker readiness_checks RwLock poisoned");
         for check in checks.iter() {
             let result = check.check();
             if !result.status.is_operational() {

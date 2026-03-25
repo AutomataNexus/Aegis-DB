@@ -36,9 +36,8 @@ pub fn restore_backup(backup_path: &Path, target: &Path) -> Result<(), UpdateErr
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o755);
-        std::fs::set_permissions(target, perms).map_err(|e| {
-            UpdateError::RollbackFailed(format!("Failed to set permissions: {e}"))
-        })?;
+        std::fs::set_permissions(target, perms)
+            .map_err(|e| UpdateError::RollbackFailed(format!("Failed to set permissions: {e}")))?;
     }
 
     info!(target = %target.display(), "Backup restored successfully");
@@ -137,7 +136,13 @@ pub async fn rollback_nodes(entries: &[RollbackEntry]) -> Vec<UpdateError> {
     let mut errors = Vec::new();
 
     for entry in entries {
-        match rollback_node(&entry.node_address, &entry.backup_path, &entry.target_binary).await {
+        match rollback_node(
+            &entry.node_address,
+            &entry.backup_path,
+            &entry.target_binary,
+        )
+        .await
+        {
             Ok(()) => {
                 info!(address = %entry.node_address, "Node rolled back successfully");
             }

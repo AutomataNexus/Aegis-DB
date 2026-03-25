@@ -6,10 +6,10 @@
 //! @author AutomataNexus Development Team
 
 use crate::types::DataPoint;
-use chrono::{DateTime, Duration, Utc, Timelike, Datelike};
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use parking_lot::RwLock;
 use std::sync::Arc;
 
 // =============================================================================
@@ -189,8 +189,7 @@ impl Partition {
 
     /// Get the memory size estimate.
     pub fn size_bytes(&self) -> usize {
-        self.point_count * std::mem::size_of::<DataPoint>()
-            + self.series.len() * 64
+        self.point_count * std::mem::size_of::<DataPoint>() + self.series.len() * 64
     }
 }
 
@@ -336,24 +335,14 @@ mod tests {
             PartitionInterval::Hour.partition_key(timestamp),
             "2026011915"
         );
-        assert_eq!(
-            PartitionInterval::Day.partition_key(timestamp),
-            "20260119"
-        );
-        assert_eq!(
-            PartitionInterval::Month.partition_key(timestamp),
-            "202601"
-        );
+        assert_eq!(PartitionInterval::Day.partition_key(timestamp), "20260119");
+        assert_eq!(PartitionInterval::Month.partition_key(timestamp), "202601");
     }
 
     #[test]
     fn test_partition_insert() {
         let start = Utc::now();
-        let mut partition = Partition::new(
-            "test".to_string(),
-            start,
-            PartitionInterval::Hour,
-        );
+        let mut partition = Partition::new("test".to_string(), start, PartitionInterval::Hour);
 
         let point = DataPoint::new(start + Duration::minutes(30), 42.0);
         assert!(partition.insert("cpu:host=server1", point));

@@ -7,7 +7,7 @@
 //! @author AutomataNexus Development Team
 
 use clap::{Parser, Subcommand};
-use comfy_table::{Table, Row, Cell, ContentArrangement};
+use comfy_table::{Cell, ContentArrangement, Row, Table};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -250,30 +250,35 @@ impl NodeRegistry {
         }
         let data = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize: {}", e))?;
-        std::fs::write(&path, data)
-            .map_err(|e| format!("Failed to write config: {}", e))?;
+        std::fs::write(&path, data).map_err(|e| format!("Failed to write config: {}", e))?;
         Ok(())
     }
 
     fn add_builtin_nodes(&mut self) {
         // Only add if not already present
         if !self.nodes.contains_key("dashboard") {
-            self.nodes.insert("dashboard".to_string(), NodeEntry {
-                url: "http://localhost:9090".to_string(),
-                node_id: None,
-                role: Some("primary".to_string()),
-                status: Some("builtin".to_string()),
-                added_at: Some("builtin".to_string()),
-            });
+            self.nodes.insert(
+                "dashboard".to_string(),
+                NodeEntry {
+                    url: "http://localhost:9090".to_string(),
+                    node_id: None,
+                    role: Some("primary".to_string()),
+                    status: Some("builtin".to_string()),
+                    added_at: Some("builtin".to_string()),
+                },
+            );
         }
         if !self.nodes.contains_key("local") {
-            self.nodes.insert("local".to_string(), NodeEntry {
-                url: "http://localhost:9090".to_string(),
-                node_id: None,
-                role: Some("primary".to_string()),
-                status: Some("builtin".to_string()),
-                added_at: Some("builtin".to_string()),
-            });
+            self.nodes.insert(
+                "local".to_string(),
+                NodeEntry {
+                    url: "http://localhost:9090".to_string(),
+                    node_id: None,
+                    role: Some("primary".to_string()),
+                    status: Some("builtin".to_string()),
+                    added_at: Some("builtin".to_string()),
+                },
+            );
         }
     }
 
@@ -281,14 +286,24 @@ impl NodeRegistry {
         self.nodes.get(&name.to_lowercase())
     }
 
-    fn add(&mut self, name: &str, url: &str, node_id: Option<String>, role: Option<String>, status: Option<String>) {
-        self.nodes.insert(name.to_lowercase(), NodeEntry {
-            url: url.to_string(),
-            node_id,
-            role,
-            status,
-            added_at: Some(chrono::Utc::now().to_rfc3339()),
-        });
+    fn add(
+        &mut self,
+        name: &str,
+        url: &str,
+        node_id: Option<String>,
+        role: Option<String>,
+        status: Option<String>,
+    ) {
+        self.nodes.insert(
+            name.to_lowercase(),
+            NodeEntry {
+                url: url.to_string(),
+                node_id,
+                role,
+                status,
+                added_at: Some(chrono::Utc::now().to_rfc3339()),
+            },
+        );
     }
 
     fn remove(&mut self, name: &str) -> bool {
@@ -316,7 +331,11 @@ fn parse_database_url(url: &str) -> Result<(String, Option<String>), String> {
             let host_port = &rest[..slash_pos];
             let db_name = &rest[slash_pos + 1..];
             let server = format!("http://{}", host_port);
-            let db = if db_name.is_empty() { None } else { Some(db_name.to_string()) };
+            let db = if db_name.is_empty() {
+                None
+            } else {
+                Some(db_name.to_string())
+            };
             Ok((server, db))
         } else {
             Ok((format!("http://{}", rest), None))
@@ -377,7 +396,12 @@ async fn main() {
 // Command Implementations
 // =============================================================================
 
-async fn execute_query(client: &Client, server: &str, sql: &str, format: &str) -> Result<(), String> {
+async fn execute_query(
+    client: &Client,
+    server: &str,
+    sql: &str,
+    format: &str,
+) -> Result<(), String> {
     let url = format!("{}/api/v1/query", server);
     let request = QueryRequest {
         sql: sql.to_string(),
@@ -397,7 +421,9 @@ async fn execute_query(client: &Client, server: &str, sql: &str, format: &str) -
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
     if !query_response.success {
-        return Err(query_response.error.unwrap_or_else(|| "Unknown error".to_string()));
+        return Err(query_response
+            .error
+            .unwrap_or_else(|| "Unknown error".to_string()));
     }
 
     if let Some(data) = query_response.data {
@@ -415,24 +441,35 @@ async fn execute_query(client: &Client, server: &str, sql: &str, format: &str) -
             _ => {
                 // Table format
                 if data.columns.is_empty() {
-                    println!("Query executed successfully. Rows affected: {}", data.rows_affected);
+                    println!(
+                        "Query executed successfully. Rows affected: {}",
+                        data.rows_affected
+                    );
                 } else {
                     let mut table = Table::new();
                     table.set_content_arrangement(ContentArrangement::Dynamic);
                     table.set_header(data.columns.iter().map(Cell::new));
 
                     for row in &data.rows {
-                        let cells: Vec<Cell> = row.iter().map(|v| Cell::new(format_value(v))).collect();
+                        let cells: Vec<Cell> =
+                            row.iter().map(|v| Cell::new(format_value(v))).collect();
                         table.add_row(Row::from(cells));
                     }
 
                     println!("{}", table);
-                    println!("\n{} row(s) returned in {} ms", data.rows.len(), query_response.execution_time_ms);
+                    println!(
+                        "\n{} row(s) returned in {} ms",
+                        data.rows.len(),
+                        query_response.execution_time_ms
+                    );
                 }
             }
         }
     } else {
-        println!("Query executed successfully in {} ms", query_response.execution_time_ms);
+        println!(
+            "Query executed successfully in {} ms",
+            query_response.execution_time_ms
+        );
     }
 
     Ok(())
@@ -507,14 +544,19 @@ async fn list_tables(client: &Client, server: &str) -> Result<(), String> {
         table.set_header(vec!["Table Name", "Columns", "Row Count"]);
 
         for t in &tables_response.tables {
-            let columns = t.columns.iter()
+            let columns = t
+                .columns
+                .iter()
                 .map(|c| {
                     let nullable = if c.nullable { "NULL" } else { "NOT NULL" };
                     format!("{} {} {}", c.name, c.data_type, nullable)
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let row_count = t.row_count.map(|r| r.to_string()).unwrap_or_else(|| "N/A".to_string());
+            let row_count = t
+                .row_count
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| "N/A".to_string());
             table.add_row(vec![&t.name, &columns, &row_count]);
         }
 
@@ -560,7 +602,9 @@ async fn handle_kv(client: &Client, server: &str, action: KvCommands) -> Result<
                 .map_err(|e| format!("Failed to connect: {}", e))?;
 
             if response.status().is_success() {
-                let entry: KvEntry = response.json().await
+                let entry: KvEntry = response
+                    .json()
+                    .await
                     .map_err(|e| format!("Failed to parse: {}", e))?;
                 println!("{}", serde_json::to_string_pretty(&entry.value).unwrap());
             } else if response.status().as_u16() == 404 {
@@ -620,7 +664,9 @@ async fn handle_kv(client: &Client, server: &str, action: KvCommands) -> Result<
                 .await
                 .map_err(|e| format!("Failed to connect: {}", e))?;
 
-            let entries: Vec<KvEntry> = response.json().await
+            let entries: Vec<KvEntry> = response
+                .json()
+                .await
                 .map_err(|e| format!("Failed to parse: {}", e))?;
 
             if entries.is_empty() {
@@ -637,8 +683,17 @@ async fn handle_kv(client: &Client, server: &str, action: KvCommands) -> Result<
                     } else {
                         value_str
                     };
-                    let ttl_str = entry.ttl.map(|t| format!("{}s", t)).unwrap_or_else(|| "-".to_string());
-                    table.add_row(vec![&entry.key, &truncated, &ttl_str, &entry.created_at, &entry.updated_at]);
+                    let ttl_str = entry
+                        .ttl
+                        .map(|t| format!("{}s", t))
+                        .unwrap_or_else(|| "-".to_string());
+                    table.add_row(vec![
+                        &entry.key,
+                        &truncated,
+                        &ttl_str,
+                        &entry.created_at,
+                        &entry.updated_at,
+                    ]);
                 }
 
                 println!("{}", table);
@@ -718,7 +773,9 @@ fn format_value(value: &serde_json::Value) -> String {
             let items: Vec<String> = arr.iter().map(format_value).collect();
             format!("[{}]", items.join(", "))
         }
-        serde_json::Value::Object(_) => serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()),
+        serde_json::Value::Object(_) => {
+            serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
+        }
     }
 }
 
@@ -777,16 +834,25 @@ async fn handle_nodes(client: &Client, action: NodesCommands) -> Result<(), Stri
             } else if url.contains(':') {
                 format!("http://{}", url)
             } else {
-                return Err(format!("Invalid URL: {}. Use http://host:port or host:port format", url));
+                return Err(format!(
+                    "Invalid URL: {}. Use http://host:port or host:port format",
+                    url
+                ));
             };
 
             // Try to get node info from the server
             let node_id = match client.get(format!("{}/health", url)).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     // Try to get node ID from cluster info
-                    if let Ok(info) = client.get(format!("{}/api/v1/cluster/info", url)).send().await {
+                    if let Ok(info) = client
+                        .get(format!("{}/api/v1/cluster/info", url))
+                        .send()
+                        .await
+                    {
                         if let Ok(json) = info.json::<serde_json::Value>().await {
-                            json.get("node_id").and_then(|v| v.as_str()).map(|s| s.to_string())
+                            json.get("node_id")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
                         } else {
                             None
                         }
@@ -844,13 +910,23 @@ async fn handle_nodes(client: &Client, action: NodesCommands) -> Result<(), Stri
                 // Extract name from ID if present (format: "node-xxx (NodeName)")
                 let shorthand = if let Some(start) = node.id.find('(') {
                     if let Some(end) = node.id.find(')') {
-                        node.id[start + 1..end].to_lowercase().replace([' ', '_'], "-")
+                        node.id[start + 1..end]
+                            .to_lowercase()
+                            .replace([' ', '_'], "-")
                     } else {
-                        node.id.split('-').next_back().unwrap_or(&node.id).to_string()
+                        node.id
+                            .split('-')
+                            .next_back()
+                            .unwrap_or(&node.id)
+                            .to_string()
                     }
                 } else {
                     // Use last part of node ID as shorthand
-                    node.id.split('-').next_back().unwrap_or(&node.id).to_string()
+                    node.id
+                        .split('-')
+                        .next_back()
+                        .unwrap_or(&node.id)
+                        .to_string()
                 };
 
                 // Convert address to URL
@@ -870,11 +946,30 @@ async fn handle_nodes(client: &Client, action: NodesCommands) -> Result<(), Stri
                 // Check if already exists with same URL
                 let exists = registry.nodes.values().any(|e| e.url == url);
                 if !exists {
-                    let role = if node.role.is_empty() { None } else { Some(node.role.clone()) };
-                    let status = if node.status.is_empty() { None } else { Some(node.status.clone()) };
-                    registry.add(&shorthand, &url, Some(clean_id.clone()), role.clone(), status.clone());
-                    println!("  Added: {} -> {} [{}] ({})", shorthand, url,
-                        role.as_deref().unwrap_or("unknown"), clean_id);
+                    let role = if node.role.is_empty() {
+                        None
+                    } else {
+                        Some(node.role.clone())
+                    };
+                    let status = if node.status.is_empty() {
+                        None
+                    } else {
+                        Some(node.status.clone())
+                    };
+                    registry.add(
+                        &shorthand,
+                        &url,
+                        Some(clean_id.clone()),
+                        role.clone(),
+                        status.clone(),
+                    );
+                    println!(
+                        "  Added: {} -> {} [{}] ({})",
+                        shorthand,
+                        url,
+                        role.as_deref().unwrap_or("unknown"),
+                        clean_id
+                    );
                     added += 1;
                 }
             }

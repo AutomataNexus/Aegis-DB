@@ -30,7 +30,9 @@ module.exports = {
       args: '--port 9091 --node-name NexusScribe --peers 127.0.0.1:9090,127.0.0.1:7001 --data-dir /opt/NexusScribe/data/aegis-db',
       cwd: '/opt/NexusScribe',
       env: {
-        RUST_LOG: 'info'
+        RUST_LOG: 'info',
+        AEGIS_ADMIN_USERNAME: 'devops',
+        AEGIS_ADMIN_PASSWORD: 'Invertedskynet2$'
       },
       autorestart: true,
       max_restarts: 10,

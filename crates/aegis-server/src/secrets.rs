@@ -5,9 +5,9 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 // =============================================================================
 // Secrets Provider Trait
@@ -77,10 +77,8 @@ impl Default for VaultConfig {
             role_id: std::env::var("VAULT_ROLE_ID").ok(),
             secret_id: std::env::var("VAULT_SECRET_ID").ok(),
             k8s_role: std::env::var("VAULT_K8S_ROLE").ok(),
-            mount_path: std::env::var("VAULT_MOUNT_PATH")
-                .unwrap_or_else(|_| "secret".to_string()),
-            secret_path: std::env::var("VAULT_SECRET_PATH")
-                .unwrap_or_else(|_| "aegis".to_string()),
+            mount_path: std::env::var("VAULT_MOUNT_PATH").unwrap_or_else(|_| "secret".to_string()),
+            secret_path: std::env::var("VAULT_SECRET_PATH").unwrap_or_else(|_| "aegis".to_string()),
             tls_verify: std::env::var("VAULT_TLS_VERIFY")
                 .map(|v| v != "false" && v != "0")
                 .unwrap_or(true),
@@ -154,7 +152,8 @@ impl VaultSecretsProvider {
             "secret_id": secret_id
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&body)
             .send()
@@ -162,10 +161,15 @@ impl VaultSecretsProvider {
             .map_err(|e| format!("Vault AppRole auth failed: {}", e))?;
 
         if !response.status().is_success() {
-            return Err(format!("Vault AppRole auth failed: HTTP {}", response.status()));
+            return Err(format!(
+                "Vault AppRole auth failed: HTTP {}",
+                response.status()
+            ));
         }
 
-        let data: serde_json::Value = response.json().await
+        let data: serde_json::Value = response
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse Vault response: {}", e))?;
 
         let token = data["auth"]["client_token"]
@@ -191,7 +195,8 @@ impl VaultSecretsProvider {
             "jwt": jwt
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&body)
             .send()
@@ -202,7 +207,9 @@ impl VaultSecretsProvider {
             return Err(format!("Vault K8s auth failed: HTTP {}", response.status()));
         }
 
-        let data: serde_json::Value = response.json().await
+        let data: serde_json::Value = response
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse Vault response: {}", e))?;
 
         let token = data["auth"]["client_token"]
@@ -223,18 +230,19 @@ impl VaultSecretsProvider {
             return Ok(value.clone());
         }
 
-        let token = self.token.read().clone()
+        let token = self
+            .token
+            .read()
+            .clone()
             .ok_or("Not authenticated with Vault")?;
 
         let url = format!(
             "{}/v1/{}/data/{}/{}",
-            self.config.address,
-            self.config.mount_path,
-            self.config.secret_path,
-            key
+            self.config.address, self.config.mount_path, self.config.secret_path, key
         );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("X-Vault-Token", &token)
             .send()
@@ -245,7 +253,9 @@ impl VaultSecretsProvider {
             return Err(format!("Vault read failed: HTTP {}", response.status()));
         }
 
-        let data: serde_json::Value = response.json().await
+        let data: serde_json::Value = response
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse Vault response: {}", e))?;
 
         // KV v2 format: data.data.{key}
@@ -262,17 +272,19 @@ impl VaultSecretsProvider {
 
     /// Read all secrets at a path and cache them.
     pub async fn load_secrets(&self) -> Result<(), String> {
-        let token = self.token.read().clone()
+        let token = self
+            .token
+            .read()
+            .clone()
             .ok_or("Not authenticated with Vault")?;
 
         let url = format!(
             "{}/v1/{}/data/{}",
-            self.config.address,
-            self.config.mount_path,
-            self.config.secret_path
+            self.config.address, self.config.mount_path, self.config.secret_path
         );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("X-Vault-Token", &token)
             .send()
@@ -283,7 +295,9 @@ impl VaultSecretsProvider {
             return Err(format!("Vault read failed: HTTP {}", response.status()));
         }
 
-        let data: serde_json::Value = response.json().await
+        let data: serde_json::Value = response
+            .json()
+            .await
             .map_err(|e| format!("Failed to parse Vault response: {}", e))?;
 
         // KV v2 format: data.data contains all key-value pairs
@@ -344,10 +358,7 @@ impl SecretsManager {
     /// Create a secrets manager that tries Vault first, then environment variables.
     pub fn with_vault_fallback(vault: VaultSecretsProvider) -> Self {
         Self {
-            providers: vec![
-                Arc::new(vault),
-                Arc::new(EnvSecretsProvider),
-            ],
+            providers: vec![Arc::new(vault), Arc::new(EnvSecretsProvider)],
         }
     }
 }
@@ -367,28 +378,61 @@ impl SecretsProvider for SecretsManager {
 // Helper Functions
 // =============================================================================
 
-/// Initialize secrets manager from environment configuration.
-/// Returns a Vault-backed manager if VAULT_ADDR is set, otherwise env-only.
-pub async fn init_secrets_manager() -> SecretsManager {
-    // Check if Vault is configured
-    if let Some(vault) = VaultSecretsProvider::from_env() {
-        // Try to authenticate
-        if let Err(e) = vault.authenticate().await {
-            tracing::warn!("Vault authentication failed: {}. Falling back to environment variables.", e);
-            return SecretsManager::env_only();
-        }
+/// Wrapper that implements SecretsProvider for AegisVault.
+pub struct AegisVaultProvider {
+    vault: std::sync::Arc<aegis_vault::AegisVault>,
+}
 
-        // Try to load secrets
-        if let Err(e) = vault.load_secrets().await {
-            tracing::warn!("Failed to load secrets from Vault: {}. Will fetch on demand.", e);
-        }
-
-        tracing::info!("Secrets manager initialized with Vault backend");
-        SecretsManager::with_vault_fallback(vault)
-    } else {
-        tracing::info!("Secrets manager initialized with environment variables only");
-        SecretsManager::env_only()
+impl AegisVaultProvider {
+    pub fn new(vault: std::sync::Arc<aegis_vault::AegisVault>) -> Self {
+        Self { vault }
     }
+}
+
+impl SecretsProvider for AegisVaultProvider {
+    fn get(&self, key: &str) -> Option<String> {
+        self.vault.get(key, "secrets_manager").ok()
+    }
+}
+
+/// Initialize secrets manager from environment configuration.
+/// Provider chain: built-in vault → external HashiCorp Vault → environment variables.
+pub async fn init_secrets_manager(
+    built_in_vault: Option<std::sync::Arc<aegis_vault::AegisVault>>,
+) -> SecretsManager {
+    let mut providers: Vec<Arc<dyn SecretsProvider>> = Vec::new();
+
+    // First priority: built-in Aegis vault
+    if let Some(vault) = built_in_vault {
+        if !vault.is_sealed() {
+            tracing::info!("Secrets provider chain: built-in vault (active)");
+            providers.push(Arc::new(AegisVaultProvider::new(vault)));
+        } else {
+            tracing::info!("Built-in vault is sealed; skipping as secrets provider");
+        }
+    }
+
+    // Second priority: external HashiCorp Vault
+    if let Some(vault) = VaultSecretsProvider::from_env() {
+        if let Err(e) = vault.authenticate().await {
+            tracing::warn!("External Vault authentication failed: {}.", e);
+        } else {
+            if let Err(e) = vault.load_secrets().await {
+                tracing::warn!("Failed to load secrets from external Vault: {}.", e);
+            }
+            tracing::info!("Secrets provider chain: +external Vault");
+            providers.push(Arc::new(vault));
+        }
+    }
+
+    // Always fall back to environment variables
+    providers.push(Arc::new(EnvSecretsProvider));
+    tracing::info!(
+        "Secrets provider chain: +environment variables ({} providers total)",
+        providers.len()
+    );
+
+    SecretsManager::new(providers)
 }
 
 /// Standard secret keys used by Aegis.
@@ -431,7 +475,10 @@ mod tests {
     fn test_env_provider() {
         std::env::set_var("TEST_SECRET_KEY", "test_value");
         let provider = EnvSecretsProvider;
-        assert_eq!(provider.get("TEST_SECRET_KEY"), Some("test_value".to_string()));
+        assert_eq!(
+            provider.get("TEST_SECRET_KEY"),
+            Some("test_value".to_string())
+        );
         assert_eq!(provider.get("NONEXISTENT_KEY"), None);
         std::env::remove_var("TEST_SECRET_KEY");
     }
@@ -440,7 +487,10 @@ mod tests {
     fn test_secrets_manager_fallback() {
         std::env::set_var("TEST_FALLBACK_KEY", "fallback_value");
         let manager = SecretsManager::env_only();
-        assert_eq!(manager.get("TEST_FALLBACK_KEY"), Some("fallback_value".to_string()));
+        assert_eq!(
+            manager.get("TEST_FALLBACK_KEY"),
+            Some("fallback_value".to_string())
+        );
         std::env::remove_var("TEST_FALLBACK_KEY");
     }
 

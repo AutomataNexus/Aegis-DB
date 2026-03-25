@@ -69,27 +69,32 @@ impl Connection {
     async fn connect(&self) -> Result<(), ClientError> {
         // Check server health
         let health_url = format!("{}/health", self.base_url);
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&health_url)
             .send()
             .await
             .map_err(|e| ClientError::ConnectionFailed(format!("Failed to connect: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(ClientError::ConnectionFailed(
-                format!("Server returned status: {}", response.status())
-            ));
+            return Err(ClientError::ConnectionFailed(format!(
+                "Server returned status: {}",
+                response.status()
+            )));
         }
 
         // Authenticate if credentials provided
-        if let (Some(ref username), Some(ref password)) = (&self.config.username, &self.config.password) {
+        if let (Some(ref username), Some(ref password)) =
+            (&self.config.username, &self.config.password)
+        {
             let login_url = format!("{}/api/v1/auth/login", self.base_url);
             let login_body = serde_json::json!({
                 "username": username,
                 "password": password
             });
 
-            let response = self.http_client
+            let response = self
+                .http_client
                 .post(&login_url)
                 .json(&login_body)
                 .send()
@@ -103,11 +108,12 @@ impl Connection {
                     .map_err(|e| ClientError::AuthenticationFailed(e.to_string()))?;
 
                 if let Some(token) = auth_response.get("token").and_then(|t| t.as_str()) {
-                    *self.auth_token.write().expect("auth_token RwLock poisoned") = Some(token.to_string());
+                    *self.auth_token.write().expect("auth_token RwLock poisoned") =
+                        Some(token.to_string());
                 }
             } else {
                 return Err(ClientError::AuthenticationFailed(
-                    "Invalid credentials".to_string()
+                    "Invalid credentials".to_string(),
                 ));
             }
         }
@@ -133,7 +139,10 @@ impl Connection {
 
     /// Get idle time.
     pub fn idle_time(&self) -> std::time::Duration {
-        self.last_used.read().expect("last_used RwLock poisoned").elapsed()
+        self.last_used
+            .read()
+            .expect("last_used RwLock poisoned")
+            .elapsed()
     }
 
     /// Mark as used.
@@ -205,10 +214,12 @@ impl Connection {
             .and_then(|c| c.as_array())
             .map(|cols| {
                 cols.iter()
-                    .map(|c| Column::new(
-                        c.as_str().unwrap_or(""),
-                        DataType::Text, // Default to text, server doesn't send types
-                    ))
+                    .map(|c| {
+                        Column::new(
+                            c.as_str().unwrap_or(""),
+                            DataType::Text, // Default to text, server doesn't send types
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -331,7 +342,8 @@ impl Connection {
     /// Ping the connection.
     pub async fn ping(&self) -> Result<(), ClientError> {
         let health_url = format!("{}/health", self.base_url);
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&health_url)
             .send()
             .await
@@ -349,7 +361,11 @@ impl Connection {
     /// Close the connection.
     pub async fn close(&self) {
         // Clone token before await to avoid holding lock across await point
-        let token = self.auth_token.read().expect("auth_token RwLock poisoned").clone();
+        let token = self
+            .auth_token
+            .read()
+            .expect("auth_token RwLock poisoned")
+            .clone();
         if let Some(ref token) = token {
             let logout_url = format!("{}/api/v1/auth/logout", self.base_url);
             let body = serde_json::json!({ "token": token });
@@ -416,12 +432,12 @@ fn json_to_value(json: &serde_json::Value) -> Value {
             }
         }
         serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Array(arr) => {
-            Value::Array(arr.iter().map(json_to_value).collect())
-        }
-        serde_json::Value::Object(obj) => {
-            Value::Object(obj.iter().map(|(k, v)| (k.clone(), json_to_value(v))).collect())
-        }
+        serde_json::Value::Array(arr) => Value::Array(arr.iter().map(json_to_value).collect()),
+        serde_json::Value::Object(obj) => Value::Object(
+            obj.iter()
+                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .collect(),
+        ),
     }
 }
 

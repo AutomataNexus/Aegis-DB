@@ -12,14 +12,16 @@ use crate::consent;
 use crate::gdpr;
 use crate::handlers;
 use crate::middleware;
+use crate::shield_handlers;
 use crate::state::AppState;
+use crate::vault_handlers;
+use axum::http::{header, Method};
 use axum::{
     routing::{delete, get, patch, post, put},
     Router,
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
-use axum::http::{header, Method};
 
 // =============================================================================
 // Router
@@ -46,12 +48,20 @@ pub fn create_router(state: AppState) -> Router {
         // No origins configured = allow common local development origins
         CorsLayer::new()
             .allow_origin(AllowOrigin::list([
-                format!("http://{}:{}", state.config.host, state.config.port).parse().unwrap(),
+                format!("http://{}:{}", state.config.host, state.config.port)
+                    .parse()
+                    .unwrap(),
                 "http://localhost:8000".parse().unwrap(),
                 "http://127.0.0.1:8000".parse().unwrap(),
                 "http://localhost:3000".parse().unwrap(),
             ]))
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::DELETE,
+                Method::PATCH,
+            ])
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
             .allow_credentials(true)
     } else if cors_origins.iter().any(|o| o == "*") {
@@ -59,17 +69,27 @@ pub fn create_router(state: AppState) -> Router {
         tracing::warn!("CORS configured to allow any origin — credentials disabled for security");
         CorsLayer::new()
             .allow_origin(AllowOrigin::any())
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::DELETE,
+                Method::PATCH,
+            ])
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
             .allow_credentials(false)
     } else {
         // Specific origins configured
-        let origins: Vec<_> = cors_origins.iter()
-            .filter_map(|o| o.parse().ok())
-            .collect();
+        let origins: Vec<_> = cors_origins.iter().filter_map(|o| o.parse().ok()).collect();
         CorsLayer::new()
             .allow_origin(AllowOrigin::list(origins))
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::DELETE,
+                Method::PATCH,
+            ])
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
             .allow_credentials(true)
     };
@@ -79,8 +99,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/tables", get(handlers::list_tables))
         .route("/tables/:name", get(handlers::get_table))
         .route("/metrics", get(handlers::get_metrics))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::rate_limit))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::rate_limit,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // Admin routes require authentication
     let admin_routes = Router::new()
@@ -109,14 +135,20 @@ pub fn create_router(state: AppState) -> Router {
         .route("/roles", post(handlers::create_role))
         .route("/roles/:name", delete(handlers::delete_role))
         // Metrics timeseries
-        .route("/metrics/timeseries", post(handlers::get_metrics_timeseries))
+        .route(
+            "/metrics/timeseries",
+            post(handlers::get_metrics_timeseries),
+        )
         // Backup management
         .route("/backup", post(backup::create_backup))
         .route("/backups", get(backup::list_backups))
         .route("/restore", post(backup::restore_backup))
         .route("/backup/:id", delete(backup::delete_backup))
         // Apply authentication middleware to all admin routes
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // Cluster peer management routes (require auth)
     let cluster_routes = Router::new()
@@ -125,13 +157,19 @@ pub fn create_router(state: AppState) -> Router {
         .route("/heartbeat", post(handlers::cluster_heartbeat))
         .route("/peers", get(handlers::get_peers))
         .route("/shutdown", post(handlers::cluster_shutdown))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // Login route with rate limiting to prevent brute force attacks
     let login_routes = Router::new()
         .route("/login", post(handlers::login))
         .route("/mfa/verify", post(handlers::verify_mfa))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::login_rate_limit));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::login_rate_limit,
+        ));
 
     // Other auth routes without strict rate limiting
     let auth_routes = Router::new()
@@ -146,21 +184,51 @@ pub fn create_router(state: AppState) -> Router {
         .route("/keys", post(handlers::set_key))
         .route("/keys/:key", get(handlers::get_key))
         .route("/keys/:key", delete(handlers::delete_key))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // Document store routes (require auth)
     let doc_routes = Router::new()
         .route("/collections", get(handlers::list_collections))
         .route("/collections", post(handlers::create_collection))
-        .route("/collections/:name", get(handlers::get_collection_documents))
-        .route("/collections/:name/documents", get(handlers::list_collection_documents))
-        .route("/collections/:name/documents", post(handlers::insert_document))
-        .route("/collections/:name/documents/:id", get(handlers::get_document))
-        .route("/collections/:name/documents/:id", put(handlers::update_document))
-        .route("/collections/:name/documents/:id", patch(handlers::patch_document))
-        .route("/collections/:name/documents/:id", delete(handlers::delete_document))
-        .route("/collections/:name/query", post(handlers::query_collection_documents))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .route(
+            "/collections/:name",
+            get(handlers::get_collection_documents),
+        )
+        .route(
+            "/collections/:name/documents",
+            get(handlers::list_collection_documents),
+        )
+        .route(
+            "/collections/:name/documents",
+            post(handlers::insert_document),
+        )
+        .route(
+            "/collections/:name/documents/:id",
+            get(handlers::get_document),
+        )
+        .route(
+            "/collections/:name/documents/:id",
+            put(handlers::update_document),
+        )
+        .route(
+            "/collections/:name/documents/:id",
+            patch(handlers::patch_document),
+        )
+        .route(
+            "/collections/:name/documents/:id",
+            delete(handlers::delete_document),
+        )
+        .route(
+            "/collections/:name/query",
+            post(handlers::query_collection_documents),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // Time series routes (require auth)
     let timeseries_routes = Router::new()
@@ -168,15 +236,24 @@ pub fn create_router(state: AppState) -> Router {
         .route("/metrics", post(handlers::register_metric))
         .route("/write", post(handlers::write_timeseries))
         .route("/query", post(handlers::query_timeseries))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // Streaming routes (require auth)
     let streaming_routes = Router::new()
         .route("/channels", get(handlers::list_channels))
         .route("/channels", post(handlers::create_channel))
         .route("/publish", post(handlers::publish_event))
-        .route("/channels/:channel/history", get(handlers::get_channel_history))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .route(
+            "/channels/:channel/history",
+            get(handlers::get_channel_history),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // Graph database routes (require auth)
     let graph_routes = Router::new()
@@ -184,12 +261,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/nodes", post(handlers::create_graph_node))
         .route("/nodes/:node_id", delete(handlers::delete_graph_node))
         .route("/edges", post(handlers::create_graph_edge))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // Query builder routes (require auth)
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // OTA Update routes (require auth)
     let update_routes = Router::new()
@@ -198,17 +281,29 @@ pub fn create_router(state: AppState) -> Router {
         .route("/execute", post(handlers::execute_update_plan))
         .route("/status/:plan_id", get(handlers::get_update_status))
         .route("/history", get(handlers::list_update_plans))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     // GDPR/CCPA compliance routes
     let compliance_routes = Router::new()
         // Data deletion (GDPR right to erasure - Article 17)
-        .route("/data-subject/:identifier", delete(gdpr::delete_data_subject))
+        .route(
+            "/data-subject/:identifier",
+            delete(gdpr::delete_data_subject),
+        )
         // Data export (GDPR right to data portability - Article 20)
         .route("/export", post(gdpr::export_data_subject))
         .route("/certificates", get(gdpr::list_deletion_certificates))
-        .route("/certificates/:cert_id", get(gdpr::get_deletion_certificate))
-        .route("/certificates/:cert_id/verify", get(gdpr::verify_deletion_certificate))
+        .route(
+            "/certificates/:cert_id",
+            get(gdpr::get_deletion_certificate),
+        )
+        .route(
+            "/certificates/:cert_id/verify",
+            get(gdpr::verify_deletion_certificate),
+        )
         .route("/audit/:subject_id", get(gdpr::get_deletion_audit))
         .route("/audit/verify", get(gdpr::verify_audit_integrity))
         // Consent management
@@ -216,10 +311,22 @@ pub fn create_router(state: AppState) -> Router {
         .route("/consent/stats", get(consent::get_consent_stats))
         .route("/consent/:subject_id", get(consent::get_consent_status))
         .route("/consent/:subject_id", delete(consent::delete_consent_data))
-        .route("/consent/:subject_id/history", get(consent::get_consent_history))
-        .route("/consent/:subject_id/export", get(consent::export_consent_data))
-        .route("/consent/:subject_id/check/:purpose", get(consent::check_consent_status))
-        .route("/consent/:subject_id/:purpose", delete(consent::withdraw_consent))
+        .route(
+            "/consent/:subject_id/history",
+            get(consent::get_consent_history),
+        )
+        .route(
+            "/consent/:subject_id/export",
+            get(consent::export_consent_data),
+        )
+        .route(
+            "/consent/:subject_id/check/:purpose",
+            get(consent::check_consent_status),
+        )
+        .route(
+            "/consent/:subject_id/:purpose",
+            delete(consent::withdraw_consent),
+        )
         // CCPA Do Not Sell
         .route("/do-not-sell", get(consent::get_do_not_sell_list))
         // Breach detection and notification (HIPAA/GDPR)
@@ -227,12 +334,60 @@ pub fn create_router(state: AppState) -> Router {
         .route("/breaches/stats", get(breach::get_breach_stats))
         .route("/breaches/cleanup", post(breach::trigger_cleanup))
         .route("/breaches/:id", get(breach::get_breach))
-        .route("/breaches/:id/acknowledge", post(breach::acknowledge_breach))
+        .route(
+            "/breaches/:id/acknowledge",
+            post(breach::acknowledge_breach),
+        )
         .route("/breaches/:id/resolve", post(breach::resolve_breach))
         .route("/breaches/:id/report", get(breach::get_breach_report))
         .route("/security-events", get(breach::list_security_events))
         // Apply authentication middleware to all compliance routes
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::require_auth));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
+    // Vault routes (require auth)
+    let vault_routes = Router::new()
+        .route("/status", get(vault_handlers::vault_status))
+        .route("/seal", post(vault_handlers::vault_seal))
+        .route("/unseal", post(vault_handlers::vault_unseal))
+        .route("/secrets", get(vault_handlers::list_secrets))
+        .route("/secrets/:key", get(vault_handlers::get_secret))
+        .route("/secrets/:key", put(vault_handlers::set_secret))
+        .route("/secrets/:key", delete(vault_handlers::delete_secret))
+        .route("/transit/encrypt", post(vault_handlers::transit_encrypt))
+        .route("/transit/decrypt", post(vault_handlers::transit_decrypt))
+        .route("/transit/keys", post(vault_handlers::create_transit_key))
+        .route("/transit/keys", get(vault_handlers::list_transit_keys))
+        .route("/audit", get(vault_handlers::vault_audit))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
+    // Shield routes (require auth)
+    let shield_routes = Router::new()
+        .route("/status", get(shield_handlers::shield_status))
+        .route("/stats", get(shield_handlers::shield_stats))
+        .route("/events", get(shield_handlers::shield_events))
+        .route("/blocked", get(shield_handlers::list_blocked))
+        .route("/blocked", post(shield_handlers::block_ip))
+        .route("/blocked/:ip", delete(shield_handlers::unblock_ip))
+        .route("/allowlist", get(shield_handlers::get_allowlist))
+        .route("/allowlist", post(shield_handlers::add_to_allowlist))
+        .route(
+            "/allowlist/:ip",
+            delete(shield_handlers::remove_from_allowlist),
+        )
+        .route("/policy", get(shield_handlers::get_policy))
+        .route("/policy", put(shield_handlers::update_policy))
+        .route("/ip/:ip", get(shield_handlers::get_ip_reputation))
+        .route("/feed", get(shield_handlers::shield_feed))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
 
     Router::new()
         .route("/health", get(handlers::health_check))
@@ -248,12 +403,25 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/query-builder", query_routes)
         .nest("/api/v1/updates", update_routes)
         .nest("/api/v1/compliance", compliance_routes)
+        .nest("/api/v1/vault", vault_routes)
+        .nest("/api/v1/shield", shield_routes)
         .fallback(handlers::not_found)
-        .layer(axum::extract::DefaultBodyLimit::max(state.config.body_limit_bytes))
-        .layer(tower::limit::ConcurrencyLimitLayer::new(state.config.max_connections))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            state.config.body_limit_bytes,
+        ))
+        .layer(tower::limit::ConcurrencyLimitLayer::new(
+            state.config.max_connections,
+        ))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
-        .layer(axum::middleware::from_fn_with_state(state.clone(), middleware::security_headers))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::security_headers,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::shield_check,
+        ))
         .layer(axum::middleware::from_fn(middleware::request_id))
         .with_state(state)
 }

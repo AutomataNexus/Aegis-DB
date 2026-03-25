@@ -10,7 +10,7 @@ use crate::state::AppState;
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{Request, Response, HeaderValue, StatusCode},
+    http::{HeaderValue, Request, Response, StatusCode},
     middleware::Next,
     response::IntoResponse,
     Json,
@@ -57,10 +57,12 @@ impl RateLimiter {
         let mut entries = self.entries.write();
         let now = Instant::now();
 
-        let entry = entries.entry(key.to_string()).or_insert_with(|| RateLimitEntry {
-            tokens: self.max_requests as f64,
-            last_update: now,
-        });
+        let entry = entries
+            .entry(key.to_string())
+            .or_insert_with(|| RateLimitEntry {
+                tokens: self.max_requests as f64,
+                last_update: now,
+            });
 
         // Refill tokens based on elapsed time (token bucket algorithm)
         let elapsed = now.duration_since(entry.last_update);
@@ -99,10 +101,7 @@ impl Default for RateLimiter {
 // =============================================================================
 
 /// Add a unique request ID to each request.
-pub async fn request_id(
-    mut request: Request<Body>,
-    next: Next,
-) -> Response<Body> {
+pub async fn request_id(mut request: Request<Body>, next: Next) -> Response<Body> {
     let request_id = Uuid::new_v4().to_string();
 
     request.headers_mut().insert(
@@ -121,6 +120,73 @@ pub async fn request_id(
 }
 
 // =============================================================================
+// Shield Middleware
+// =============================================================================
+
+/// Security shield check — runs before all other middleware.
+/// Analyzes requests for threats and blocks malicious traffic.
+pub async fn shield_check(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response<Body>, impl IntoResponse> {
+    let source_ip = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("127.0.0.1")
+        .split(',')
+        .next()
+        .unwrap_or("127.0.0.1")
+        .trim()
+        .to_string();
+
+    let ctx = aegis_shield::RequestContext {
+        source_ip: source_ip.clone(),
+        path: request.uri().path().to_string(),
+        method: request.method().to_string(),
+        user_agent: request
+            .headers()
+            .get("user-agent")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string()),
+        auth_user: None,
+        body_size: 0,
+        headers: std::collections::HashMap::new(),
+    };
+
+    match state.shield.analyze_request(&ctx) {
+        aegis_shield::ShieldVerdict::Allow => Ok(next.run(request).await),
+        aegis_shield::ShieldVerdict::Block {
+            reason,
+            threat_level,
+        } => {
+            tracing::warn!(
+                ip = %source_ip,
+                level = ?threat_level,
+                "Shield blocked request: {}",
+                reason
+            );
+            Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Request blocked by security shield",
+                    "reason": reason,
+                })),
+            ))
+        }
+        aegis_shield::ShieldVerdict::RateLimit { delay_ms } => {
+            // For rate-limited requests, add a delay header but allow through
+            let mut response = next.run(request).await;
+            if let Ok(val) = HeaderValue::from_str(&delay_ms.to_string()) {
+                response.headers_mut().insert("x-ratelimit-delay-ms", val);
+            }
+            Ok(response)
+        }
+    }
+}
+
+// =============================================================================
 // Authentication Middleware
 // =============================================================================
 
@@ -131,9 +197,15 @@ pub async fn require_auth(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
-    // If no users exist, auth cannot be enforced — allow open access
-    // Once an admin user is created (via env vars or API), auth is enforced
+    // If no users exist, auth cannot be enforced — allow open access for bootstrap.
+    // Log a warning on every request so operators notice the insecure state.
     if state.auth.list_users().is_empty() {
+        tracing::warn!(
+            path = %request.uri().path(),
+            "SECURITY: No admin user configured — all endpoints are unauthenticated. \
+             Create an admin user via POST /api/v1/auth/login or set \
+             AEGIS_ADMIN_USERNAME/AEGIS_ADMIN_PASSWORD to secure the server."
+        );
         return Ok(next.run(request).await);
     }
 
@@ -151,7 +223,7 @@ pub async fn require_auth(
                 Json(serde_json::json!({
                     "error": "Missing or invalid Authorization header",
                     "message": "Provide a valid Bearer token in the Authorization header"
-                }))
+                })),
             ));
         }
     };
@@ -162,15 +234,13 @@ pub async fn require_auth(
             // Token is valid, proceed with the request
             Ok(next.run(request).await)
         }
-        None => {
-            Err((
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({
-                    "error": "Invalid or expired session token",
-                    "message": "Please log in again to obtain a new token"
-                }))
-            ))
-        }
+        None => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "Invalid or expired session token",
+                "message": "Please log in again to obtain a new token"
+            })),
+        )),
     }
 }
 
@@ -181,7 +251,8 @@ pub async fn require_auth(
 /// Extract client IP from request, checking X-Forwarded-For header first.
 fn get_client_ip(request: &Request<Body>) -> String {
     // Check X-Forwarded-For header (from reverse proxies)
-    if let Some(forwarded) = request.headers()
+    if let Some(forwarded) = request
+        .headers()
         .get("x-forwarded-for")
         .and_then(|h| h.to_str().ok())
     {
@@ -192,7 +263,8 @@ fn get_client_ip(request: &Request<Body>) -> String {
     }
 
     // Check X-Real-IP header
-    if let Some(real_ip) = request.headers()
+    if let Some(real_ip) = request
+        .headers()
         .get("x-real-ip")
         .and_then(|h| h.to_str().ok())
     {
@@ -233,7 +305,7 @@ pub async fn rate_limit(
                 "error": "Rate limit exceeded",
                 "message": format!("Too many requests. Please try again later. Limit: {} requests per minute.", rate_limit),
                 "retry_after_seconds": 60
-            }))
+            })),
         ))
     }
 }
@@ -254,7 +326,10 @@ pub async fn login_rate_limit(
     }
 
     // Use the login rate limiter from AppState
-    if state.login_rate_limiter.check(&format!("login:{}", client_ip)) {
+    if state
+        .login_rate_limiter
+        .check(&format!("login:{}", client_ip))
+    {
         Ok(next.run(request).await)
     } else {
         Err((
@@ -263,7 +338,7 @@ pub async fn login_rate_limit(
                 "error": "Too many login attempts",
                 "message": format!("Too many login attempts. Please try again later. Limit: {} attempts per minute.", rate_limit),
                 "retry_after_seconds": 60
-            }))
+            })),
         ))
     }
 }
@@ -297,10 +372,7 @@ pub async fn security_headers(
     );
 
     // X-Frame-Options: Prevent clickjacking by disabling framing
-    headers.insert(
-        "x-frame-options",
-        HeaderValue::from_static("DENY"),
-    );
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
 
     // X-XSS-Protection: Enable browser XSS filtering
     headers.insert(
@@ -333,9 +405,9 @@ pub async fn security_headers(
 mod tests {
     use super::*;
     use crate::config::ServerConfig;
-    use axum::{routing::get, Router};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use axum::{routing::get, Router};
     use tower::util::ServiceExt;
 
     async fn handler() -> &'static str {
@@ -349,7 +421,12 @@ mod tests {
             .layer(axum::middleware::from_fn(request_id));
 
         let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).expect("failed to build request"))
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
             .await
             .expect("failed to execute request");
 
@@ -361,15 +438,25 @@ mod tests {
     async fn test_auth_middleware_no_token() {
         let state = AppState::new(ServerConfig::default());
         // Create a user so auth middleware is enforced
-        let _ = state.auth.create_user("testuser", "test@test.local", "TestPass123!", "admin");
+        let _ = state
+            .auth
+            .create_user("testuser", "test@test.local", "TestPass123!", "admin");
 
         let app = Router::new()
             .route("/", get(handler))
-            .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_auth,
+            ))
             .with_state(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).expect("failed to build request"))
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
             .await
             .expect("failed to execute request");
 
@@ -380,11 +467,16 @@ mod tests {
     async fn test_auth_middleware_invalid_token() {
         let state = AppState::new(ServerConfig::default());
         // Create a user so auth middleware is enforced
-        let _ = state.auth.create_user("testuser", "test@test.local", "TestPass123!", "admin");
+        let _ = state
+            .auth
+            .create_user("testuser", "test@test.local", "TestPass123!", "admin");
 
         let app = Router::new()
             .route("/", get(handler))
-            .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_auth,
+            ))
             .with_state(state);
 
         let response = app
@@ -393,7 +485,7 @@ mod tests {
                     .uri("/")
                     .header("Authorization", "Bearer invalid_token")
                     .body(Body::empty())
-                    .expect("failed to build request")
+                    .expect("failed to build request"),
             )
             .await
             .expect("failed to execute request");
@@ -406,13 +498,19 @@ mod tests {
         let state = AppState::new(ServerConfig::default());
 
         // Create a test user and get a valid token
-        state.auth.create_user("authtest", "auth@test.com", "TestPassword123!", "admin").expect("failed to create test user");
+        state
+            .auth
+            .create_user("authtest", "auth@test.com", "TestPassword123!", "admin")
+            .expect("failed to create test user");
         let login_response = state.auth.login("authtest", "TestPassword123!");
         let token = login_response.token.expect("login should return token");
 
         let app = Router::new()
             .route("/", get(handler))
-            .layer(axum::middleware::from_fn_with_state(state.clone(), require_auth))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_auth,
+            ))
             .with_state(state);
 
         let response = app
@@ -421,7 +519,7 @@ mod tests {
                     .uri("/")
                     .header("Authorization", format!("Bearer {}", token))
                     .body(Body::empty())
-                    .expect("failed to build request")
+                    .expect("failed to build request"),
             )
             .await
             .expect("failed to execute request");
@@ -478,11 +576,19 @@ mod tests {
 
         let app = Router::new()
             .route("/", get(handler))
-            .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                security_headers,
+            ))
             .with_state(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).expect("failed to build request"))
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
             .await
             .expect("failed to execute request");
 
@@ -490,28 +596,46 @@ mod tests {
 
         // Check security headers are present
         assert_eq!(
-            response.headers().get("content-security-policy").map(|v| v.to_str().unwrap()),
+            response
+                .headers()
+                .get("content-security-policy")
+                .map(|v| v.to_str().unwrap()),
             Some("default-src 'self'")
         );
         assert_eq!(
-            response.headers().get("x-content-type-options").map(|v| v.to_str().unwrap()),
+            response
+                .headers()
+                .get("x-content-type-options")
+                .map(|v| v.to_str().unwrap()),
             Some("nosniff")
         );
         assert_eq!(
-            response.headers().get("x-frame-options").map(|v| v.to_str().unwrap()),
+            response
+                .headers()
+                .get("x-frame-options")
+                .map(|v| v.to_str().unwrap()),
             Some("DENY")
         );
         assert_eq!(
-            response.headers().get("x-xss-protection").map(|v| v.to_str().unwrap()),
+            response
+                .headers()
+                .get("x-xss-protection")
+                .map(|v| v.to_str().unwrap()),
             Some("1; mode=block")
         );
         assert_eq!(
-            response.headers().get("referrer-policy").map(|v| v.to_str().unwrap()),
+            response
+                .headers()
+                .get("referrer-policy")
+                .map(|v| v.to_str().unwrap()),
             Some("strict-origin-when-cross-origin")
         );
 
         // HSTS should NOT be present without TLS
-        assert!(response.headers().get("strict-transport-security").is_none());
+        assert!(response
+            .headers()
+            .get("strict-transport-security")
+            .is_none());
     }
 
     #[tokio::test]
@@ -521,11 +645,19 @@ mod tests {
 
         let app = Router::new()
             .route("/", get(handler))
-            .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                security_headers,
+            ))
             .with_state(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).expect("failed to build request"))
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("failed to build request"),
+            )
             .await
             .expect("failed to execute request");
 
@@ -533,7 +665,10 @@ mod tests {
 
         // HSTS should be present with TLS
         assert_eq!(
-            response.headers().get("strict-transport-security").map(|v| v.to_str().unwrap()),
+            response
+                .headers()
+                .get("strict-transport-security")
+                .map(|v| v.to_str().unwrap()),
             Some("max-age=31536000; includeSubDomains")
         );
     }

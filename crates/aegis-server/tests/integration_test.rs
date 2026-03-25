@@ -7,12 +7,12 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use tower::Service;
-use serde_json::{json, Value};
-use std::sync::Arc;
 use data_encoding::BASE32_NOPAD;
 use hmac::{Hmac, Mac};
+use serde_json::{json, Value};
 use sha1::Sha1;
+use std::sync::Arc;
+use tower::Service;
 
 use aegis_server::{create_router, AppState, ServerConfig};
 
@@ -30,7 +30,9 @@ async fn get_json(app: &mut axum::Router, uri: &str) -> (StatusCode, Value) {
         .unwrap();
 
     let status = response.status();
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     (status, json)
 }
@@ -50,7 +52,9 @@ async fn get_json_auth(app: &mut axum::Router, uri: &str, token: &str) -> (Statu
         .unwrap();
 
     let status = response.status();
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     (status, json)
 }
@@ -70,13 +74,20 @@ async fn post_json(app: &mut axum::Router, uri: &str, body: Value) -> (StatusCod
         .unwrap();
 
     let status = response.status();
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     (status, json)
 }
 
 /// Helper to make a POST request with auth token and JSON body.
-async fn post_json_auth(app: &mut axum::Router, uri: &str, body: Value, token: &str) -> (StatusCode, Value) {
+async fn post_json_auth(
+    app: &mut axum::Router,
+    uri: &str,
+    body: Value,
+    token: &str,
+) -> (StatusCode, Value) {
     let response = app
         .call(
             Request::builder()
@@ -91,7 +102,9 @@ async fn post_json_auth(app: &mut axum::Router, uri: &str, body: Value, token: &
         .unwrap();
 
     let status = response.status();
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     (status, json)
 }
@@ -111,7 +124,9 @@ async fn delete_auth(app: &mut axum::Router, uri: &str, token: &str) -> (StatusC
         .unwrap();
 
     let status = response.status();
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     (status, json)
 }
@@ -123,9 +138,18 @@ fn shared_state() -> Arc<AppState> {
 
     // Create test users for integration tests
     // These replace the previously hardcoded users
-    let _ = state.auth.create_user("testadmin", "admin@test.local", "TestAdmin123!", "admin");
-    let _ = state.auth.create_user("testdemo", "demo@test.local", "TestDemo123!", "viewer");
-    let _ = state.auth.create_user("testoperator", "operator@test.local", "TestOperator123!", "operator");
+    let _ = state
+        .auth
+        .create_user("testadmin", "admin@test.local", "TestAdmin123!", "admin");
+    let _ = state
+        .auth
+        .create_user("testdemo", "demo@test.local", "TestDemo123!", "viewer");
+    let _ = state.auth.create_user(
+        "testoperator",
+        "operator@test.local",
+        "TestOperator123!",
+        "operator",
+    );
 
     state
 }
@@ -157,11 +181,10 @@ async fn login_test_user(app: &mut axum::Router, username: &str, password: &str)
 
 /// Generate a valid TOTP code for a given secret.
 fn generate_totp(secret: &str) -> String {
-    let secret_bytes = BASE32_NOPAD.decode(secret.as_bytes())
-        .unwrap_or_else(|_| {
-            let padded = format!("{}{}", secret, &"========"[..((8 - secret.len() % 8) % 8)]);
-            data_encoding::BASE32.decode(padded.as_bytes()).unwrap()
-        });
+    let secret_bytes = BASE32_NOPAD.decode(secret.as_bytes()).unwrap_or_else(|_| {
+        let padded = format!("{}{}", secret, &"========"[..((8 - secret.len() % 8) % 8)]);
+        data_encoding::BASE32.decode(padded.as_bytes()).unwrap()
+    });
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -440,7 +463,9 @@ async fn test_get_cluster_info_e2e() {
     let mut app = app_with_state(state);
 
     // Login to get auth token
-    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .unwrap();
 
     let (status, json) = get_json_auth(&mut app, "/api/v1/admin/cluster", &token).await;
 
@@ -457,7 +482,9 @@ async fn test_get_dashboard_summary_e2e() {
     let mut app = app_with_state(state);
 
     // Login to get auth token
-    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .unwrap();
 
     let (status, json) = get_json_auth(&mut app, "/api/v1/admin/dashboard", &token).await;
 
@@ -483,7 +510,9 @@ async fn test_get_nodes_e2e() {
     let mut app = app_with_state(state);
 
     // Login to get auth token
-    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .unwrap();
 
     let (status, json) = get_json_auth(&mut app, "/api/v1/admin/nodes", &token).await;
 
@@ -517,7 +546,9 @@ async fn test_get_storage_info_e2e() {
     let mut app = app_with_state(state);
 
     // Login to get auth token
-    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .unwrap();
 
     let (status, json) = get_json_auth(&mut app, "/api/v1/admin/storage", &token).await;
 
@@ -536,7 +567,9 @@ async fn test_get_query_stats_e2e() {
     let mut app = app_with_state(state);
 
     // Login to get auth token
-    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .unwrap();
 
     let (status, json) = get_json_auth(&mut app, "/api/v1/admin/stats", &token).await;
 
@@ -557,7 +590,9 @@ async fn test_get_alerts_e2e() {
     let mut app = app_with_state(state);
 
     // Login to get auth token
-    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .unwrap();
 
     let (status, json) = get_json_auth(&mut app, "/api/v1/admin/alerts", &token).await;
 
@@ -584,7 +619,9 @@ async fn test_get_activities_e2e() {
     let mut app = app_with_state(state);
 
     // Login to get auth token
-    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .unwrap();
 
     let (status, json) = get_json_auth(&mut app, "/api/v1/admin/activities", &token).await;
 
@@ -608,11 +645,16 @@ async fn test_activities_logged_after_login_e2e() {
     let mut app = app_with_state(state);
 
     // Login to generate activity and get token
-    let token = login_test_user(&mut app, "testdemo", "TestDemo123!").await.unwrap();
+    let token = login_test_user(&mut app, "testdemo", "TestDemo123!")
+        .await
+        .unwrap();
 
     // Check activities - should include the login (need admin token for this)
-    let admin_token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
-    let (status, json) = get_json_auth(&mut app, "/api/v1/admin/activities?limit=10", &admin_token).await;
+    let admin_token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .unwrap();
+    let (status, json) =
+        get_json_auth(&mut app, "/api/v1/admin/activities?limit=10", &admin_token).await;
 
     // Token is used for validation, just need it to exist
     assert!(!token.is_empty());
@@ -632,7 +674,7 @@ async fn test_activities_logged_after_login_e2e() {
 #[tokio::test]
 async fn test_list_tables_e2e() {
     let (mut app, token) = app_with_auth().await;
-    
+
     let (status, json) = get_json_auth(&mut app, "/api/v1/tables", &token).await;
 
     assert_eq!(status, StatusCode::OK);
@@ -656,7 +698,7 @@ async fn test_not_found_e2e() {
 #[tokio::test]
 async fn test_metrics_endpoint_e2e() {
     let (mut app, token) = app_with_auth().await;
-    
+
     let (status, json) = get_json_auth(&mut app, "/api/v1/metrics", &token).await;
 
     assert_eq!(status, StatusCode::OK);
@@ -1441,8 +1483,10 @@ async fn test_malformed_json_request_e2e() {
         .unwrap();
 
     // Should handle malformed JSON gracefully
-    assert!(response.status() == StatusCode::BAD_REQUEST ||
-            response.status() == StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        response.status() == StatusCode::BAD_REQUEST
+            || response.status() == StatusCode::UNPROCESSABLE_ENTITY
+    );
 }
 
 #[tokio::test]
@@ -1613,7 +1657,9 @@ async fn test_api_v1_prefix_e2e() {
     let mut app = app_with_state(state);
 
     // Login to get auth token for admin endpoints
-    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!").await.unwrap();
+    let token = login_test_user(&mut app, "testadmin", "TestAdmin123!")
+        .await
+        .unwrap();
 
     // Admin v1 endpoints (require auth)
     let admin_endpoints = vec![
@@ -1626,20 +1672,25 @@ async fn test_api_v1_prefix_e2e() {
 
     for endpoint in admin_endpoints {
         let (status, _) = get_json_auth(&mut app, endpoint, &token).await;
-        assert!(status == StatusCode::OK || status == StatusCode::NOT_FOUND,
-            "Endpoint {} returned unexpected status: {}", endpoint, status);
+        assert!(
+            status == StatusCode::OK || status == StatusCode::NOT_FOUND,
+            "Endpoint {} returned unexpected status: {}",
+            endpoint,
+            status
+        );
     }
 
     // Data v1 endpoints (require auth)
-    let data_endpoints = vec![
-        "/api/v1/tables",
-        "/api/v1/metrics",
-    ];
+    let data_endpoints = vec!["/api/v1/tables", "/api/v1/metrics"];
 
     for endpoint in data_endpoints {
         let (status, _) = get_json_auth(&mut app, endpoint, &token).await;
-        assert!(status == StatusCode::OK || status == StatusCode::NOT_FOUND,
-            "Endpoint {} returned unexpected status: {}", endpoint, status);
+        assert!(
+            status == StatusCode::OK || status == StatusCode::NOT_FOUND,
+            "Endpoint {} returned unexpected status: {}",
+            endpoint,
+            status
+        );
     }
 }
 

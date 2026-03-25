@@ -66,9 +66,11 @@ pub async fn check_node_health(address: &str) -> Result<NodeHealth, UpdateError>
         .build()
         .map_err(|e| UpdateError::HealthCheckFailed(format!("Failed to build client: {e}")))?;
 
-    let response = client.get(&url).send().await.map_err(|e| {
-        UpdateError::NodeUnreachable(format!("{address}: {e}"))
-    })?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| UpdateError::NodeUnreachable(format!("{address}: {e}")))?;
 
     if !response.status().is_success() {
         return Err(UpdateError::HealthCheckFailed(format!(

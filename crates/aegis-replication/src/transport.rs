@@ -281,7 +281,10 @@ impl InMemoryTransport {
         let inboxes = Arc::new(RwLock::new(HashMap::new()));
 
         for node in nodes {
-            inboxes.write().expect("transport inboxes lock poisoned").insert(node.clone(), Vec::new());
+            inboxes
+                .write()
+                .expect("transport inboxes lock poisoned")
+                .insert(node.clone(), Vec::new());
         }
 
         nodes
@@ -301,14 +304,20 @@ impl InMemoryTransport {
     /// Create a single transport (for testing).
     pub fn new(node_id: NodeId) -> Self {
         let inboxes = Arc::new(RwLock::new(HashMap::new()));
-        inboxes.write().expect("transport inboxes lock poisoned").insert(node_id.clone(), Vec::new());
+        inboxes
+            .write()
+            .expect("transport inboxes lock poisoned")
+            .insert(node_id.clone(), Vec::new());
         Self { node_id, inboxes }
     }
 }
 
 impl Transport for InMemoryTransport {
     fn send(&self, message: Message) -> Result<(), TransportError> {
-        let mut inboxes = self.inboxes.write().expect("transport inboxes lock poisoned");
+        let mut inboxes = self
+            .inboxes
+            .write()
+            .expect("transport inboxes lock poisoned");
         if let Some(inbox) = inboxes.get_mut(&message.to) {
             inbox.push(message);
             Ok(())
@@ -327,7 +336,10 @@ impl Transport for InMemoryTransport {
     }
 
     fn try_recv(&self) -> Option<Message> {
-        let mut inboxes = self.inboxes.write().expect("transport inboxes lock poisoned");
+        let mut inboxes = self
+            .inboxes
+            .write()
+            .expect("transport inboxes lock poisoned");
         if let Some(inbox) = inboxes.get_mut(&self.node_id) {
             if !inbox.is_empty() {
                 return Some(inbox.remove(0));
@@ -379,7 +391,10 @@ impl ConnectionPool {
 
     /// Add a connection.
     pub fn add(&self, node_id: NodeId, address: String) {
-        let mut conns = self.connections.write().expect("connection pool lock poisoned");
+        let mut conns = self
+            .connections
+            .write()
+            .expect("connection pool lock poisoned");
         if conns.len() < self.max_connections {
             conns.insert(
                 node_id.clone(),
@@ -396,17 +411,29 @@ impl ConnectionPool {
 
     /// Remove a connection.
     pub fn remove(&self, node_id: &NodeId) {
-        self.connections.write().expect("connection pool lock poisoned").remove(node_id);
+        self.connections
+            .write()
+            .expect("connection pool lock poisoned")
+            .remove(node_id);
     }
 
     /// Get a connection.
     pub fn get(&self, node_id: &NodeId) -> Option<ConnectionState> {
-        self.connections.read().expect("connection pool lock poisoned").get(node_id).cloned()
+        self.connections
+            .read()
+            .expect("connection pool lock poisoned")
+            .get(node_id)
+            .cloned()
     }
 
     /// Mark a connection as connected.
     pub fn mark_connected(&self, node_id: &NodeId) {
-        if let Some(conn) = self.connections.write().expect("connection pool lock poisoned").get_mut(node_id) {
+        if let Some(conn) = self
+            .connections
+            .write()
+            .expect("connection pool lock poisoned")
+            .get_mut(node_id)
+        {
             conn.connected = true;
             conn.last_activity = current_timestamp();
             conn.retry_count = 0;
@@ -415,7 +442,12 @@ impl ConnectionPool {
 
     /// Mark a connection as disconnected.
     pub fn mark_disconnected(&self, node_id: &NodeId) {
-        if let Some(conn) = self.connections.write().expect("connection pool lock poisoned").get_mut(node_id) {
+        if let Some(conn) = self
+            .connections
+            .write()
+            .expect("connection pool lock poisoned")
+            .get_mut(node_id)
+        {
             conn.connected = false;
             conn.retry_count += 1;
         }
@@ -434,7 +466,10 @@ impl ConnectionPool {
 
     /// Get connection count.
     pub fn len(&self) -> usize {
-        self.connections.read().expect("connection pool lock poisoned").len()
+        self.connections
+            .read()
+            .expect("connection pool lock poisoned")
+            .len()
     }
 
     /// Check if pool is empty.
@@ -467,11 +502,7 @@ mod tests {
             last_log_term: 0,
         };
 
-        let msg = Message::vote_request(
-            NodeId::new("node1"),
-            NodeId::new("node2"),
-            request,
-        );
+        let msg = Message::vote_request(NodeId::new("node1"), NodeId::new("node2"), request);
 
         let bytes = msg.to_bytes();
         let restored = Message::from_bytes(&bytes).unwrap();
@@ -545,7 +576,8 @@ mod tests {
         assert!(!error.success);
         assert_eq!(error.error, Some("failed".to_string()));
 
-        let not_leader = ClientResponse::not_leader("req3".to_string(), Some(NodeId::new("leader")));
+        let not_leader =
+            ClientResponse::not_leader("req3".to_string(), Some(NodeId::new("leader")));
         assert!(!not_leader.success);
         assert_eq!(not_leader.leader_hint, Some(NodeId::new("leader")));
     }

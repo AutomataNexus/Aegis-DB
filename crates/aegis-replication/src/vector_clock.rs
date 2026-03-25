@@ -7,8 +7,8 @@
 
 use crate::node::NodeId;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 // =============================================================================
 // Vector Clock
@@ -43,10 +43,7 @@ impl VectorClock {
 
     /// Get the clock value for a node.
     pub fn get(&self, node_id: &NodeId) -> u64 {
-        self.clocks
-            .get(node_id.as_str())
-            .copied()
-            .unwrap_or(0)
+        self.clocks.get(node_id.as_str()).copied().unwrap_or(0)
     }
 
     /// Set the clock value for a node.

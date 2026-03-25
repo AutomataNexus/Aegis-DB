@@ -25,5 +25,5 @@ pub use backend::StorageBackend;
 pub use block::{Block, BlockHeader};
 pub use buffer::BufferPool;
 pub use page::Page;
-pub use transaction::{TransactionManager, Transaction, IsolationLevel, TransactionStats, GcStats};
-pub use wal::{WriteAheadLog, RecoveryResult, CheckpointData, LogRecord, LogRecordType};
+pub use transaction::{GcStats, IsolationLevel, Transaction, TransactionManager, TransactionStats};
+pub use wal::{CheckpointData, LogRecord, LogRecordType, RecoveryResult, WriteAheadLog};

@@ -231,10 +231,7 @@ impl DistributedTransaction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransactionOperation {
     /// Read operation.
-    Read {
-        key: String,
-        shard_id: String,
-    },
+    Read { key: String, shard_id: String },
     /// Write operation.
     Write {
         key: String,
@@ -242,10 +239,7 @@ pub enum TransactionOperation {
         shard_id: String,
     },
     /// Delete operation.
-    Delete {
-        key: String,
-        shard_id: String,
-    },
+    Delete { key: String, shard_id: String },
     /// Compare and swap operation.
     CompareAndSwap {
         key: String,
@@ -301,27 +295,21 @@ pub enum TwoPhaseMessage {
         participant: NodeId,
     },
     /// Commit request from coordinator.
-    CommitRequest {
-        txn_id: TransactionId,
-    },
+    CommitRequest { txn_id: TransactionId },
     /// Commit acknowledgment from participant.
     CommitAck {
         txn_id: TransactionId,
         participant: NodeId,
     },
     /// Abort request from coordinator.
-    AbortRequest {
-        txn_id: TransactionId,
-    },
+    AbortRequest { txn_id: TransactionId },
     /// Abort acknowledgment from participant.
     AbortAck {
         txn_id: TransactionId,
         participant: NodeId,
     },
     /// Query transaction status (for recovery).
-    StatusQuery {
-        txn_id: TransactionId,
-    },
+    StatusQuery { txn_id: TransactionId },
     /// Status response.
     StatusResponse {
         txn_id: TransactionId,
@@ -384,12 +372,20 @@ impl TransactionCoordinator {
             self.node_id.clone(),
             self.default_timeout_ms,
         );
-        self.transactions.write().expect("transaction coordinator transactions lock poisoned").insert(txn_id, txn);
+        self.transactions
+            .write()
+            .expect("transaction coordinator transactions lock poisoned")
+            .insert(txn_id, txn);
     }
 
     /// Add a participant to a transaction.
     pub fn add_participant(&self, txn_id: &TransactionId, node_id: NodeId) -> bool {
-        if let Some(txn) = self.transactions.write().expect("transaction coordinator transactions lock poisoned").get_mut(txn_id) {
+        if let Some(txn) = self
+            .transactions
+            .write()
+            .expect("transaction coordinator transactions lock poisoned")
+            .get_mut(txn_id)
+        {
             txn.add_participant(node_id);
             true
         } else {
@@ -399,7 +395,12 @@ impl TransactionCoordinator {
 
     /// Add an operation to a transaction.
     pub fn add_operation(&self, txn_id: &TransactionId, operation: TransactionOperation) -> bool {
-        if let Some(txn) = self.transactions.write().expect("transaction coordinator transactions lock poisoned").get_mut(txn_id) {
+        if let Some(txn) = self
+            .transactions
+            .write()
+            .expect("transaction coordinator transactions lock poisoned")
+            .get_mut(txn_id)
+        {
             txn.add_operation(operation);
             true
         } else {
@@ -409,7 +410,10 @@ impl TransactionCoordinator {
 
     /// Phase 1: Prepare - Generate prepare requests for all participants.
     pub fn prepare(&self, txn_id: &TransactionId) -> Option<Vec<(NodeId, TwoPhaseMessage)>> {
-        let txns = self.transactions.read().expect("transaction coordinator transactions lock poisoned");
+        let txns = self
+            .transactions
+            .read()
+            .expect("transaction coordinator transactions lock poisoned");
         let txn = txns.get(txn_id)?;
 
         if txn.state != TransactionState::Preparing {
@@ -440,7 +444,10 @@ impl TransactionCoordinator {
         participant: &NodeId,
         vote: ParticipantVote,
     ) -> Option<TransactionState> {
-        let mut txns = self.transactions.write().expect("transaction coordinator transactions lock poisoned");
+        let mut txns = self
+            .transactions
+            .write()
+            .expect("transaction coordinator transactions lock poisoned");
         let txn = txns.get_mut(txn_id)?;
 
         if let Some(p) = txn.participants.get_mut(participant) {
@@ -453,7 +460,10 @@ impl TransactionCoordinator {
             Some(TransactionState::Aborting)
         } else if txn.all_prepared() {
             txn.state = TransactionState::Prepared;
-            self.prepared_log.write().expect("transaction coordinator prepared_log lock poisoned").insert(txn_id.clone());
+            self.prepared_log
+                .write()
+                .expect("transaction coordinator prepared_log lock poisoned")
+                .insert(txn_id.clone());
             Some(TransactionState::Prepared)
         } else {
             None
@@ -462,7 +472,10 @@ impl TransactionCoordinator {
 
     /// Phase 2: Commit - Generate commit requests for all participants.
     pub fn commit(&self, txn_id: &TransactionId) -> Option<Vec<(NodeId, TwoPhaseMessage)>> {
-        let mut txns = self.transactions.write().expect("transaction coordinator transactions lock poisoned");
+        let mut txns = self
+            .transactions
+            .write()
+            .expect("transaction coordinator transactions lock poisoned");
         let txn = txns.get_mut(txn_id)?;
 
         if !txn.state.can_commit() {
@@ -493,7 +506,10 @@ impl TransactionCoordinator {
         txn_id: &TransactionId,
         participant: &NodeId,
     ) -> Option<TransactionState> {
-        let mut txns = self.transactions.write().expect("transaction coordinator transactions lock poisoned");
+        let mut txns = self
+            .transactions
+            .write()
+            .expect("transaction coordinator transactions lock poisoned");
         let txn = txns.get_mut(txn_id)?;
 
         if let Some(p) = txn.participants.get_mut(participant) {
@@ -510,7 +526,10 @@ impl TransactionCoordinator {
 
     /// Abort a transaction - Generate abort requests.
     pub fn abort(&self, txn_id: &TransactionId) -> Option<Vec<(NodeId, TwoPhaseMessage)>> {
-        let mut txns = self.transactions.write().expect("transaction coordinator transactions lock poisoned");
+        let mut txns = self
+            .transactions
+            .write()
+            .expect("transaction coordinator transactions lock poisoned");
         let txn = txns.get_mut(txn_id)?;
 
         if !txn.state.can_abort() {
@@ -537,7 +556,10 @@ impl TransactionCoordinator {
 
     /// Handle abort acknowledgment.
     pub fn handle_abort_ack(&self, txn_id: &TransactionId, _participant: &NodeId) -> bool {
-        let mut txns = self.transactions.write().expect("transaction coordinator transactions lock poisoned");
+        let mut txns = self
+            .transactions
+            .write()
+            .expect("transaction coordinator transactions lock poisoned");
         if let Some(txn) = txns.get_mut(txn_id) {
             txn.state = TransactionState::Aborted;
             true
@@ -557,7 +579,11 @@ impl TransactionCoordinator {
 
     /// Get transaction details.
     pub fn get_transaction(&self, txn_id: &TransactionId) -> Option<DistributedTransaction> {
-        self.transactions.read().expect("transaction coordinator transactions lock poisoned").get(txn_id).cloned()
+        self.transactions
+            .read()
+            .expect("transaction coordinator transactions lock poisoned")
+            .get(txn_id)
+            .cloned()
     }
 
     /// Check for timed out transactions.
@@ -573,7 +599,10 @@ impl TransactionCoordinator {
 
     /// Clean up completed transactions.
     pub fn cleanup_completed(&self) -> usize {
-        let mut txns = self.transactions.write().expect("transaction coordinator transactions lock poisoned");
+        let mut txns = self
+            .transactions
+            .write()
+            .expect("transaction coordinator transactions lock poisoned");
         let before = txns.len();
         txns.retain(|_, txn| !txn.state.is_terminal());
         before - txns.len()
@@ -591,7 +620,10 @@ impl TransactionCoordinator {
 
     /// Check if a transaction was prepared (for recovery).
     pub fn was_prepared(&self, txn_id: &TransactionId) -> bool {
-        self.prepared_log.read().expect("transaction coordinator prepared_log lock poisoned").contains(txn_id)
+        self.prepared_log
+            .read()
+            .expect("transaction coordinator prepared_log lock poisoned")
+            .contains(txn_id)
     }
 }
 
@@ -600,10 +632,12 @@ impl TransactionCoordinator {
 // =============================================================================
 
 /// Callback type for validating operations before prepare.
-pub type ValidationCallback = Box<dyn Fn(&TransactionId, &[TransactionOperation]) -> ValidationResult + Send + Sync>;
+pub type ValidationCallback =
+    Box<dyn Fn(&TransactionId, &[TransactionOperation]) -> ValidationResult + Send + Sync>;
 
 /// Callback type for committing operations.
-pub type CommitCallback = Box<dyn Fn(&TransactionId, &[TransactionOperation]) -> Result<(), String> + Send + Sync>;
+pub type CommitCallback =
+    Box<dyn Fn(&TransactionId, &[TransactionOperation]) -> Result<(), String> + Send + Sync>;
 
 /// Callback type for aborting/rolling back operations.
 pub type AbortCallback = Box<dyn Fn(&TransactionId) -> Result<(), String> + Send + Sync>;
@@ -668,17 +702,26 @@ impl ParticipantHandler {
 
     /// Set the validation callback for prepare phase.
     pub fn set_validation_callback(&self, callback: ValidationCallback) {
-        *self.validation_callback.write().expect("participant handler validation_callback lock poisoned") = Some(callback);
+        *self
+            .validation_callback
+            .write()
+            .expect("participant handler validation_callback lock poisoned") = Some(callback);
     }
 
     /// Set the commit callback for commit phase.
     pub fn set_commit_callback(&self, callback: CommitCallback) {
-        *self.commit_callback.write().expect("participant handler commit_callback lock poisoned") = Some(callback);
+        *self
+            .commit_callback
+            .write()
+            .expect("participant handler commit_callback lock poisoned") = Some(callback);
     }
 
     /// Set the abort callback for abort/rollback phase.
     pub fn set_abort_callback(&self, callback: AbortCallback) {
-        *self.abort_callback.write().expect("participant handler abort_callback lock poisoned") = Some(callback);
+        *self
+            .abort_callback
+            .write()
+            .expect("participant handler abort_callback lock poisoned") = Some(callback);
     }
 
     /// Handle prepare request with full storage integration.
@@ -689,7 +732,10 @@ impl ParticipantHandler {
     ) -> TwoPhaseMessage {
         // Check if there's a validation callback
         let validation_result = {
-            let callback_guard = self.validation_callback.read().expect("participant handler validation_callback lock poisoned");
+            let callback_guard = self
+                .validation_callback
+                .read()
+                .expect("participant handler validation_callback lock poisoned");
             if let Some(ref callback) = *callback_guard {
                 // Run validation against storage
                 callback(txn_id, &operations)
@@ -718,7 +764,10 @@ impl ParticipantHandler {
             .write()
             .expect("participant handler pending_prepares lock poisoned")
             .insert(txn_id.clone(), operations);
-        self.prepared.write().expect("participant handler prepared lock poisoned").insert(txn_id.clone());
+        self.prepared
+            .write()
+            .expect("participant handler prepared lock poisoned")
+            .insert(txn_id.clone());
 
         TwoPhaseMessage::PrepareResponse {
             txn_id: txn_id.clone(),
@@ -728,10 +777,20 @@ impl ParticipantHandler {
     }
 
     /// Basic validation when no custom callback is provided.
-    fn basic_validation(&self, txn_id: &TransactionId, operations: &[TransactionOperation]) -> ValidationResult {
+    fn basic_validation(
+        &self,
+        txn_id: &TransactionId,
+        operations: &[TransactionOperation],
+    ) -> ValidationResult {
         // Check for key conflicts with other pending transactions
-        let pending = self.pending_prepares.read().expect("participant handler pending_prepares lock poisoned");
-        let locked = self.locked_keys.read().expect("participant handler locked_keys lock poisoned");
+        let pending = self
+            .pending_prepares
+            .read()
+            .expect("participant handler pending_prepares lock poisoned");
+        let locked = self
+            .locked_keys
+            .read()
+            .expect("participant handler locked_keys lock poisoned");
 
         let mut keys_to_lock = Vec::new();
         for op in operations {
@@ -784,7 +843,10 @@ impl ParticipantHandler {
                 .write()
                 .expect("participant handler pending_prepares lock poisoned")
                 .insert(txn_id.clone(), operations);
-            self.prepared.write().expect("participant handler prepared lock poisoned").insert(txn_id.clone());
+            self.prepared
+                .write()
+                .expect("participant handler prepared lock poisoned")
+                .insert(txn_id.clone());
             ParticipantVote::Commit
         } else {
             ParticipantVote::Abort
@@ -800,10 +862,18 @@ impl ParticipantHandler {
     /// Handle commit request with storage integration.
     pub fn handle_commit(&self, txn_id: &TransactionId) -> TwoPhaseMessage {
         // Get the operations to commit
-        let operations = self.pending_prepares.write().expect("participant handler pending_prepares lock poisoned").remove(txn_id);
+        let operations = self
+            .pending_prepares
+            .write()
+            .expect("participant handler pending_prepares lock poisoned")
+            .remove(txn_id);
 
         // Execute commit callback if set
-        if let Some(ref callback) = *self.commit_callback.read().expect("participant handler commit_callback lock poisoned") {
+        if let Some(ref callback) = *self
+            .commit_callback
+            .read()
+            .expect("participant handler commit_callback lock poisoned")
+        {
             if let Some(ops) = &operations {
                 if let Err(e) = callback(txn_id, ops) {
                     // Log error but continue - we must commit after prepare
@@ -813,9 +883,18 @@ impl ParticipantHandler {
         }
 
         // Clean up state
-        self.prepared.write().expect("participant handler prepared lock poisoned").remove(txn_id);
-        self.locked_keys.write().expect("participant handler locked_keys lock poisoned").remove(txn_id);
-        self.committed.write().expect("participant handler committed lock poisoned").insert(txn_id.clone());
+        self.prepared
+            .write()
+            .expect("participant handler prepared lock poisoned")
+            .remove(txn_id);
+        self.locked_keys
+            .write()
+            .expect("participant handler locked_keys lock poisoned")
+            .remove(txn_id);
+        self.committed
+            .write()
+            .expect("participant handler committed lock poisoned")
+            .insert(txn_id.clone());
 
         TwoPhaseMessage::CommitAck {
             txn_id: txn_id.clone(),
@@ -826,16 +905,29 @@ impl ParticipantHandler {
     /// Handle abort request with proper cleanup.
     pub fn handle_abort(&self, txn_id: &TransactionId) -> TwoPhaseMessage {
         // Execute abort callback if set
-        if let Some(ref callback) = *self.abort_callback.read().expect("participant handler abort_callback lock poisoned") {
+        if let Some(ref callback) = *self
+            .abort_callback
+            .read()
+            .expect("participant handler abort_callback lock poisoned")
+        {
             if let Err(e) = callback(txn_id) {
                 tracing::error!("Abort callback failed for {}: {}", txn_id, e);
             }
         }
 
         // Rollback any prepared state and release locks
-        self.pending_prepares.write().expect("participant handler pending_prepares lock poisoned").remove(txn_id);
-        self.prepared.write().expect("participant handler prepared lock poisoned").remove(txn_id);
-        self.locked_keys.write().expect("participant handler locked_keys lock poisoned").remove(txn_id);
+        self.pending_prepares
+            .write()
+            .expect("participant handler pending_prepares lock poisoned")
+            .remove(txn_id);
+        self.prepared
+            .write()
+            .expect("participant handler prepared lock poisoned")
+            .remove(txn_id);
+        self.locked_keys
+            .write()
+            .expect("participant handler locked_keys lock poisoned")
+            .remove(txn_id);
 
         TwoPhaseMessage::AbortAck {
             txn_id: txn_id.clone(),
@@ -855,7 +947,10 @@ impl ParticipantHandler {
 
     /// Check if a key is locked by any transaction.
     pub fn is_key_locked(&self, key: &str) -> Option<TransactionId> {
-        let locked = self.locked_keys.read().expect("participant handler locked_keys lock poisoned");
+        let locked = self
+            .locked_keys
+            .read()
+            .expect("participant handler locked_keys lock poisoned");
         for (txn_id, keys) in locked.iter() {
             if keys.iter().any(|k| k == key) {
                 return Some(txn_id.clone());
@@ -866,17 +961,26 @@ impl ParticipantHandler {
 
     /// Check if a transaction is prepared.
     pub fn is_prepared(&self, txn_id: &TransactionId) -> bool {
-        self.prepared.read().expect("participant handler prepared lock poisoned").contains(txn_id)
+        self.prepared
+            .read()
+            .expect("participant handler prepared lock poisoned")
+            .contains(txn_id)
     }
 
     /// Check if a transaction is committed.
     pub fn is_committed(&self, txn_id: &TransactionId) -> bool {
-        self.committed.read().expect("participant handler committed lock poisoned").contains(txn_id)
+        self.committed
+            .read()
+            .expect("participant handler committed lock poisoned")
+            .contains(txn_id)
     }
 
     /// Get pending prepare count.
     pub fn pending_count(&self) -> usize {
-        self.pending_prepares.read().expect("participant handler pending_prepares lock poisoned").len()
+        self.pending_prepares
+            .read()
+            .expect("participant handler pending_prepares lock poisoned")
+            .len()
     }
 }
 

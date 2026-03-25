@@ -86,9 +86,10 @@ impl Purpose {
             "advertising" => Some(Purpose::Advertising),
             "research" => Some(Purpose::Research),
             "do_not_sell" | "donotsell" => Some(Purpose::DoNotSell),
-            s if s.starts_with("custom:") => {
-                s.strip_prefix("custom:").and_then(|id| id.parse().ok()).map(Purpose::Custom)
-            }
+            s if s.starts_with("custom:") => s
+                .strip_prefix("custom:")
+                .and_then(|id| id.parse().ok())
+                .map(Purpose::Custom),
             _ => None,
         }
     }
@@ -319,11 +320,19 @@ impl ConsentManager {
                             };
                         }
                         Err(e) => {
-                            tracing::error!("Failed to deserialize consent data from {}: {}", path.display(), e);
+                            tracing::error!(
+                                "Failed to deserialize consent data from {}: {}",
+                                path.display(),
+                                e
+                            );
                         }
                     },
                     Err(e) => {
-                        tracing::error!("Failed to read consent data from {}: {}", path.display(), e);
+                        tracing::error!(
+                            "Failed to read consent data from {}: {}",
+                            path.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -352,7 +361,11 @@ impl ConsentManager {
         };
 
         if let Err(e) = std::fs::create_dir_all(dir) {
-            tracing::error!("Failed to create consent data directory {}: {}", dir.display(), e);
+            tracing::error!(
+                "Failed to create consent data directory {}: {}",
+                dir.display(),
+                e
+            );
             return;
         }
 
@@ -472,7 +485,11 @@ impl ConsentManager {
     }
 
     /// Get consent for a specific purpose.
-    pub fn get_consent_for_purpose(&self, subject_id: &str, purpose: Purpose) -> Option<ConsentRecord> {
+    pub fn get_consent_for_purpose(
+        &self,
+        subject_id: &str,
+        purpose: Purpose,
+    ) -> Option<ConsentRecord> {
         let records = self.records.read();
         records
             .get(subject_id)
@@ -525,7 +542,9 @@ impl ConsentManager {
             &existing.version,
         );
         record.metadata = existing.metadata.clone();
-        record.metadata.insert("withdrawn_from".to_string(), existing.id.clone());
+        record
+            .metadata
+            .insert("withdrawn_from".to_string(), existing.id.clone());
 
         // Update records
         {
@@ -573,7 +592,11 @@ impl ConsentManager {
     }
 
     /// Get history for a specific purpose.
-    pub fn get_history_for_purpose(&self, subject_id: &str, purpose: Purpose) -> Vec<ConsentHistoryEntry> {
+    pub fn get_history_for_purpose(
+        &self,
+        subject_id: &str,
+        purpose: Purpose,
+    ) -> Vec<ConsentHistoryEntry> {
         let history = self.history.read();
         history
             .get(subject_id)
@@ -886,7 +909,9 @@ pub async fn get_consent_history(
 ) -> Json<Vec<ConsentHistoryEntry>> {
     let history = if let Some(purpose_str) = params.get("purpose") {
         if let Some(purpose) = Purpose::from_str(purpose_str) {
-            state.consent_manager.get_history_for_purpose(&subject_id, purpose)
+            state
+                .consent_manager
+                .get_history_for_purpose(&subject_id, purpose)
         } else {
             state.consent_manager.get_history(&subject_id)
         }
@@ -943,7 +968,9 @@ pub async fn delete_consent_data(
     State(state): State<AppState>,
     Path(subject_id): Path<String>,
 ) -> impl IntoResponse {
-    let deleted = state.consent_manager.delete_subject_data(&subject_id, "api");
+    let deleted = state
+        .consent_manager
+        .delete_subject_data(&subject_id, "api");
 
     state.activity.log(
         crate::activity::ActivityType::Delete,
@@ -1002,12 +1029,16 @@ pub fn check_consent(state: &AppState, subject_id: &str, purpose: Purpose) -> bo
 /// Check multiple purposes at once.
 /// Returns true only if all purposes have valid consent.
 pub fn check_all_consents(state: &AppState, subject_id: &str, purposes: &[Purpose]) -> bool {
-    purposes.iter().all(|p| state.consent_manager.check_consent(subject_id, *p))
+    purposes
+        .iter()
+        .all(|p| state.consent_manager.check_consent(subject_id, *p))
 }
 
 /// Check if any of the purposes have valid consent.
 pub fn check_any_consent(state: &AppState, subject_id: &str, purposes: &[Purpose]) -> bool {
-    purposes.iter().any(|p| state.consent_manager.check_consent(subject_id, *p))
+    purposes
+        .iter()
+        .any(|p| state.consent_manager.check_consent(subject_id, *p))
 }
 
 // =============================================================================
@@ -1115,7 +1146,8 @@ mod tests {
         assert!(manager.check_consent("user123", Purpose::Marketing));
 
         // Withdraw consent
-        let result = manager.withdraw_consent("user123", Purpose::Marketing, "test", Some("User request"));
+        let result =
+            manager.withdraw_consent("user123", Purpose::Marketing, "test", Some("User request"));
         assert!(result.is_ok());
         assert!(!manager.check_consent("user123", Purpose::Marketing));
     }
@@ -1191,7 +1223,10 @@ mod tests {
     fn test_purpose_parsing() {
         assert_eq!(Purpose::from_str("marketing"), Some(Purpose::Marketing));
         assert_eq!(Purpose::from_str("ANALYTICS"), Some(Purpose::Analytics));
-        assert_eq!(Purpose::from_str("third_party_sharing"), Some(Purpose::ThirdPartySharing));
+        assert_eq!(
+            Purpose::from_str("third_party_sharing"),
+            Some(Purpose::ThirdPartySharing)
+        );
         assert_eq!(Purpose::from_str("do_not_sell"), Some(Purpose::DoNotSell));
         assert_eq!(Purpose::from_str("custom:42"), Some(Purpose::Custom(42)));
         assert_eq!(Purpose::from_str("unknown"), None);
@@ -1201,9 +1236,36 @@ mod tests {
     fn test_consent_stats() {
         let manager = ConsentManager::new();
 
-        manager.record_consent("user1", Purpose::Marketing, true, ConsentSource::Api, "1.0", None, None, "test");
-        manager.record_consent("user1", Purpose::Analytics, false, ConsentSource::Api, "1.0", None, None, "test");
-        manager.record_consent("user2", Purpose::Marketing, true, ConsentSource::Api, "1.0", None, None, "test");
+        manager.record_consent(
+            "user1",
+            Purpose::Marketing,
+            true,
+            ConsentSource::Api,
+            "1.0",
+            None,
+            None,
+            "test",
+        );
+        manager.record_consent(
+            "user1",
+            Purpose::Analytics,
+            false,
+            ConsentSource::Api,
+            "1.0",
+            None,
+            None,
+            "test",
+        );
+        manager.record_consent(
+            "user2",
+            Purpose::Marketing,
+            true,
+            ConsentSource::Api,
+            "1.0",
+            None,
+            None,
+            "test",
+        );
 
         let stats = manager.get_stats();
         assert_eq!(stats.total_subjects, 2);
@@ -1218,8 +1280,26 @@ mod tests {
     fn test_subject_data_export() {
         let manager = ConsentManager::new();
 
-        manager.record_consent("user123", Purpose::Marketing, true, ConsentSource::Api, "1.0", None, None, "test");
-        manager.record_consent("user123", Purpose::Analytics, true, ConsentSource::Api, "1.0", None, None, "test");
+        manager.record_consent(
+            "user123",
+            Purpose::Marketing,
+            true,
+            ConsentSource::Api,
+            "1.0",
+            None,
+            None,
+            "test",
+        );
+        manager.record_consent(
+            "user123",
+            Purpose::Analytics,
+            true,
+            ConsentSource::Api,
+            "1.0",
+            None,
+            None,
+            "test",
+        );
 
         let export = manager.export_subject_data("user123");
         assert_eq!(export.subject_id, "user123");
@@ -1231,7 +1311,16 @@ mod tests {
     fn test_subject_data_deletion() {
         let manager = ConsentManager::new();
 
-        manager.record_consent("user123", Purpose::Marketing, true, ConsentSource::Api, "1.0", None, None, "test");
+        manager.record_consent(
+            "user123",
+            Purpose::Marketing,
+            true,
+            ConsentSource::Api,
+            "1.0",
+            None,
+            None,
+            "test",
+        );
 
         assert!(manager.delete_subject_data("user123", "test"));
         assert!(manager.get_consent("user123").is_empty());

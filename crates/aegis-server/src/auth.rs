@@ -89,7 +89,11 @@ impl Default for OAuth2Config {
             token_url: "https://auth.example.com/token".to_string(),
             userinfo_url: "https://auth.example.com/userinfo".to_string(),
             redirect_uri: "http://localhost:8080/callback".to_string(),
-            scopes: vec!["openid".to_string(), "profile".to_string(), "email".to_string()],
+            scopes: vec![
+                "openid".to_string(),
+                "profile".to_string(),
+                "email".to_string(),
+            ],
             role_claim: "roles".to_string(),
             admin_roles: vec!["admin".to_string()],
             operator_roles: vec!["operator".to_string()],
@@ -332,15 +336,27 @@ impl AuthService {
                 match std::fs::read_to_string(&users_path) {
                     Ok(data) => match serde_json::from_str::<HashMap<String, User>>(&data) {
                         Ok(loaded) => {
-                            tracing::info!("Loaded {} users from {}", loaded.len(), users_path.display());
+                            tracing::info!(
+                                "Loaded {} users from {}",
+                                loaded.len(),
+                                users_path.display()
+                            );
                             users = loaded;
                         }
                         Err(e) => {
-                            tracing::error!("Failed to parse users file {}: {}", users_path.display(), e);
+                            tracing::error!(
+                                "Failed to parse users file {}: {}",
+                                users_path.display(),
+                                e
+                            );
                         }
                     },
                     Err(e) => {
-                        tracing::error!("Failed to read users file {}: {}", users_path.display(), e);
+                        tracing::error!(
+                            "Failed to read users file {}: {}",
+                            users_path.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -388,7 +404,7 @@ impl AuthService {
             sessions: RwLock::new(HashMap::new()),
             pending_mfa: RwLock::new(HashMap::new()),
             session_duration: Duration::from_secs(24 * 60 * 60), // 24 hours
-            mfa_timeout: Duration::from_secs(5 * 60), // 5 minutes
+            mfa_timeout: Duration::from_secs(5 * 60),            // 5 minutes
             data_dir,
         };
 
@@ -437,7 +453,9 @@ impl AuthService {
             }
         }
         let users = self.users.read();
-        let user = users.get(username).expect("user should exist after successful credential check");
+        let user = users
+            .get(username)
+            .expect("user should exist after successful credential check");
 
         if user.mfa_enabled {
             // Create pending MFA session
@@ -536,9 +554,7 @@ impl AuthService {
     /// Get user by ID.
     pub fn get_user(&self, user_id: &str) -> Option<UserInfo> {
         let users = self.users.read();
-        users.values()
-            .find(|u| u.id == user_id)
-            .map(UserInfo::from)
+        users.values().find(|u| u.id == user_id).map(UserInfo::from)
     }
 
     /// List all users.
@@ -548,7 +564,13 @@ impl AuthService {
     }
 
     /// Create a new user.
-    pub fn create_user(&self, username: &str, email: &str, password: &str, role: &str) -> Result<UserInfo, String> {
+    pub fn create_user(
+        &self,
+        username: &str,
+        email: &str,
+        password: &str,
+        role: &str,
+    ) -> Result<UserInfo, String> {
         let mut users = self.users.write();
 
         if users.contains_key(username) {
@@ -562,7 +584,9 @@ impl AuthService {
 
         // Validate username (alphanumeric and underscore only)
         if !username.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            return Err("Username must contain only alphanumeric characters and underscores".to_string());
+            return Err(
+                "Username must contain only alphanumeric characters and underscores".to_string(),
+            );
         }
 
         // Basic email validation
@@ -601,10 +625,17 @@ impl AuthService {
     }
 
     /// Update an existing user.
-    pub fn update_user(&self, username: &str, email: Option<String>, role: Option<String>, password: Option<String>) -> Result<UserInfo, String> {
+    pub fn update_user(
+        &self,
+        username: &str,
+        email: Option<String>,
+        role: Option<String>,
+        password: Option<String>,
+    ) -> Result<UserInfo, String> {
         let mut users = self.users.write();
 
-        let user = users.get_mut(username)
+        let user = users
+            .get_mut(username)
             .ok_or_else(|| format!("User '{}' not found", username))?;
 
         if let Some(new_email) = email {
@@ -637,7 +668,11 @@ impl AuthService {
             sessions.retain(|_, s| s.user_id != user_id);
             let revoked = before - sessions.len();
             if revoked > 0 {
-                tracing::info!("Revoked {} session(s) for user '{}' due to password change", revoked, username);
+                tracing::info!(
+                    "Revoked {} session(s) for user '{}' due to password change",
+                    revoked,
+                    username
+                );
             }
         }
 
@@ -670,7 +705,8 @@ impl AuthService {
     pub fn enable_mfa(&self, username: &str) -> Result<String, String> {
         let mut users = self.users.write();
 
-        let user = users.get_mut(username)
+        let user = users
+            .get_mut(username)
             .ok_or_else(|| format!("User '{}' not found", username))?;
 
         if user.mfa_enabled {
@@ -693,7 +729,8 @@ impl AuthService {
     pub fn disable_mfa(&self, username: &str) -> Result<(), String> {
         let mut users = self.users.write();
 
-        let user = users.get_mut(username)
+        let user = users
+            .get_mut(username)
             .ok_or_else(|| format!("User '{}' not found", username))?;
 
         if !user.mfa_enabled {
@@ -811,7 +848,11 @@ fn verify_totp(code: &str, secret: &str) -> bool {
         Ok(bytes) => bytes,
         Err(_) => {
             // Try with padding variations
-            let padded = format!("{}{}", secret.to_uppercase(), &"========"[..((8 - secret.len() % 8) % 8)]);
+            let padded = format!(
+                "{}{}",
+                secret.to_uppercase(),
+                &"========"[..((8 - secret.len() % 8) % 8)]
+            );
             match data_encoding::BASE32.decode(padded.as_bytes()) {
                 Ok(bytes) => bytes,
                 Err(_) => return false,
@@ -908,7 +949,10 @@ fn format_timestamp(timestamp_ms: u64) -> String {
     }
     let day = remaining_days + 1;
 
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 fn is_leap_year(year: u64) -> bool {
@@ -1018,24 +1062,30 @@ impl RbacManager {
             let path = dir.join("rbac.json");
             if path.exists() {
                 match std::fs::read_to_string(&path) {
-                    Ok(contents) => {
-                        match serde_json::from_str::<RbacSnapshot>(&contents) {
-                            Ok(snapshot) => {
-                                tracing::info!("Loaded RBAC state from {}", path.display());
-                                return Self {
-                                    roles: RwLock::new(snapshot.roles),
-                                    user_roles: RwLock::new(snapshot.user_roles),
-                                    row_policies: RwLock::new(snapshot.row_policies),
-                                    data_dir,
-                                };
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to parse RBAC snapshot from {}: {}", path.display(), e);
-                            }
+                    Ok(contents) => match serde_json::from_str::<RbacSnapshot>(&contents) {
+                        Ok(snapshot) => {
+                            tracing::info!("Loaded RBAC state from {}", path.display());
+                            return Self {
+                                roles: RwLock::new(snapshot.roles),
+                                user_roles: RwLock::new(snapshot.user_roles),
+                                row_policies: RwLock::new(snapshot.row_policies),
+                                data_dir,
+                            };
                         }
-                    }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to parse RBAC snapshot from {}: {}",
+                                path.display(),
+                                e
+                            );
+                        }
+                    },
                     Err(e) => {
-                        tracing::error!("Failed to read RBAC snapshot from {}: {}", path.display(), e);
+                        tracing::error!(
+                            "Failed to read RBAC snapshot from {}: {}",
+                            path.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -1046,26 +1096,57 @@ impl RbacManager {
 
         // Create admin role with all permissions
         let admin_permissions = vec![
-            Permission::DatabaseCreate, Permission::DatabaseDrop, Permission::DatabaseList,
-            Permission::TableCreate, Permission::TableDrop, Permission::TableAlter, Permission::TableList,
-            Permission::DataSelect, Permission::DataInsert, Permission::DataUpdate, Permission::DataDelete,
-            Permission::UserCreate, Permission::UserDelete, Permission::UserModify,
-            Permission::RoleCreate, Permission::RoleDelete, Permission::RoleAssign,
-            Permission::ConfigView, Permission::ConfigModify, Permission::MetricsView, Permission::LogsView,
-            Permission::BackupCreate, Permission::BackupRestore,
-            Permission::NodeAdd, Permission::NodeRemove, Permission::ClusterManage,
+            Permission::DatabaseCreate,
+            Permission::DatabaseDrop,
+            Permission::DatabaseList,
+            Permission::TableCreate,
+            Permission::TableDrop,
+            Permission::TableAlter,
+            Permission::TableList,
+            Permission::DataSelect,
+            Permission::DataInsert,
+            Permission::DataUpdate,
+            Permission::DataDelete,
+            Permission::UserCreate,
+            Permission::UserDelete,
+            Permission::UserModify,
+            Permission::RoleCreate,
+            Permission::RoleDelete,
+            Permission::RoleAssign,
+            Permission::ConfigView,
+            Permission::ConfigModify,
+            Permission::MetricsView,
+            Permission::LogsView,
+            Permission::BackupCreate,
+            Permission::BackupRestore,
+            Permission::NodeAdd,
+            Permission::NodeRemove,
+            Permission::ClusterManage,
         ];
-        roles.insert("admin".to_string(), Role::new("admin", "Full system administrator", admin_permissions));
+        roles.insert(
+            "admin".to_string(),
+            Role::new("admin", "Full system administrator", admin_permissions),
+        );
 
         // Create operator role
         let operator_permissions = vec![
             Permission::DatabaseList,
-            Permission::TableCreate, Permission::TableAlter, Permission::TableList,
-            Permission::DataSelect, Permission::DataInsert, Permission::DataUpdate, Permission::DataDelete,
-            Permission::ConfigView, Permission::MetricsView, Permission::LogsView,
+            Permission::TableCreate,
+            Permission::TableAlter,
+            Permission::TableList,
+            Permission::DataSelect,
+            Permission::DataInsert,
+            Permission::DataUpdate,
+            Permission::DataDelete,
+            Permission::ConfigView,
+            Permission::MetricsView,
+            Permission::LogsView,
             Permission::BackupCreate,
         ];
-        roles.insert("operator".to_string(), Role::new("operator", "Database operator", operator_permissions));
+        roles.insert(
+            "operator".to_string(),
+            Role::new("operator", "Database operator", operator_permissions),
+        );
 
         // Create viewer role
         let viewer_permissions = vec![
@@ -1074,7 +1155,10 @@ impl RbacManager {
             Permission::DataSelect,
             Permission::MetricsView,
         ];
-        roles.insert("viewer".to_string(), Role::new("viewer", "Read-only viewer", viewer_permissions));
+        roles.insert(
+            "viewer".to_string(),
+            Role::new("viewer", "Read-only viewer", viewer_permissions),
+        );
 
         // Create analyst role
         let analyst_permissions = vec![
@@ -1084,7 +1168,14 @@ impl RbacManager {
             Permission::MetricsView,
             Permission::LogsView,
         ];
-        roles.insert("analyst".to_string(), Role::new("analyst", "Data analyst with read access", analyst_permissions));
+        roles.insert(
+            "analyst".to_string(),
+            Role::new(
+                "analyst",
+                "Data analyst with read access",
+                analyst_permissions,
+            ),
+        );
 
         // User-role mappings start empty - assigned when users are created
         let user_roles: HashMap<String, HashSet<String>> = HashMap::new();
@@ -1121,7 +1212,13 @@ impl RbacManager {
     }
 
     /// Create a new role.
-    pub fn create_role(&self, name: &str, description: &str, permissions: Vec<Permission>, created_by: &str) -> Result<(), String> {
+    pub fn create_role(
+        &self,
+        name: &str,
+        description: &str,
+        permissions: Vec<Permission>,
+        created_by: &str,
+    ) -> Result<(), String> {
         let mut roles = self.roles.write();
         if roles.contains_key(name) {
             return Err(format!("Role '{}' already exists", name));
@@ -1242,7 +1339,10 @@ impl RbacManager {
         self.row_policies
             .read()
             .iter()
-            .filter(|p| p.table == table && (p.applies_to.is_empty() || p.applies_to.contains(&user_id.to_string())))
+            .filter(|p| {
+                p.table == table
+                    && (p.applies_to.is_empty() || p.applies_to.contains(&user_id.to_string()))
+            })
             .cloned()
             .collect()
     }
@@ -1365,9 +1465,17 @@ impl AuditLogger {
     }
 
     /// Log an audit event.
-    pub fn log(&self, event_type: AuditEventType, user_id: Option<&str>, username: Option<&str>,
-               ip_address: Option<&str>, resource: Option<&str>, action: &str,
-               result: AuditResult, details: HashMap<String, String>) {
+    pub fn log(
+        &self,
+        event_type: AuditEventType,
+        user_id: Option<&str>,
+        username: Option<&str>,
+        ip_address: Option<&str>,
+        resource: Option<&str>,
+        action: &str,
+        result: AuditResult,
+        details: HashMap<String, String>,
+    ) {
         let mut counter = self.entry_counter.write();
         *counter += 1;
         let id = format!("audit-{:012}", *counter);
@@ -1423,7 +1531,13 @@ impl AuditLogger {
     }
 
     /// Log a permission denial.
-    pub fn log_permission_denied(&self, user_id: &str, username: &str, resource: &str, permission: &str) {
+    pub fn log_permission_denied(
+        &self,
+        user_id: &str,
+        username: &str,
+        resource: &str,
+        permission: &str,
+    ) {
         let mut details = HashMap::new();
         details.insert("permission".to_string(), permission.to_string());
         self.log(
@@ -1439,7 +1553,14 @@ impl AuditLogger {
     }
 
     /// Log a data access.
-    pub fn log_data_access(&self, user_id: &str, username: &str, table: &str, operation: &str, rows_affected: u64) {
+    pub fn log_data_access(
+        &self,
+        user_id: &str,
+        username: &str,
+        table: &str,
+        operation: &str,
+        rows_affected: u64,
+    ) {
         let mut details = HashMap::new();
         details.insert("rows_affected".to_string(), rows_affected.to_string());
         let event_type = match operation {
@@ -1600,15 +1721,18 @@ impl LdapAuthenticator {
         let password = password.to_string();
 
         // Perform LDAP operations
-        let result = runtime.block_on(async move {
-            Self::authenticate_async(&config, &username, &password).await
-        });
+        let result = runtime
+            .block_on(async move { Self::authenticate_async(&config, &username, &password).await });
 
         result
     }
 
     /// Async LDAP authentication implementation.
-    async fn authenticate_async(config: &LdapConfig, username: &str, password: &str) -> LdapAuthResult {
+    async fn authenticate_async(
+        config: &LdapConfig,
+        username: &str,
+        password: &str,
+    ) -> LdapAuthResult {
         use ldap3::{LdapConnAsync, Scope, SearchEntry};
 
         // Connect to LDAP server
@@ -1630,7 +1754,10 @@ impl LdapAuthenticator {
         ldap3::drive!(conn);
 
         // Bind with service account to search for user
-        if let Err(e) = ldap.simple_bind(&config.bind_dn, &config.bind_password).await {
+        if let Err(e) = ldap
+            .simple_bind(&config.bind_dn, &config.bind_password)
+            .await
+        {
             let _ = ldap.unbind().await;
             return LdapAuthResult {
                 success: false,
@@ -1644,12 +1771,15 @@ impl LdapAuthenticator {
 
         // Search for user
         let user_filter = config.user_filter.replace("{username}", username);
-        let search_result = match ldap.search(
-            &config.base_dn,
-            Scope::Subtree,
-            &user_filter,
-            vec!["dn", "mail", "displayName", "cn", &config.group_attribute],
-        ).await {
+        let search_result = match ldap
+            .search(
+                &config.base_dn,
+                Scope::Subtree,
+                &user_filter,
+                vec!["dn", "mail", "displayName", "cn", &config.group_attribute],
+            )
+            .await
+        {
             Ok(result) => result,
             Err(e) => {
                 let _ = ldap.unbind().await;
@@ -1664,13 +1794,16 @@ impl LdapAuthenticator {
             }
         };
 
-        let (entries, _result) = search_result.success().unwrap_or((vec![], ldap3::LdapResult {
-            rc: 0,
-            matched: String::new(),
-            text: String::new(),
-            refs: vec![],
-            ctrls: vec![],
-        }));
+        let (entries, _result) = search_result.success().unwrap_or((
+            vec![],
+            ldap3::LdapResult {
+                rc: 0,
+                matched: String::new(),
+                text: String::new(),
+                refs: vec![],
+                ctrls: vec![],
+            },
+        ));
 
         if entries.is_empty() {
             let _ = ldap.unbind().await;
@@ -1688,11 +1821,15 @@ impl LdapAuthenticator {
         let entry = SearchEntry::construct(entries[0].clone());
         let user_dn = entry.dn.clone();
         let email = entry.attrs.get("mail").and_then(|v| v.first()).cloned();
-        let display_name = entry.attrs.get("displayName")
+        let display_name = entry
+            .attrs
+            .get("displayName")
             .or_else(|| entry.attrs.get("cn"))
             .and_then(|v| v.first())
             .cloned();
-        let groups: Vec<String> = entry.attrs.get(&config.group_attribute)
+        let groups: Vec<String> = entry
+            .attrs
+            .get(&config.group_attribute)
             .cloned()
             .unwrap_or_default();
 
@@ -1735,16 +1872,14 @@ impl LdapAuthenticator {
                     }
                 }
             }
-            Err(e) => {
-                LdapAuthResult {
-                    success: false,
-                    user_dn: None,
-                    email: None,
-                    display_name: None,
-                    groups: vec![],
-                    error: Some(format!("Bind failed: {}", e)),
-                }
-            }
+            Err(e) => LdapAuthResult {
+                success: false,
+                user_dn: None,
+                email: None,
+                display_name: None,
+                groups: vec![],
+                error: Some(format!("Bind failed: {}", e)),
+            },
         }
     }
 
@@ -1847,7 +1982,15 @@ impl OAuth2Authenticator {
         let code = code.to_string();
 
         runtime.block_on(async move {
-            Self::exchange_code_async(&client, &token_url, &client_id, &client_secret, &redirect_uri, &code).await
+            Self::exchange_code_async(
+                &client,
+                &token_url,
+                &client_id,
+                &client_secret,
+                &redirect_uri,
+                &code,
+            )
+            .await
         })
     }
 
@@ -1962,14 +2105,21 @@ mod tests {
     /// Helper to create an auth service with a test user
     fn auth_with_test_user() -> AuthService {
         let auth = AuthService::new();
-        auth.create_user("testuser", "test@example.com", "TestPassword123!", "viewer").expect("failed to create test user");
+        auth.create_user("testuser", "test@example.com", "TestPassword123!", "viewer")
+            .expect("failed to create test user");
         auth
     }
 
     /// Helper to create an auth service with an admin user (MFA enabled)
     fn auth_with_admin_user() -> (AuthService, String) {
         let auth = AuthService::new();
-        auth.create_user("testadmin", "admin@example.com", "AdminPassword123!", "admin").expect("failed to create admin user");
+        auth.create_user(
+            "testadmin",
+            "admin@example.com",
+            "AdminPassword123!",
+            "admin",
+        )
+        .expect("failed to create admin user");
 
         // Enable MFA and get the secret
         let secret = generate_mfa_secret();
@@ -2011,13 +2161,19 @@ mod tests {
     fn test_mfa_verification() {
         let (auth, secret) = auth_with_admin_user();
         let login_response = auth.login("testadmin", "AdminPassword123!");
-        let temp_token = login_response.token.expect("login should return temp token for MFA");
+        let temp_token = login_response
+            .token
+            .expect("login should return temp token for MFA");
 
         // Generate a valid TOTP code using the user's secret
         let totp_code = generate_test_totp(&secret);
 
         let mfa_response = auth.verify_mfa(&totp_code, &temp_token);
-        assert!(mfa_response.token.is_some(), "MFA verification failed: {:?}", mfa_response.error);
+        assert!(
+            mfa_response.token.is_some(),
+            "MFA verification failed: {:?}",
+            mfa_response.error
+        );
         assert!(mfa_response.user.is_some());
     }
 
@@ -2027,10 +2183,17 @@ mod tests {
         use hmac::{Hmac, Mac};
         use sha1::Sha1;
 
-        let secret_bytes = BASE32_NOPAD.decode(secret.to_uppercase().as_bytes())
+        let secret_bytes = BASE32_NOPAD
+            .decode(secret.to_uppercase().as_bytes())
             .unwrap_or_else(|_| {
-                let padded = format!("{}{}", secret.to_uppercase(), &"========"[..((8 - secret.len() % 8) % 8)]);
-                data_encoding::BASE32.decode(padded.as_bytes()).expect("padded BASE32 decode should succeed")
+                let padded = format!(
+                    "{}{}",
+                    secret.to_uppercase(),
+                    &"========"[..((8 - secret.len() % 8) % 8)]
+                );
+                data_encoding::BASE32
+                    .decode(padded.as_bytes())
+                    .expect("padded BASE32 decode should succeed")
             });
 
         let timestamp = std::time::SystemTime::now()
@@ -2040,7 +2203,8 @@ mod tests {
         let time_step = timestamp / 30;
         let counter_bytes = time_step.to_be_bytes();
 
-        let mut mac = Hmac::<Sha1>::new_from_slice(&secret_bytes).expect("HMAC key should be valid");
+        let mut mac =
+            Hmac::<Sha1>::new_from_slice(&secret_bytes).expect("HMAC key should be valid");
         mac.update(&counter_bytes);
         let result = mac.finalize().into_bytes();
 
@@ -2090,7 +2254,12 @@ mod tests {
         let auth = AuthService::new();
 
         // Invalid username (contains special chars)
-        let result = auth.create_user("user@name", "test@example.com", "ValidPassword123", "viewer");
+        let result = auth.create_user(
+            "user@name",
+            "test@example.com",
+            "ValidPassword123",
+            "viewer",
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("alphanumeric"));
     }
@@ -2120,8 +2289,10 @@ mod tests {
         let rbac = RbacManager::new();
 
         // Assign admin role to a test user
-        rbac.assign_role("test-user-1", "admin").expect("failed to assign admin role");
-        rbac.assign_role("test-user-2", "viewer").expect("failed to assign viewer role");
+        rbac.assign_role("test-user-1", "admin")
+            .expect("failed to assign admin role");
+        rbac.assign_role("test-user-2", "viewer")
+            .expect("failed to assign viewer role");
 
         // Admin user should have all permissions
         assert!(rbac.check_permission("test-user-1", Permission::DatabaseCreate));
@@ -2139,13 +2310,15 @@ mod tests {
             "custom_role",
             "Custom role for testing",
             vec![Permission::DataSelect, Permission::DataInsert],
-            "admin"
+            "admin",
         );
         assert!(result.is_ok());
 
         let role = rbac.get_role("custom_role");
         assert!(role.is_some());
-        assert!(role.expect("role should exist").has_permission(Permission::DataSelect));
+        assert!(role
+            .expect("role should exist")
+            .has_permission(Permission::DataSelect));
     }
 
     #[test]
@@ -2255,7 +2428,11 @@ mod tests {
         let result = ldap.authenticate("testuser", "password");
         assert!(!result.success);
         assert!(result.error.is_some());
-        assert!(result.error.as_ref().expect("error should be present").contains("not configured"));
+        assert!(result
+            .error
+            .as_ref()
+            .expect("error should be present")
+            .contains("not configured"));
     }
 
     #[test]
@@ -2266,7 +2443,11 @@ mod tests {
         let result = ldap.authenticate("testuser", "");
         assert!(!result.success);
         assert!(result.error.is_some());
-        assert!(result.error.as_ref().expect("error should be present").contains("Password is required"));
+        assert!(result
+            .error
+            .as_ref()
+            .expect("error should be present")
+            .contains("Password is required"));
     }
 
     #[test]

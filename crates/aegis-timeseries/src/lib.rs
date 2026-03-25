@@ -13,22 +13,22 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-pub mod types;
-pub mod partition;
-pub mod compression;
 pub mod aggregation;
-pub mod retention;
-pub mod index;
-pub mod query;
+pub mod compression;
 pub mod engine;
+pub mod index;
+pub mod partition;
 pub mod persistence;
+pub mod query;
+pub mod retention;
+pub mod types;
 
-pub use types::{DataPoint, Series, Metric, MetricType, Tags};
-pub use partition::{Partition, PartitionManager, PartitionConfig};
+pub use aggregation::{AggregateFunction, Aggregator, Downsampler};
 pub use compression::{Compressor, Decompressor};
-pub use aggregation::{Aggregator, AggregateFunction, Downsampler};
-pub use retention::{RetentionPolicy, RetentionManager};
-pub use index::TimeSeriesIndex;
-pub use query::{TimeSeriesQuery, QueryResult};
 pub use engine::TimeSeriesEngine;
+pub use index::TimeSeriesIndex;
+pub use partition::{Partition, PartitionConfig, PartitionManager};
 pub use persistence::PersistenceManager;
+pub use query::{QueryResult, TimeSeriesQuery};
+pub use retention::{RetentionManager, RetentionPolicy};
+pub use types::{DataPoint, Metric, MetricType, Series, Tags};

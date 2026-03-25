@@ -468,8 +468,12 @@ mod tests {
     fn test_pattern_validation() {
         let schema = FieldSchema::string().pattern(r"^\d{3}-\d{4}$");
 
-        assert!(schema.validate(&Value::String("123-4567".to_string())).is_ok());
-        assert!(schema.validate(&Value::String("invalid".to_string())).is_err());
+        assert!(schema
+            .validate(&Value::String("123-4567".to_string()))
+            .is_ok());
+        assert!(schema
+            .validate(&Value::String("invalid".to_string()))
+            .is_err());
     }
 
     #[test]
@@ -502,15 +506,23 @@ mod tests {
             Value::String("inactive".to_string()),
         ]);
 
-        assert!(schema.validate(&Value::String("active".to_string())).is_ok());
-        assert!(schema.validate(&Value::String("unknown".to_string())).is_err());
+        assert!(schema
+            .validate(&Value::String("active".to_string()))
+            .is_ok());
+        assert!(schema
+            .validate(&Value::String("unknown".to_string()))
+            .is_err());
     }
 
     #[test]
     fn test_array_validation() {
-        let schema = FieldSchema::array(FieldSchema::int()).min_length(1).max_length(5);
+        let schema = FieldSchema::array(FieldSchema::int())
+            .min_length(1)
+            .max_length(5);
 
-        assert!(schema.validate(&Value::Array(vec![Value::Int(1), Value::Int(2)])).is_ok());
+        assert!(schema
+            .validate(&Value::Array(vec![Value::Int(1), Value::Int(2)]))
+            .is_ok());
         assert!(schema.validate(&Value::Array(vec![])).is_err());
         assert!(schema
             .validate(&Value::Array(vec![Value::String("not an int".to_string())]))

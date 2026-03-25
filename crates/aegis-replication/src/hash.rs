@@ -270,12 +270,10 @@ impl RendezvousHash {
 
     /// Get the node for a key.
     pub fn get_node(&self, key: &str) -> Option<&NodeId> {
-        self.nodes
-            .iter()
-            .max_by_key(|node| {
-                let combined = format!("{}:{}", key, node.as_str());
-                hash_key(&combined)
-            })
+        self.nodes.iter().max_by_key(|node| {
+            let combined = format!("{}:{}", key, node.as_str());
+            hash_key(&combined)
+        })
     }
 
     /// Get N nodes for a key (sorted by weight).
@@ -291,7 +289,11 @@ impl RendezvousHash {
 
         weighted.sort_by(|a, b| b.0.cmp(&a.0));
 
-        weighted.into_iter().take(count).map(|(_, node)| node).collect()
+        weighted
+            .into_iter()
+            .take(count)
+            .map(|(_, node)| node)
+            .collect()
     }
 }
 

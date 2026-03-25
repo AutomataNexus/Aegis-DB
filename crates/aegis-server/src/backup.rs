@@ -60,12 +60,12 @@ fn get_encryption_key() -> Result<&'static [u8; AES_256_KEY_SIZE], String> {
     }
 
     let hex_key = std::env::var("AEGIS_ENCRYPTION_KEY").map_err(|_| {
-        "AEGIS_ENCRYPTION_KEY environment variable not set. Required for encrypted backups.".to_string()
+        "AEGIS_ENCRYPTION_KEY environment variable not set. Required for encrypted backups."
+            .to_string()
     })?;
 
-    let key_bytes = hex::decode(&hex_key).map_err(|e| {
-        format!("Invalid hex encoding in AEGIS_ENCRYPTION_KEY: {}", e)
-    })?;
+    let key_bytes = hex::decode(&hex_key)
+        .map_err(|e| format!("Invalid hex encoding in AEGIS_ENCRYPTION_KEY: {}", e))?;
 
     if key_bytes.len() != AES_256_KEY_SIZE {
         return Err(format!(
@@ -89,8 +89,8 @@ fn get_encryption_key() -> Result<&'static [u8; AES_256_KEY_SIZE], String> {
 /// Returns encrypted data with 12-byte nonce prepended.
 fn encrypt_aes256gcm(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let key = get_encryption_key()?;
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| format!("Failed to create cipher: {}", e))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to create cipher: {}", e))?;
 
     // Generate a random nonce (12 bytes for AES-GCM)
     let mut nonce_bytes = [0u8; AES_GCM_NONCE_SIZE];
@@ -98,9 +98,9 @@ fn encrypt_aes256gcm(plaintext: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to generate nonce: {}", e))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let ciphertext = cipher.encrypt(nonce, plaintext).map_err(|e| {
-        format!("Encryption failed: {}", e)
-    })?;
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
 
     // Prepend nonce to ciphertext for storage
     let mut result = Vec::with_capacity(AES_GCM_NONCE_SIZE + ciphertext.len());
@@ -118,8 +118,8 @@ fn decrypt_aes256gcm(encrypted_data: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     let key = get_encryption_key()?;
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| format!("Failed to create cipher: {}", e))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to create cipher: {}", e))?;
 
     let nonce = Nonce::from_slice(&encrypted_data[..AES_GCM_NONCE_SIZE]);
     let ciphertext = &encrypted_data[AES_GCM_NONCE_SIZE..];
@@ -267,7 +267,10 @@ impl BackupManager {
         if let Err(e) = fs::create_dir_all(&backup_dir) {
             tracing::error!("Failed to create backup directory: {}", e);
         }
-        Self { backup_dir, data_dir }
+        Self {
+            backup_dir,
+            data_dir,
+        }
     }
 
     /// Create a new backup.
@@ -309,10 +312,7 @@ impl BackupManager {
         ];
 
         // Also copy individual data files
-        let files_to_backup = vec![
-            "kv_store.json",
-            "sql_tables.json",
-        ];
+        let files_to_backup = vec!["kv_store.json", "sql_tables.json"];
 
         // Copy directory contents
         for (name, source_dir) in dirs_to_backup {
@@ -321,7 +321,14 @@ impl BackupManager {
                 fs::create_dir_all(&target_dir)
                     .map_err(|e| format!("Failed to create backup subdirectory {}: {}", name, e))?;
 
-                self.copy_directory(&source_dir, &target_dir, &mut files, &mut total_size, &mut hasher, encrypt)?;
+                self.copy_directory(
+                    &source_dir,
+                    &target_dir,
+                    &mut files,
+                    &mut total_size,
+                    &mut hasher,
+                    encrypt,
+                )?;
             }
         }
 
@@ -330,7 +337,14 @@ impl BackupManager {
             let source_file = self.data_dir.join(filename);
             if source_file.exists() && source_file.is_file() {
                 let target_file = backup_path.join(filename);
-                self.copy_file(&source_file, &target_file, &mut files, &mut total_size, &mut hasher, encrypt)?;
+                self.copy_file(
+                    &source_file,
+                    &target_file,
+                    &mut files,
+                    &mut total_size,
+                    &mut hasher,
+                    encrypt,
+                )?;
             }
         }
 
@@ -437,8 +451,8 @@ impl BackupManager {
         encrypt: bool,
     ) -> Result<(), String> {
         // Read source file
-        let mut source_file = File::open(source)
-            .map_err(|e| format!("Failed to open {:?}: {}", source, e))?;
+        let mut source_file =
+            File::open(source).map_err(|e| format!("Failed to open {:?}: {}", source, e))?;
         let mut contents = Vec::new();
         source_file
             .read_to_end(&mut contents)
@@ -460,8 +474,8 @@ impl BackupManager {
         };
 
         // Write target file
-        let mut target_file = File::create(target)
-            .map_err(|e| format!("Failed to create {:?}: {}", target, e))?;
+        let mut target_file =
+            File::create(target).map_err(|e| format!("Failed to create {:?}: {}", target, e))?;
         target_file
             .write_all(&data_to_write)
             .map_err(|e| format!("Failed to write {:?}: {}", target, e))?;
@@ -583,10 +597,9 @@ impl BackupManager {
 
     /// Read backup metadata from file.
     fn read_backup_metadata(&self, path: &StdPath) -> Result<BackupMetadata, String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read metadata file: {}", e))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse metadata: {}", e))
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read metadata file: {}", e))?;
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse metadata: {}", e))
     }
 
     /// Calculate total size of a directory.
@@ -697,7 +710,9 @@ impl BackupManager {
 
         // Verify integrity before restore (skips checksum for encrypted files)
         if !self.verify_backup_integrity(&backup_path, &metadata) && !force {
-            return Err("Backup integrity check failed. Use force=true to restore anyway.".to_string());
+            return Err(
+                "Backup integrity check failed. Use force=true to restore anyway.".to_string(),
+            );
         }
 
         let mut files_restored = 0;
@@ -711,7 +726,8 @@ impl BackupManager {
                 // Create target directory if it doesn't exist
                 fs::create_dir_all(&target_dir)
                     .map_err(|e| format!("Failed to create directory {:?}: {}", target_dir, e))?;
-                files_restored += self.restore_directory(&source_dir, &target_dir, metadata.encrypted)?;
+                files_restored +=
+                    self.restore_directory(&source_dir, &target_dir, metadata.encrypted)?;
             }
         }
 
@@ -775,8 +791,8 @@ impl BackupManager {
         encrypted: bool,
     ) -> Result<(), String> {
         // Read source file
-        let mut source_file = File::open(source)
-            .map_err(|e| format!("Failed to open {:?}: {}", source, e))?;
+        let mut source_file =
+            File::open(source).map_err(|e| format!("Failed to open {:?}: {}", source, e))?;
         let mut contents = Vec::new();
         source_file
             .read_to_end(&mut contents)
@@ -790,8 +806,8 @@ impl BackupManager {
         };
 
         // Write target file
-        let mut target_file = File::create(target)
-            .map_err(|e| format!("Failed to create {:?}: {}", target, e))?;
+        let mut target_file =
+            File::create(target).map_err(|e| format!("Failed to create {:?}: {}", target, e))?;
         target_file
             .write_all(&data_to_write)
             .map_err(|e| format!("Failed to write {:?}: {}", target, e))?;
@@ -806,8 +822,7 @@ impl BackupManager {
             return Err(format!("Backup '{}' not found", backup_id));
         }
 
-        fs::remove_dir_all(&backup_path)
-            .map_err(|e| format!("Failed to delete backup: {}", e))?;
+        fs::remove_dir_all(&backup_path).map_err(|e| format!("Failed to delete backup: {}", e))?;
 
         tracing::info!("Deleted backup: {}", backup_id);
         Ok(())
@@ -834,7 +849,10 @@ pub async fn create_backup(
                 Json(CreateBackupResponse {
                     success: false,
                     backup: None,
-                    error: Some("No data directory configured. Set data_dir in server configuration.".to_string()),
+                    error: Some(
+                        "No data directory configured. Set data_dir in server configuration."
+                            .to_string(),
+                    ),
                 }),
             );
         }
@@ -868,10 +886,9 @@ pub async fn create_backup(
             )
         }
         Err(e) => {
-            state.activity.log(
-                ActivityType::System,
-                &format!("Backup failed: {}", e),
-            );
+            state
+                .activity
+                .log(ActivityType::System, &format!("Backup failed: {}", e));
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(CreateBackupResponse {
@@ -940,7 +957,8 @@ pub async fn restore_backup(
                 StatusCode::BAD_REQUEST,
                 Json(RestoreResponse {
                     success: false,
-                    message: "No data directory configured. Set data_dir in server configuration.".to_string(),
+                    message: "No data directory configured. Set data_dir in server configuration."
+                        .to_string(),
                     files_restored: 0,
                 }),
             );
@@ -971,10 +989,9 @@ pub async fn restore_backup(
             )
         }
         Err(e) => {
-            state.activity.log(
-                ActivityType::System,
-                &format!("Restore failed: {}", e),
-            );
+            state
+                .activity
+                .log(ActivityType::System, &format!("Restore failed: {}", e));
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(RestoreResponse {
@@ -1060,12 +1077,15 @@ mod tests {
 
         // Create some test data
         let kv_path = data_dir.join("kv_store.json");
-        fs::write(&kv_path, r#"[{"key": "test", "value": "data"}]"#).expect("Failed to write test data");
+        fs::write(&kv_path, r#"[{"key": "test", "value": "data"}]"#)
+            .expect("Failed to write test data");
 
         let manager = BackupManager::new(data_dir);
 
         // Create backup
-        let backup = manager.create_backup(false, Some("test_user"), false, None).expect("Failed to create backup");
+        let backup = manager
+            .create_backup(false, Some("test_user"), false, None)
+            .expect("Failed to create backup");
         assert!(!backup.id.is_empty());
         assert_eq!(backup.status, BackupStatus::Completed);
 
@@ -1088,13 +1108,17 @@ mod tests {
         let manager = BackupManager::new(data_dir.clone());
 
         // Create backup
-        let backup = manager.create_backup(false, None, false, None).expect("Failed to create backup");
+        let backup = manager
+            .create_backup(false, None, false, None)
+            .expect("Failed to create backup");
 
         // Modify original data
         fs::write(&kv_path, r#"[{"key": "modified"}]"#).expect("Failed to modify data");
 
         // Restore
-        let files_restored = manager.restore_backup(&backup.id, false).expect("Failed to restore");
+        let files_restored = manager
+            .restore_backup(&backup.id, false)
+            .expect("Failed to restore");
         assert!(files_restored > 0);
 
         // Verify data was restored
@@ -1114,8 +1138,12 @@ mod tests {
         let manager = BackupManager::new(data_dir);
 
         // Create and delete backup
-        let backup = manager.create_backup(false, None, false, None).expect("Failed to create backup");
-        manager.delete_backup(&backup.id).expect("Failed to delete backup");
+        let backup = manager
+            .create_backup(false, None, false, None)
+            .expect("Failed to create backup");
+        manager
+            .delete_backup(&backup.id)
+            .expect("Failed to delete backup");
 
         // Verify backup is gone
         let backups = manager.list_backups().expect("Failed to list backups");
@@ -1188,8 +1216,8 @@ mod tests {
         let restored_data = fs::read_to_string(&kv_path).expect("Failed to read restored data");
         assert_eq!(restored_data, test_data);
 
-        let restored_block = fs::read(blocks_dir.join("block_001.dat"))
-            .expect("Failed to read restored block");
+        let restored_block =
+            fs::read(blocks_dir.join("block_001.dat")).expect("Failed to read restored block");
         assert_eq!(restored_block.as_slice(), block_data);
     }
 
@@ -1220,7 +1248,10 @@ mod tests {
             serde_json::from_str(&metadata_content).expect("Failed to parse metadata");
 
         assert!(metadata.encrypted);
-        assert_eq!(metadata.encryption_algorithm, Some("AES-256-GCM".to_string()));
+        assert_eq!(
+            metadata.encryption_algorithm,
+            Some("AES-256-GCM".to_string())
+        );
     }
 
     #[test]

@@ -127,7 +127,10 @@ impl ReplicatedLog {
     /// Get an entry by index.
     pub fn get(&self, index: LogIndex) -> Option<LogEntry> {
         let entries = self.entries.read().expect("log entries lock poisoned");
-        let first = *self.first_index.read().expect("log first_index lock poisoned");
+        let first = *self
+            .first_index
+            .read()
+            .expect("log first_index lock poisoned");
 
         if index < first {
             return None;
@@ -140,7 +143,10 @@ impl ReplicatedLog {
     /// Get entries in a range.
     pub fn get_range(&self, start: LogIndex, end: LogIndex) -> Vec<LogEntry> {
         let entries = self.entries.read().expect("log entries lock poisoned");
-        let first = *self.first_index.read().expect("log first_index lock poisoned");
+        let first = *self
+            .first_index
+            .read()
+            .expect("log first_index lock poisoned");
 
         if start < first {
             return Vec::new();
@@ -160,10 +166,16 @@ impl ReplicatedLog {
     /// Get the last log index.
     pub fn last_index(&self) -> LogIndex {
         let entries = self.entries.read().expect("log entries lock poisoned");
-        let first = *self.first_index.read().expect("log first_index lock poisoned");
+        let first = *self
+            .first_index
+            .read()
+            .expect("log first_index lock poisoned");
 
         if entries.is_empty() {
-            let snapshot = *self.snapshot_index.read().expect("log snapshot_index lock poisoned");
+            let snapshot = *self
+                .snapshot_index
+                .read()
+                .expect("log snapshot_index lock poisoned");
             return snapshot;
         }
 
@@ -178,7 +190,10 @@ impl ReplicatedLog {
             return entry.term;
         }
 
-        *self.snapshot_term.read().expect("log snapshot_term lock poisoned")
+        *self
+            .snapshot_term
+            .read()
+            .expect("log snapshot_term lock poisoned")
     }
 
     /// Get the term of an entry at a specific index.
@@ -187,9 +202,17 @@ impl ReplicatedLog {
             return Some(0);
         }
 
-        let snapshot_index = *self.snapshot_index.read().expect("log snapshot_index lock poisoned");
+        let snapshot_index = *self
+            .snapshot_index
+            .read()
+            .expect("log snapshot_index lock poisoned");
         if index == snapshot_index {
-            return Some(*self.snapshot_term.read().expect("log snapshot_term lock poisoned"));
+            return Some(
+                *self
+                    .snapshot_term
+                    .read()
+                    .expect("log snapshot_term lock poisoned"),
+            );
         }
 
         self.get(index).map(|e| e.term)
@@ -197,12 +220,18 @@ impl ReplicatedLog {
 
     /// Get the commit index.
     pub fn commit_index(&self) -> LogIndex {
-        *self.commit_index.read().expect("log commit_index lock poisoned")
+        *self
+            .commit_index
+            .read()
+            .expect("log commit_index lock poisoned")
     }
 
     /// Set the commit index.
     pub fn set_commit_index(&self, index: LogIndex) {
-        let mut commit = self.commit_index.write().expect("log commit_index lock poisoned");
+        let mut commit = self
+            .commit_index
+            .write()
+            .expect("log commit_index lock poisoned");
         if index > *commit {
             *commit = index;
         }
@@ -210,12 +239,18 @@ impl ReplicatedLog {
 
     /// Get the last applied index.
     pub fn last_applied(&self) -> LogIndex {
-        *self.last_applied.read().expect("log last_applied lock poisoned")
+        *self
+            .last_applied
+            .read()
+            .expect("log last_applied lock poisoned")
     }
 
     /// Set the last applied index.
     pub fn set_last_applied(&self, index: LogIndex) {
-        let mut applied = self.last_applied.write().expect("log last_applied lock poisoned");
+        let mut applied = self
+            .last_applied
+            .write()
+            .expect("log last_applied lock poisoned");
         *applied = index;
     }
 
@@ -241,7 +276,10 @@ impl ReplicatedLog {
     /// Truncate the log from a given index (inclusive).
     pub fn truncate_from(&self, index: LogIndex) {
         let mut entries = self.entries.write().expect("log entries lock poisoned");
-        let first = *self.first_index.read().expect("log first_index lock poisoned");
+        let first = *self
+            .first_index
+            .read()
+            .expect("log first_index lock poisoned");
 
         if index < first {
             entries.clear();
@@ -255,7 +293,10 @@ impl ReplicatedLog {
     /// Compact the log up to a given index.
     pub fn compact(&self, up_to: LogIndex, term: Term) {
         let mut entries = self.entries.write().expect("log entries lock poisoned");
-        let first = *self.first_index.read().expect("log first_index lock poisoned");
+        let first = *self
+            .first_index
+            .read()
+            .expect("log first_index lock poisoned");
 
         if up_to < first {
             return;
@@ -266,9 +307,18 @@ impl ReplicatedLog {
             entries.pop_front();
         }
 
-        *self.first_index.write().expect("log first_index lock poisoned") = up_to + 1;
-        *self.snapshot_index.write().expect("log snapshot_index lock poisoned") = up_to;
-        *self.snapshot_term.write().expect("log snapshot_term lock poisoned") = term;
+        *self
+            .first_index
+            .write()
+            .expect("log first_index lock poisoned") = up_to + 1;
+        *self
+            .snapshot_index
+            .write()
+            .expect("log snapshot_index lock poisoned") = up_to;
+        *self
+            .snapshot_term
+            .write()
+            .expect("log snapshot_term lock poisoned") = term;
     }
 
     /// Get the length of the log.

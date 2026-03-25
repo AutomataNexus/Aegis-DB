@@ -6,10 +6,10 @@
 //! @author AutomataNexus Development Team
 
 use crate::index::{DocumentIndex, IndexType};
-use crate::query::{Query, QueryResult};
+use crate::query::{Filter, Query, QueryResult};
 use crate::types::{Document, DocumentId};
 use crate::validation::{Schema, ValidationResult};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 // =============================================================================
@@ -176,20 +176,77 @@ impl Collection {
     // -------------------------------------------------------------------------
 
     /// Find documents matching a query.
+    ///
+    /// When possible, uses indexes on fields with `Eq` filters to narrow
+    /// the candidate set before applying the full filter chain, reducing
+    /// the number of documents scanned.
     pub fn find(&self, query: &Query) -> QueryResult {
         let docs = self.documents.read().expect("documents RwLock poisoned");
+        let indexes = self.indexes.read().expect("indexes RwLock poisoned");
         let start = std::time::Instant::now();
 
-        let matching: Vec<Document> = docs
-            .values()
-            .filter(|doc| query.matches(doc))
-            .take(query.limit.unwrap_or(usize::MAX))
-            .cloned()
-            .collect();
+        // Try to find an Eq filter whose field has a hash/unique/btree index.
+        // We pick the first matching index we find and use it to get candidate IDs.
+        let candidate_ids = self.find_indexed_candidates(&query.filters, &indexes);
+
+        let (mut matching, total_scanned) = if let Some(ids) = candidate_ids {
+            // Index path: only scan the candidate documents
+            let scanned = ids.len();
+            let results: Vec<Document> = ids
+                .iter()
+                .filter_map(|id| docs.get(id))
+                .filter(|doc| query.matches(doc))
+                .cloned()
+                .collect();
+            (results, scanned)
+        } else {
+            // Full scan fallback
+            let results: Vec<Document> = docs
+                .values()
+                .filter(|doc| query.matches(doc))
+                .cloned()
+                .collect();
+            (results, docs.len())
+        };
+
+        // Apply sort
+        if let Some(ref sort) = query.sort {
+            matching.sort_by(|a, b| {
+                let va = a.get(&sort.field);
+                let vb = b.get(&sort.field);
+                let ord = crate::types::compare_values(va, vb);
+                if sort.ascending {
+                    ord
+                } else {
+                    ord.reverse()
+                }
+            });
+        }
+
+        // Apply skip
+        if let Some(skip) = query.skip {
+            if skip < matching.len() {
+                matching = matching.split_off(skip);
+            } else {
+                matching.clear();
+            }
+        }
+
+        // Apply limit
+        if let Some(limit) = query.limit {
+            matching.truncate(limit);
+        }
+
+        // Apply projection
+        if let Some(ref fields) = query.projection {
+            for doc in &mut matching {
+                doc.data.retain(|key, _| fields.contains(key));
+            }
+        }
 
         QueryResult {
             documents: matching,
-            total_scanned: docs.len(),
+            total_scanned,
             execution_time_ms: start.elapsed().as_millis() as u64,
         }
     }
@@ -204,6 +261,43 @@ impl Collection {
     pub fn count_matching(&self, query: &Query) -> usize {
         let docs = self.documents.read().expect("documents RwLock poisoned");
         docs.values().filter(|doc| query.matches(doc)).count()
+    }
+
+    // -------------------------------------------------------------------------
+    // Index-Accelerated Lookup (private)
+    // -------------------------------------------------------------------------
+
+    /// Scan filters for `Eq` conditions on indexed fields and return candidate
+    /// document IDs from the first matching index. When multiple `Eq` filters
+    /// have indexes, intersect their candidate sets for tighter filtering.
+    /// Returns `None` if no applicable index is found (triggers full scan).
+    fn find_indexed_candidates(
+        &self,
+        filters: &[Filter],
+        indexes: &[DocumentIndex],
+    ) -> Option<HashSet<DocumentId>> {
+        let mut result: Option<HashSet<DocumentId>> = None;
+
+        for filter in filters {
+            if let Filter::Eq { field, value } = filter {
+                // Find an index on this field (Hash, Unique, or BTree all use hash_index)
+                if let Some(index) = indexes.iter().find(|idx| {
+                    idx.field() == field.as_str()
+                        && matches!(
+                            idx.index_type(),
+                            IndexType::Hash | IndexType::Unique | IndexType::BTree
+                        )
+                }) {
+                    let ids: HashSet<DocumentId> = index.find_eq(value).into_iter().collect();
+                    result = Some(match result {
+                        Some(current) => current.intersection(&ids).cloned().collect(),
+                        None => ids,
+                    });
+                }
+            }
+        }
+
+        result
     }
 
     // -------------------------------------------------------------------------
@@ -333,7 +427,10 @@ mod tests {
         assert_eq!(id.as_str(), "doc1");
 
         let retrieved = collection.get(&id).unwrap();
-        assert_eq!(retrieved.get("name").and_then(|v| v.as_str()), Some("Alice"));
+        assert_eq!(
+            retrieved.get("name").and_then(|v| v.as_str()),
+            Some("Alice")
+        );
     }
 
     #[test]
@@ -359,7 +456,9 @@ mod tests {
 
         let mut updated = Document::with_id("doc1");
         updated.set("count", 2i64);
-        collection.update(&DocumentId::new("doc1"), updated).unwrap();
+        collection
+            .update(&DocumentId::new("doc1"), updated)
+            .unwrap();
 
         let retrieved = collection.get(&DocumentId::new("doc1")).unwrap();
         assert_eq!(retrieved.get("count").and_then(|v| v.as_i64()), Some(2));
@@ -393,5 +492,87 @@ mod tests {
         let result = collection.find(&query);
 
         assert_eq!(result.documents.len(), 5);
+    }
+
+    #[test]
+    fn test_find_uses_index() {
+        let collection = Collection::new("test");
+
+        // Insert 100 documents with a "status" field
+        for i in 0..100 {
+            let mut doc = Document::new();
+            doc.set("status", if i % 10 == 0 { "active" } else { "inactive" });
+            doc.set("value", i as i64);
+            collection.insert(doc).unwrap();
+        }
+
+        // Query without index => full scan
+        let query = QueryBuilder::new().eq("status", "active").build();
+        let result_no_index = collection.find(&query);
+        assert_eq!(result_no_index.documents.len(), 10);
+        assert_eq!(result_no_index.total_scanned, 100); // full scan
+
+        // Create index on "status"
+        collection.create_index("status", IndexType::Hash);
+
+        // Query with index => should scan far fewer documents
+        let result_with_index = collection.find(&query);
+        assert_eq!(result_with_index.documents.len(), 10);
+        assert!(
+            result_with_index.total_scanned < 100,
+            "Expected index scan to examine fewer than 100 docs, got {}",
+            result_with_index.total_scanned
+        );
+        // The index should return exactly the 10 matching documents
+        assert_eq!(result_with_index.total_scanned, 10);
+    }
+
+    #[test]
+    fn test_find_index_with_additional_filters() {
+        let collection = Collection::new("test");
+
+        // Insert docs: 50 active, 50 inactive; half of each have value > 25
+        for i in 0..100 {
+            let mut doc = Document::new();
+            doc.set("status", if i < 50 { "active" } else { "inactive" });
+            doc.set("value", i as i64);
+            collection.insert(doc).unwrap();
+        }
+
+        collection.create_index("status", IndexType::Hash);
+
+        // Eq filter on indexed field + Gt filter on non-indexed field
+        let query = QueryBuilder::new()
+            .eq("status", "active")
+            .gt("value", 25i64)
+            .build();
+
+        let result = collection.find(&query);
+
+        // active docs are i=0..50, value>25 means i=26..49 => 24 docs
+        assert_eq!(result.documents.len(), 24);
+        // Should only scan the 50 "active" candidates from the index
+        assert_eq!(result.total_scanned, 50);
+    }
+
+    #[test]
+    fn test_find_no_matching_index_falls_back_to_scan() {
+        let collection = Collection::new("test");
+
+        for i in 0..20 {
+            let mut doc = Document::new();
+            doc.set("x", i as i64);
+            collection.insert(doc).unwrap();
+        }
+
+        // Index on a different field
+        collection.create_index("y", IndexType::Hash);
+
+        let query = QueryBuilder::new().eq("x", 5i64).build();
+        let result = collection.find(&query);
+
+        assert_eq!(result.documents.len(), 1);
+        // No index on "x", so full scan
+        assert_eq!(result.total_scanned, 20);
     }
 }

@@ -119,7 +119,8 @@ aegis-document = { version = "0.2.3", path = "crates/aegis-document" }
 aegis-streaming = { version = "0.2.3", path = "crates/aegis-streaming" }
 aegis-monitoring = { version = "0.2.3", path = "crates/aegis-monitoring" }
 aegis-updates = { version = "0.2.3", path = "crates/aegis-updates" }
-aegis-vault = { version = "0.2.3", path = "crates/aegis-vault" }
+aegis-db-vault = { version = "0.2.3", path = "crates/aegis-vault" }
+aegis-vault = { version = "0.2.3", path = "crates/aegis-vault", package = "aegis-db-vault" }
 aegis-shield = { version = "0.2.3", path = "crates/aegis-shield" }
 
 [profile.release]

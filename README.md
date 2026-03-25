@@ -11,10 +11,10 @@
 <p align="center">
   <a href="https://crates.io/crates/aegis-server"><img src="https://img.shields.io/crates/v/aegis-server.svg" alt="crates.io"></a>
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/tests-635%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-793%20passing-brightgreen.svg" alt="Tests">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/paradigms-6-blueviolet.svg" alt="6 Data Paradigms">
-  <img src="https://img.shields.io/badge/LOC-60K%2B-informational.svg" alt="Lines of Code">
+  <img src="https://img.shields.io/badge/LOC-69K%2B-informational.svg" alt="Lines of Code">
 </p>
 
 <p align="center">
@@ -194,9 +194,36 @@ aegis-server --port 9092 --node-name Replica2 --peers 127.0.0.1:9090,127.0.0.1:9
 - CRDTs for conflict-free replication (8 types)
 - OTA rolling updates across nodes
 
+### Aegis-Vault (Integrated Secrets Manager)
+
+Auto-initializes at startup. No external dependencies required.
+
+- **AES-256-GCM encrypted** secret storage on disk
+- **Seal/unseal** with passphrase-derived keys (Argon2id)
+- **Secret versioning** — keep N previous versions, configurable
+- **Transit encryption** — encrypt/decrypt data without storing it
+- **Access policies** — control which components see which secrets
+- **Audit logging** — every secret access recorded
+- **Provider chain** — built-in vault → external HashiCorp Vault → environment variables
+- API at `/api/v1/vault/*`
+
+### Aegis-Shield (Security Shield)
+
+Auto-runs as middleware on every request. Zero configuration needed.
+
+- **SQL injection detection** — 30+ regex patterns with scoring (0-100)
+- **IP reputation tracking** — per-IP behavior scoring (-100 to +100)
+- **Auto-blocking** — configurable thresholds, escalating ban durations
+- **Request fingerprinting** — detect scanners (sqlmap, nikto, etc.)
+- **Query anomaly detection** — baseline learning, deviation alerting
+- **Threat feed** — real-time event stream with statistics
+- **Security presets** — Strict / Moderate / Permissive
+- **Allowlists** — exempt trusted IPs from all checks
+- API at `/api/v1/shield/*`
+
 ### Enterprise Security
 
-- **Authentication on all endpoints** — mandatory when admin users configured, open access for development
+- **Authentication on all endpoints** — mandatory when admin users configured; startup + per-request security warnings when unconfigured
 - **TLS/HTTPS** with rustls (TLSv1.2/1.3)
 - **Argon2id** password hashing with session revocation on password change
 - **RBAC** with 25+ granular permissions
@@ -223,6 +250,32 @@ Built-in support for HIPAA, GDPR, CCPA, SOC 2, and FERPA:
 - Breach detection and notification
 - Consent management with full audit trail
 - Cryptographic audit log verification
+
+### SQL Engine
+
+- Full SELECT/INSERT/UPDATE/DELETE/DDL support
+- JOINs (INNER, LEFT, RIGHT, FULL, CROSS) with HashJoin and NestedLoop strategies
+- **Set operations** — UNION, UNION ALL, INTERSECT, EXCEPT
+- GROUP BY, HAVING, ORDER BY, LIMIT/OFFSET, DISTINCT
+- Subqueries (IN, EXISTS, scalar)
+- 18 scalar functions (UPPER, LOWER, ROUND, CEIL, FLOOR, SUBSTRING, TRIM, NULLIF, NOW, EXTRACT, CONCAT, REPLACE, etc.)
+- Parameterized queries ($1, $2) with plan caching
+- Table-qualified wildcards (SELECT t.*)
+
+### Document Store
+
+- Full CRUD with schema validation
+- 13 filter types (Eq, Ne, Gt, Lt, In, Regex, Contains, etc.)
+- **Index-accelerated queries** — hash/btree indexes used for Eq lookups
+- Sort, skip, limit, and field projection
+- Full-text search with inverted index
+
+### Streaming
+
+- Pub/sub channels with persistent history
+- **Consumer groups** with offset tracking and member management
+- **Acknowledgment enforcement** (Auto, AtLeastOnce, ExactlyOnce)
+- Event filtering, windowed aggregation, CDC
 
 ### Storage Engine
 

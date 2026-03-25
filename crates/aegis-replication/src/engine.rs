@@ -565,11 +565,7 @@ mod tests {
             .unwrap();
 
         let vote_request = engine1.start_election();
-        let msg = Message::vote_request(
-            NodeId::new("node1"),
-            NodeId::new("node2"),
-            vote_request,
-        );
+        let msg = Message::vote_request(NodeId::new("node1"), NodeId::new("node2"), vote_request);
 
         let response_msg = engine2.process_message(msg).unwrap();
 
@@ -607,7 +603,10 @@ mod tests {
 
         engine.set("key1", b"value1".to_vec()).unwrap();
 
-        engine.raft.log().set_commit_index(engine.raft.log().last_index());
+        engine
+            .raft
+            .log()
+            .set_commit_index(engine.raft.log().last_index());
         engine.apply_committed();
 
         let value = engine.get("key1");

@@ -279,7 +279,9 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_commit() {
         if let Some(tx) = try_create_transaction().await {
-            tx.commit().await.expect("Transaction commit should succeed");
+            tx.commit()
+                .await
+                .expect("Transaction commit should succeed");
         } else {
             eprintln!("Skipping test, server not available");
         }
@@ -288,7 +290,9 @@ mod tests {
     #[tokio::test]
     async fn test_transaction_rollback() {
         if let Some(tx) = try_create_transaction().await {
-            tx.rollback().await.expect("Transaction rollback should succeed");
+            tx.rollback()
+                .await
+                .expect("Transaction rollback should succeed");
         } else {
             eprintln!("Skipping test, server not available");
         }
@@ -325,8 +329,7 @@ mod tests {
 
     #[test]
     fn test_isolation_levels() {
-        let opts = TransactionOptions::new()
-            .with_isolation(IsolationLevel::RepeatableRead);
+        let opts = TransactionOptions::new().with_isolation(IsolationLevel::RepeatableRead);
 
         assert!(opts.begin_statement().contains("REPEATABLE READ"));
     }

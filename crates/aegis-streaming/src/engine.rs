@@ -8,9 +8,9 @@
 use crate::cdc::{CdcConfig, ChangeEvent};
 use crate::channel::{Channel, ChannelConfig, ChannelError, ChannelId, ChannelReceiver};
 use crate::event::{Event, EventFilter};
-use crate::subscriber::{Subscriber, SubscriberId, Subscription};
-use std::collections::HashMap;
-use std::sync::RwLock;
+use crate::subscriber::{ConsumerGroup, Subscriber, SubscriberId, Subscription};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 // =============================================================================
 // Engine Configuration
@@ -45,6 +45,7 @@ pub struct StreamingEngine {
     config: EngineConfig,
     channels: RwLock<HashMap<ChannelId, Channel>>,
     subscribers: RwLock<HashMap<SubscriberId, Subscriber>>,
+    consumer_groups: Arc<RwLock<HashMap<String, ConsumerGroup>>>,
     stats: RwLock<EngineStats>,
 }
 
@@ -60,6 +61,7 @@ impl StreamingEngine {
             config,
             channels: RwLock::new(HashMap::new()),
             subscribers: RwLock::new(HashMap::new()),
+            consumer_groups: Arc::new(RwLock::new(HashMap::new())),
             stats: RwLock::new(EngineStats::default()),
         }
     }
@@ -178,7 +180,11 @@ impl StreamingEngine {
     }
 
     /// Publish a CDC change event.
-    pub fn publish_change(&self, channel_id: &ChannelId, change: ChangeEvent) -> Result<usize, EngineError> {
+    pub fn publish_change(
+        &self,
+        channel_id: &ChannelId,
+        change: ChangeEvent,
+    ) -> Result<usize, EngineError> {
         let event = change.to_event();
         self.publish(channel_id, event)
     }
@@ -335,11 +341,147 @@ impl StreamingEngine {
     }
 
     // -------------------------------------------------------------------------
+    // Consumer Group Management
+    // -------------------------------------------------------------------------
+
+    /// Create a new consumer group with the given ID.
+    pub fn create_consumer_group(&self, group_id: impl Into<String>) -> Result<(), EngineError> {
+        let group_id = group_id.into();
+        let mut groups = self
+            .consumer_groups
+            .write()
+            .expect("consumer_groups RwLock poisoned in create_consumer_group");
+
+        if groups.contains_key(&group_id) {
+            return Err(EngineError::ConsumerGroupExists(group_id));
+        }
+
+        groups.insert(group_id.clone(), ConsumerGroup::new(group_id));
+        Ok(())
+    }
+
+    /// Delete a consumer group.
+    pub fn delete_consumer_group(&self, group_id: &str) -> Result<(), EngineError> {
+        let mut groups = self
+            .consumer_groups
+            .write()
+            .expect("consumer_groups RwLock poisoned in delete_consumer_group");
+
+        if groups.remove(group_id).is_none() {
+            return Err(EngineError::ConsumerGroupNotFound(group_id.to_string()));
+        }
+
+        Ok(())
+    }
+
+    /// Join a consumer group. The subscriber is added as a member with the given
+    /// set of assigned channels.
+    pub fn join_consumer_group(
+        &self,
+        group_id: &str,
+        subscriber_id: SubscriberId,
+        channels: HashSet<String>,
+    ) -> Result<(), EngineError> {
+        let mut groups = self
+            .consumer_groups
+            .write()
+            .expect("consumer_groups RwLock poisoned in join_consumer_group");
+
+        let group = groups
+            .get_mut(group_id)
+            .ok_or_else(|| EngineError::ConsumerGroupNotFound(group_id.to_string()))?;
+
+        group.add_member(subscriber_id, channels);
+        Ok(())
+    }
+
+    /// Leave a consumer group. Returns the channels that were assigned to the
+    /// subscriber, or an error if the group or member was not found.
+    pub fn leave_consumer_group(
+        &self,
+        group_id: &str,
+        subscriber_id: &SubscriberId,
+    ) -> Result<HashSet<String>, EngineError> {
+        let mut groups = self
+            .consumer_groups
+            .write()
+            .expect("consumer_groups RwLock poisoned in leave_consumer_group");
+
+        let group = groups
+            .get_mut(group_id)
+            .ok_or_else(|| EngineError::ConsumerGroupNotFound(group_id.to_string()))?;
+
+        group.remove_member(subscriber_id).ok_or_else(|| {
+            EngineError::SubscriberNotInGroup(subscriber_id.clone(), group_id.to_string())
+        })
+    }
+
+    /// Commit an offset for a channel within a consumer group.
+    pub fn commit_offset(
+        &self,
+        group_id: &str,
+        channel_name: impl Into<String>,
+        offset: u64,
+    ) -> Result<(), EngineError> {
+        let mut groups = self
+            .consumer_groups
+            .write()
+            .expect("consumer_groups RwLock poisoned in commit_offset");
+
+        let group = groups
+            .get_mut(group_id)
+            .ok_or_else(|| EngineError::ConsumerGroupNotFound(group_id.to_string()))?;
+
+        group.commit_offset(channel_name, offset);
+        Ok(())
+    }
+
+    /// Get the committed offset for a channel within a consumer group.
+    pub fn get_committed_offset(
+        &self,
+        group_id: &str,
+        channel_name: &str,
+    ) -> Result<Option<u64>, EngineError> {
+        let groups = self
+            .consumer_groups
+            .read()
+            .expect("consumer_groups RwLock poisoned in get_committed_offset");
+
+        let group = groups
+            .get(group_id)
+            .ok_or_else(|| EngineError::ConsumerGroupNotFound(group_id.to_string()))?;
+
+        Ok(group.get_offset(channel_name))
+    }
+
+    /// List all consumer groups.
+    pub fn list_consumer_groups(&self) -> Vec<String> {
+        let groups = self
+            .consumer_groups
+            .read()
+            .expect("consumer_groups RwLock poisoned in list_consumer_groups");
+        groups.keys().cloned().collect()
+    }
+
+    /// Get a snapshot of a consumer group.
+    pub fn get_consumer_group(&self, group_id: &str) -> Option<ConsumerGroup> {
+        let groups = self
+            .consumer_groups
+            .read()
+            .expect("consumer_groups RwLock poisoned in get_consumer_group");
+        groups.get(group_id).cloned()
+    }
+
+    // -------------------------------------------------------------------------
     // History and Replay
     // -------------------------------------------------------------------------
 
     /// Get recent events from a channel.
-    pub fn get_history(&self, channel_id: &ChannelId, count: usize) -> Result<Vec<Event>, EngineError> {
+    pub fn get_history(
+        &self,
+        channel_id: &ChannelId,
+        count: usize,
+    ) -> Result<Vec<Event>, EngineError> {
         let channels = self
             .channels
             .read()
@@ -374,10 +516,7 @@ impl StreamingEngine {
 
     /// Get engine statistics.
     pub fn stats(&self) -> EngineStats {
-        let stats = self
-            .stats
-            .read()
-            .expect("stats RwLock poisoned in stats");
+        let stats = self.stats.read().expect("stats RwLock poisoned in stats");
         stats.clone()
     }
 
@@ -430,6 +569,9 @@ pub enum EngineError {
     TooManyChannels,
     TooManySubscribers,
     Channel(ChannelError),
+    ConsumerGroupExists(String),
+    ConsumerGroupNotFound(String),
+    SubscriberNotInGroup(SubscriberId, String),
 }
 
 impl std::fmt::Display for EngineError {
@@ -440,6 +582,15 @@ impl std::fmt::Display for EngineError {
             Self::TooManyChannels => write!(f, "Maximum channels reached"),
             Self::TooManySubscribers => write!(f, "Maximum subscribers reached"),
             Self::Channel(err) => write!(f, "Channel error: {}", err),
+            Self::ConsumerGroupExists(id) => write!(f, "Consumer group already exists: {}", id),
+            Self::ConsumerGroupNotFound(id) => write!(f, "Consumer group not found: {}", id),
+            Self::SubscriberNotInGroup(sub_id, group_id) => {
+                write!(
+                    f,
+                    "Subscriber {} is not in consumer group {}",
+                    sub_id, group_id
+                )
+            }
         }
     }
 }
@@ -483,7 +634,11 @@ mod tests {
         let channel_id = ChannelId::new("test");
         let mut receiver = engine.subscribe(&channel_id, "sub1").unwrap();
 
-        let event = Event::new(EventType::Created, "source", EventData::String("hello".to_string()));
+        let event = Event::new(
+            EventType::Created,
+            "source",
+            EventData::String("hello".to_string()),
+        );
         engine.publish(&channel_id, event).unwrap();
 
         let received = receiver.recv().await.unwrap();
@@ -539,5 +694,128 @@ mod tests {
 
         let history = engine.get_history(&channel_id, 10).unwrap();
         assert_eq!(history.len(), 5);
+    }
+
+    #[test]
+    fn test_consumer_group_create_delete() {
+        let engine = StreamingEngine::new();
+
+        engine.create_consumer_group("group1").unwrap();
+        assert_eq!(engine.list_consumer_groups().len(), 1);
+
+        // Duplicate creation should fail
+        let result = engine.create_consumer_group("group1");
+        assert!(matches!(result, Err(EngineError::ConsumerGroupExists(_))));
+
+        engine.delete_consumer_group("group1").unwrap();
+        assert!(engine.list_consumer_groups().is_empty());
+
+        // Deleting non-existent group should fail
+        let result = engine.delete_consumer_group("group1");
+        assert!(matches!(result, Err(EngineError::ConsumerGroupNotFound(_))));
+    }
+
+    #[test]
+    fn test_consumer_group_join_leave() {
+        let engine = StreamingEngine::new();
+        engine.create_consumer_group("group1").unwrap();
+
+        let sub1 = SubscriberId::new("sub1");
+        let sub2 = SubscriberId::new("sub2");
+
+        let mut channels1 = std::collections::HashSet::new();
+        channels1.insert("events".to_string());
+
+        let mut channels2 = std::collections::HashSet::new();
+        channels2.insert("logs".to_string());
+
+        engine
+            .join_consumer_group("group1", sub1.clone(), channels1)
+            .unwrap();
+        engine
+            .join_consumer_group("group1", sub2.clone(), channels2)
+            .unwrap();
+
+        let group = engine.get_consumer_group("group1").unwrap();
+        assert_eq!(group.member_count(), 2);
+        assert!(group.is_member(&sub1));
+
+        // Leave
+        let removed_channels = engine.leave_consumer_group("group1", &sub1).unwrap();
+        assert!(removed_channels.contains("events"));
+
+        let group = engine.get_consumer_group("group1").unwrap();
+        assert_eq!(group.member_count(), 1);
+        assert!(!group.is_member(&sub1));
+
+        // Leaving again should fail
+        let result = engine.leave_consumer_group("group1", &sub1);
+        assert!(matches!(
+            result,
+            Err(EngineError::SubscriberNotInGroup(_, _))
+        ));
+    }
+
+    #[test]
+    fn test_consumer_group_join_nonexistent() {
+        let engine = StreamingEngine::new();
+
+        let result = engine.join_consumer_group(
+            "nonexistent",
+            SubscriberId::new("sub1"),
+            std::collections::HashSet::new(),
+        );
+        assert!(matches!(result, Err(EngineError::ConsumerGroupNotFound(_))));
+    }
+
+    #[test]
+    fn test_consumer_group_offset_tracking() {
+        let engine = StreamingEngine::new();
+        engine.create_consumer_group("group1").unwrap();
+
+        // No offset committed yet
+        let offset = engine.get_committed_offset("group1", "events").unwrap();
+        assert_eq!(offset, None);
+
+        // Commit offset
+        engine.commit_offset("group1", "events", 42).unwrap();
+        let offset = engine.get_committed_offset("group1", "events").unwrap();
+        assert_eq!(offset, Some(42));
+
+        // Update offset
+        engine.commit_offset("group1", "events", 100).unwrap();
+        let offset = engine.get_committed_offset("group1", "events").unwrap();
+        assert_eq!(offset, Some(100));
+
+        // Different channel
+        engine.commit_offset("group1", "logs", 5).unwrap();
+        let offset = engine.get_committed_offset("group1", "logs").unwrap();
+        assert_eq!(offset, Some(5));
+        // Original channel offset unchanged
+        let offset = engine.get_committed_offset("group1", "events").unwrap();
+        assert_eq!(offset, Some(100));
+    }
+
+    #[test]
+    fn test_consumer_group_offset_nonexistent_group() {
+        let engine = StreamingEngine::new();
+
+        let result = engine.commit_offset("nonexistent", "events", 10);
+        assert!(matches!(result, Err(EngineError::ConsumerGroupNotFound(_))));
+
+        let result = engine.get_committed_offset("nonexistent", "events");
+        assert!(matches!(result, Err(EngineError::ConsumerGroupNotFound(_))));
+    }
+
+    #[test]
+    fn test_get_consumer_group() {
+        let engine = StreamingEngine::new();
+
+        assert!(engine.get_consumer_group("nonexistent").is_none());
+
+        engine.create_consumer_group("group1").unwrap();
+        let group = engine.get_consumer_group("group1");
+        assert!(group.is_some());
+        assert_eq!(group.unwrap().group_id, "group1");
     }
 }

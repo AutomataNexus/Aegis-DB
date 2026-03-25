@@ -13,12 +13,12 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use aegis_common::{BlockId, BlockType, CompressionType, EncryptionType, Result, AegisError};
+use aegis_common::{AegisError, BlockId, BlockType, CompressionType, EncryptionType, Result};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use bytes::{Bytes, BytesMut, BufMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -60,13 +60,14 @@ fn get_encryption_key() -> Result<&'static [u8; AES_256_KEY_SIZE]> {
     }
 
     let hex_key = std::env::var("AEGIS_ENCRYPTION_KEY").map_err(|_| {
-        AegisError::Encryption(
-            "AEGIS_ENCRYPTION_KEY environment variable not set".to_string(),
-        )
+        AegisError::Encryption("AEGIS_ENCRYPTION_KEY environment variable not set".to_string())
     })?;
 
     let key_bytes = hex::decode(&hex_key).map_err(|e| {
-        AegisError::Encryption(format!("Invalid hex encoding in AEGIS_ENCRYPTION_KEY: {}", e))
+        AegisError::Encryption(format!(
+            "Invalid hex encoding in AEGIS_ENCRYPTION_KEY: {}",
+            e
+        ))
     })?;
 
     if key_bytes.len() != AES_256_KEY_SIZE {
@@ -102,9 +103,9 @@ fn encrypt_aes256gcm(plaintext: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| AegisError::Encryption(format!("Failed to generate nonce: {}", e)))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let ciphertext = cipher.encrypt(nonce, plaintext).map_err(|e| {
-        AegisError::Encryption(format!("Encryption failed: {}", e))
-    })?;
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|e| AegisError::Encryption(format!("Encryption failed: {}", e)))?;
 
     // Prepend nonce to ciphertext for storage
     let mut result = Vec::with_capacity(AES_GCM_NONCE_SIZE + ciphertext.len());
@@ -130,9 +131,9 @@ fn decrypt_aes256gcm(encrypted_data: &[u8]) -> Result<Vec<u8>> {
     let nonce = Nonce::from_slice(&encrypted_data[..AES_GCM_NONCE_SIZE]);
     let ciphertext = &encrypted_data[AES_GCM_NONCE_SIZE..];
 
-    let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|e| {
-        AegisError::Encryption(format!("Decryption failed: {}", e))
-    })?;
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| AegisError::Encryption(format!("Decryption failed: {}", e)))?;
 
     Ok(plaintext)
 }
@@ -179,8 +180,7 @@ impl BlockHeader {
 
     /// Deserialize header from bytes.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        bincode::deserialize(data)
-            .map_err(|e| AegisError::Serialization(e.to_string()))
+        bincode::deserialize(data).map_err(|e| AegisError::Serialization(e.to_string()))
     }
 }
 
@@ -241,16 +241,13 @@ impl Block {
 
         let compressed = match compression {
             CompressionType::None => return Ok(()),
-            CompressionType::Lz4 => {
-                lz4_flex::compress_prepend_size(&self.data)
-            }
-            CompressionType::Zstd => {
-                zstd::encode_all(self.data.as_ref(), 3)
-                    .map_err(|e| AegisError::Storage(e.to_string()))?
-            }
+            CompressionType::Lz4 => lz4_flex::compress_prepend_size(&self.data),
+            CompressionType::Zstd => zstd::encode_all(self.data.as_ref(), 3)
+                .map_err(|e| AegisError::Storage(e.to_string()))?,
             CompressionType::Snappy => {
                 let mut encoder = snap::raw::Encoder::new();
-                encoder.compress_vec(&self.data)
+                encoder
+                    .compress_vec(&self.data)
                     .map_err(|e| AegisError::Storage(e.to_string()))?
             }
         };
@@ -272,17 +269,14 @@ impl Block {
 
         let decompressed = match self.header.compression {
             CompressionType::None => return Ok(()),
-            CompressionType::Lz4 => {
-                lz4_flex::decompress_size_prepended(&self.data)
-                    .map_err(|e| AegisError::Storage(e.to_string()))?
-            }
-            CompressionType::Zstd => {
-                zstd::decode_all(self.data.as_ref())
-                    .map_err(|e| AegisError::Storage(e.to_string()))?
-            }
+            CompressionType::Lz4 => lz4_flex::decompress_size_prepended(&self.data)
+                .map_err(|e| AegisError::Storage(e.to_string()))?,
+            CompressionType::Zstd => zstd::decode_all(self.data.as_ref())
+                .map_err(|e| AegisError::Storage(e.to_string()))?,
             CompressionType::Snappy => {
                 let mut decoder = snap::raw::Decoder::new();
-                decoder.decompress_vec(&self.data)
+                decoder
+                    .decompress_vec(&self.data)
                     .map_err(|e| AegisError::Storage(e.to_string()))?
             }
         };
@@ -415,10 +409,14 @@ mod tests {
         let data = Bytes::from("Hello, Aegis! ".repeat(100));
         let mut block = Block::new(BlockId(1), BlockType::TableData, data.clone());
 
-        block.compress(CompressionType::Lz4).expect("LZ4 compression should succeed");
+        block
+            .compress(CompressionType::Lz4)
+            .expect("LZ4 compression should succeed");
         assert!(block.header.data_size < block.header.uncompressed_size);
 
-        block.decompress().expect("LZ4 decompression should succeed");
+        block
+            .decompress()
+            .expect("LZ4 decompression should succeed");
         assert_eq!(block.data, data);
     }
 
@@ -427,10 +425,14 @@ mod tests {
         let data = Bytes::from("Hello, Aegis! ".repeat(100));
         let mut block = Block::new(BlockId(1), BlockType::TableData, data.clone());
 
-        block.compress(CompressionType::Zstd).expect("Zstd compression should succeed");
+        block
+            .compress(CompressionType::Zstd)
+            .expect("Zstd compression should succeed");
         assert!(block.header.data_size < block.header.uncompressed_size);
 
-        block.decompress().expect("Zstd decompression should succeed");
+        block
+            .decompress()
+            .expect("Zstd decompression should succeed");
         assert_eq!(block.data, data);
     }
 
@@ -451,7 +453,7 @@ mod tests {
             .expect("AES-256-GCM encryption should succeed");
         assert_eq!(block.header.encryption, EncryptionType::Aes256Gcm);
         assert_ne!(block.data, data); // Data should be encrypted
-        // Encrypted data includes 12-byte nonce + 16-byte auth tag
+                                      // Encrypted data includes 12-byte nonce + 16-byte auth tag
         assert!(block.data.len() > data.len());
 
         // Decrypt

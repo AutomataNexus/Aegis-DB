@@ -111,7 +111,11 @@ impl Command {
     }
 
     /// Create a document update command.
-    pub fn document_update(collection: impl Into<String>, doc_id: impl Into<String>, document: Vec<u8>) -> Self {
+    pub fn document_update(
+        collection: impl Into<String>,
+        doc_id: impl Into<String>,
+        document: Vec<u8>,
+    ) -> Self {
         let mut metadata = HashMap::new();
         metadata.insert("doc_id".to_string(), doc_id.into());
         Self {
@@ -145,7 +149,12 @@ impl Command {
     }
 
     /// Create a graph edge create command.
-    pub fn graph_create_edge(edge_type: impl Into<String>, from_node: impl Into<String>, to_node: impl Into<String>, properties: Vec<u8>) -> Self {
+    pub fn graph_create_edge(
+        edge_type: impl Into<String>,
+        from_node: impl Into<String>,
+        to_node: impl Into<String>,
+        properties: Vec<u8>,
+    ) -> Self {
         let mut metadata = HashMap::new();
         metadata.insert("from".to_string(), from_node.into());
         metadata.insert("to".to_string(), to_node.into());
@@ -211,7 +220,9 @@ impl Command {
     /// Get the SQL statement if this is a SQL command.
     pub fn sql_statement(&self) -> Option<&str> {
         if self.command_type == CommandType::SqlExecute {
-            self.value.as_ref().and_then(|v| std::str::from_utf8(v).ok())
+            self.value
+                .as_ref()
+                .and_then(|v| std::str::from_utf8(v).ok())
         } else {
             None
         }
@@ -315,7 +326,13 @@ impl StateMachine {
         }
     }
 
-    fn apply_kv_command(&self, command: &Command, index: u64, data: &mut HashMap<String, Vec<u8>>, version: &mut u64) -> CommandResult {
+    fn apply_kv_command(
+        &self,
+        command: &Command,
+        index: u64,
+        data: &mut HashMap<String, Vec<u8>>,
+        version: &mut u64,
+    ) -> CommandResult {
         match command.command_type {
             CommandType::Get => {
                 let value = data.get(&command.key).cloned();
@@ -337,7 +354,10 @@ impl StateMachine {
             }
             CommandType::CompareAndSwap => {
                 // Expected value is in metadata["expected"]
-                let expected = command.metadata.get("expected").map(|s| s.as_bytes().to_vec());
+                let expected = command
+                    .metadata
+                    .get("expected")
+                    .map(|s| s.as_bytes().to_vec());
                 let current = data.get(&command.key).cloned();
 
                 if current == expected {
@@ -365,8 +385,11 @@ impl StateMachine {
                 CommandResult::success(Some(new_value), index)
             }
             _ => CommandResult::error(
-                format!("Command type {:?} not supported by in-memory state machine", command.command_type),
-                index
+                format!(
+                    "Command type {:?} not supported by in-memory state machine",
+                    command.command_type
+                ),
+                index,
             ),
         }
     }
@@ -375,8 +398,14 @@ impl StateMachine {
 impl StateMachineBackend for StateMachine {
     fn apply(&self, command: &Command, index: u64) -> CommandResult {
         let mut data = self.data.write().expect("state machine data lock poisoned");
-        let mut last_applied = self.last_applied.write().expect("state machine last_applied lock poisoned");
-        let mut version = self.version.write().expect("state machine version lock poisoned");
+        let mut last_applied = self
+            .last_applied
+            .write()
+            .expect("state machine last_applied lock poisoned");
+        let mut version = self
+            .version
+            .write()
+            .expect("state machine version lock poisoned");
 
         if index <= *last_applied {
             return CommandResult::error("Already applied", *last_applied);
@@ -393,11 +422,17 @@ impl StateMachineBackend for StateMachine {
     }
 
     fn last_applied(&self) -> u64 {
-        *self.last_applied.read().expect("state machine last_applied lock poisoned")
+        *self
+            .last_applied
+            .read()
+            .expect("state machine last_applied lock poisoned")
     }
 
     fn version(&self) -> u64 {
-        *self.version.read().expect("state machine version lock poisoned")
+        *self
+            .version
+            .read()
+            .expect("state machine version lock poisoned")
     }
 
     fn len(&self) -> usize {
@@ -407,8 +442,14 @@ impl StateMachineBackend for StateMachine {
 
     fn snapshot(&self) -> Snapshot {
         let data = self.data.read().expect("state machine data lock poisoned");
-        let last_applied = *self.last_applied.read().expect("state machine last_applied lock poisoned");
-        let version = *self.version.read().expect("state machine version lock poisoned");
+        let last_applied = *self
+            .last_applied
+            .read()
+            .expect("state machine last_applied lock poisoned");
+        let version = *self
+            .version
+            .read()
+            .expect("state machine version lock poisoned");
 
         Snapshot {
             data: data.clone(),
@@ -419,8 +460,14 @@ impl StateMachineBackend for StateMachine {
 
     fn restore(&self, snapshot: Snapshot) {
         let mut data = self.data.write().expect("state machine data lock poisoned");
-        let mut last_applied = self.last_applied.write().expect("state machine last_applied lock poisoned");
-        let mut version = self.version.write().expect("state machine version lock poisoned");
+        let mut last_applied = self
+            .last_applied
+            .write()
+            .expect("state machine last_applied lock poisoned");
+        let mut version = self
+            .version
+            .write()
+            .expect("state machine version lock poisoned");
 
         *data = snapshot.data;
         *last_applied = snapshot.last_applied;
@@ -458,7 +505,12 @@ pub trait DatabaseOperationHandler: Send + Sync {
     fn insert_document(&self, collection: &str, document: &[u8]) -> Result<String, String>;
 
     /// Update a document in a collection.
-    fn update_document(&self, collection: &str, doc_id: &str, document: &[u8]) -> Result<(), String>;
+    fn update_document(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        document: &[u8],
+    ) -> Result<(), String>;
 
     /// Delete a document from a collection.
     fn delete_document(&self, collection: &str, doc_id: &str) -> Result<(), String>;
@@ -470,7 +522,13 @@ pub trait DatabaseOperationHandler: Send + Sync {
     fn delete_node(&self, node_id: &str) -> Result<(), String>;
 
     /// Create a graph edge.
-    fn create_edge(&self, edge_type: &str, from_node: &str, to_node: &str, properties: &[u8]) -> Result<String, String>;
+    fn create_edge(
+        &self,
+        edge_type: &str,
+        from_node: &str,
+        to_node: &str,
+        properties: &[u8],
+    ) -> Result<String, String>;
 
     /// Delete a graph edge.
     fn delete_edge(&self, edge_id: &str) -> Result<(), String>;
@@ -506,13 +564,19 @@ impl<F: DatabaseOperationHandler> DatabaseStateMachine<F> {
         match command.command_type {
             // Key-value operations use the cache
             CommandType::Get => {
-                let cache = self.kv_cache.read().expect("database state machine kv_cache lock poisoned");
+                let cache = self
+                    .kv_cache
+                    .read()
+                    .expect("database state machine kv_cache lock poisoned");
                 let value = cache.get(&command.key).cloned();
                 CommandResult::success(value, index)
             }
             CommandType::Set => {
                 if let Some(ref value) = command.value {
-                    let mut cache = self.kv_cache.write().expect("database state machine kv_cache lock poisoned");
+                    let mut cache = self
+                        .kv_cache
+                        .write()
+                        .expect("database state machine kv_cache lock poisoned");
                     cache.insert(command.key.clone(), value.clone());
                     CommandResult::success(None, index)
                 } else {
@@ -520,7 +584,10 @@ impl<F: DatabaseOperationHandler> DatabaseStateMachine<F> {
                 }
             }
             CommandType::Delete => {
-                let mut cache = self.kv_cache.write().expect("database state machine kv_cache lock poisoned");
+                let mut cache = self
+                    .kv_cache
+                    .write()
+                    .expect("database state machine kv_cache lock poisoned");
                 let old = cache.remove(&command.key);
                 CommandResult::success(old, index)
             }
@@ -549,7 +616,9 @@ impl<F: DatabaseOperationHandler> DatabaseStateMachine<F> {
                 }
             }
             CommandType::DocumentUpdate => {
-                if let (Some(doc_id), Some(ref doc)) = (command.metadata.get("doc_id"), &command.value) {
+                if let (Some(doc_id), Some(ref doc)) =
+                    (command.metadata.get("doc_id"), &command.value)
+                {
                     match self.handler.update_document(&command.key, doc_id, doc) {
                         Ok(()) => CommandResult::success(None, index),
                         Err(e) => CommandResult::error(e, index),
@@ -580,12 +649,10 @@ impl<F: DatabaseOperationHandler> DatabaseStateMachine<F> {
                     CommandResult::error("No properties provided", index)
                 }
             }
-            CommandType::GraphDeleteNode => {
-                match self.handler.delete_node(&command.key) {
-                    Ok(()) => CommandResult::success(None, index),
-                    Err(e) => CommandResult::error(e, index),
-                }
-            }
+            CommandType::GraphDeleteNode => match self.handler.delete_node(&command.key) {
+                Ok(()) => CommandResult::success(None, index),
+                Err(e) => CommandResult::error(e, index),
+            },
             CommandType::GraphCreateEdge => {
                 if let (Some(from), Some(to), Some(ref props)) = (
                     command.metadata.get("from"),
@@ -600,12 +667,10 @@ impl<F: DatabaseOperationHandler> DatabaseStateMachine<F> {
                     CommandResult::error("Missing from, to, or properties", index)
                 }
             }
-            CommandType::GraphDeleteEdge => {
-                match self.handler.delete_edge(&command.key) {
-                    Ok(()) => CommandResult::success(None, index),
-                    Err(e) => CommandResult::error(e, index),
-                }
-            }
+            CommandType::GraphDeleteEdge => match self.handler.delete_edge(&command.key) {
+                Ok(()) => CommandResult::success(None, index),
+                Err(e) => CommandResult::error(e, index),
+            },
 
             // Transaction operations
             CommandType::TransactionBegin => {
@@ -643,17 +708,21 @@ impl<F: DatabaseOperationHandler> DatabaseStateMachine<F> {
             CommandType::CompareAndSwap | CommandType::Increment => {
                 CommandResult::error("Use key-value state machine for these operations", index)
             }
-            CommandType::Custom => {
-                CommandResult::error("Custom commands not handled", index)
-            }
+            CommandType::Custom => CommandResult::error("Custom commands not handled", index),
         }
     }
 }
 
 impl<F: DatabaseOperationHandler> StateMachineBackend for DatabaseStateMachine<F> {
     fn apply(&self, command: &Command, index: u64) -> CommandResult {
-        let mut last_applied = self.last_applied.write().expect("database state machine last_applied lock poisoned");
-        let mut version = self.version.write().expect("database state machine version lock poisoned");
+        let mut last_applied = self
+            .last_applied
+            .write()
+            .expect("database state machine last_applied lock poisoned");
+        let mut version = self
+            .version
+            .write()
+            .expect("database state machine version lock poisoned");
 
         if index <= *last_applied {
             return CommandResult::error("Already applied", *last_applied);
@@ -670,28 +739,49 @@ impl<F: DatabaseOperationHandler> StateMachineBackend for DatabaseStateMachine<F
     }
 
     fn get(&self, key: &str) -> Option<Vec<u8>> {
-        let cache = self.kv_cache.read().expect("database state machine kv_cache lock poisoned");
+        let cache = self
+            .kv_cache
+            .read()
+            .expect("database state machine kv_cache lock poisoned");
         cache.get(key).cloned()
     }
 
     fn last_applied(&self) -> u64 {
-        *self.last_applied.read().expect("database state machine last_applied lock poisoned")
+        *self
+            .last_applied
+            .read()
+            .expect("database state machine last_applied lock poisoned")
     }
 
     fn version(&self) -> u64 {
-        *self.version.read().expect("database state machine version lock poisoned")
+        *self
+            .version
+            .read()
+            .expect("database state machine version lock poisoned")
     }
 
     fn len(&self) -> usize {
-        let cache = self.kv_cache.read().expect("database state machine kv_cache lock poisoned");
+        let cache = self
+            .kv_cache
+            .read()
+            .expect("database state machine kv_cache lock poisoned");
         cache.len()
     }
 
     fn snapshot(&self) -> Snapshot {
         // For database state machine, snapshot includes both KV cache and database state
-        let cache = self.kv_cache.read().expect("database state machine kv_cache lock poisoned");
-        let last_applied = *self.last_applied.read().expect("database state machine last_applied lock poisoned");
-        let version = *self.version.read().expect("database state machine version lock poisoned");
+        let cache = self
+            .kv_cache
+            .read()
+            .expect("database state machine kv_cache lock poisoned");
+        let last_applied = *self
+            .last_applied
+            .read()
+            .expect("database state machine last_applied lock poisoned");
+        let version = *self
+            .version
+            .read()
+            .expect("database state machine version lock poisoned");
 
         // Try to include database snapshot in the data
         let mut data = cache.clone();
@@ -707,9 +797,18 @@ impl<F: DatabaseOperationHandler> StateMachineBackend for DatabaseStateMachine<F
     }
 
     fn restore(&self, snapshot: Snapshot) {
-        let mut cache = self.kv_cache.write().expect("database state machine kv_cache lock poisoned");
-        let mut last_applied = self.last_applied.write().expect("database state machine last_applied lock poisoned");
-        let mut version = self.version.write().expect("database state machine version lock poisoned");
+        let mut cache = self
+            .kv_cache
+            .write()
+            .expect("database state machine kv_cache lock poisoned");
+        let mut last_applied = self
+            .last_applied
+            .write()
+            .expect("database state machine last_applied lock poisoned");
+        let mut version = self
+            .version
+            .write()
+            .expect("database state machine version lock poisoned");
 
         // Restore database state if present
         if let Some(db_snapshot) = snapshot.data.get("__db_snapshot__") {
@@ -717,7 +816,9 @@ impl<F: DatabaseOperationHandler> StateMachineBackend for DatabaseStateMachine<F
         }
 
         // Restore KV cache (excluding the special key)
-        *cache = snapshot.data.into_iter()
+        *cache = snapshot
+            .data
+            .into_iter()
             .filter(|(k, _)| k != "__db_snapshot__")
             .collect();
         *last_applied = snapshot.last_applied;
@@ -743,7 +844,12 @@ impl DatabaseOperationHandler for NoOpDatabaseHandler {
         Ok("doc-001".to_string())
     }
 
-    fn update_document(&self, _collection: &str, _doc_id: &str, _document: &[u8]) -> Result<(), String> {
+    fn update_document(
+        &self,
+        _collection: &str,
+        _doc_id: &str,
+        _document: &[u8],
+    ) -> Result<(), String> {
         Ok(())
     }
 
@@ -759,7 +865,13 @@ impl DatabaseOperationHandler for NoOpDatabaseHandler {
         Ok(())
     }
 
-    fn create_edge(&self, _edge_type: &str, _from_node: &str, _to_node: &str, _properties: &[u8]) -> Result<String, String> {
+    fn create_edge(
+        &self,
+        _edge_type: &str,
+        _from_node: &str,
+        _to_node: &str,
+        _properties: &[u8],
+    ) -> Result<String, String> {
         Ok("edge-001".to_string())
     }
 
@@ -909,7 +1021,10 @@ mod tests {
     fn test_sql_command() {
         let cmd = Command::sql("INSERT INTO users (name) VALUES ('test')");
         assert_eq!(cmd.command_type, CommandType::SqlExecute);
-        assert_eq!(cmd.sql_statement(), Some("INSERT INTO users (name) VALUES ('test')"));
+        assert_eq!(
+            cmd.sql_statement(),
+            Some("INSERT INTO users (name) VALUES ('test')")
+        );
         assert!(cmd.is_write());
     }
 
@@ -919,7 +1034,8 @@ mod tests {
         assert_eq!(insert.command_type, CommandType::DocumentInsert);
         assert_eq!(insert.key, "users");
 
-        let update = Command::document_update("users", "doc123", b"{\"name\": \"updated\"}".to_vec());
+        let update =
+            Command::document_update("users", "doc123", b"{\"name\": \"updated\"}".to_vec());
         assert_eq!(update.command_type, CommandType::DocumentUpdate);
         assert_eq!(update.metadata.get("doc_id"), Some(&"doc123".to_string()));
 
@@ -1017,7 +1133,8 @@ mod tests {
             value: Some(b"new".to_vec()),
             metadata: HashMap::new(),
         };
-        cmd.metadata.insert("expected".to_string(), "old".to_string());
+        cmd.metadata
+            .insert("expected".to_string(), "old".to_string());
 
         let result = sm.apply(&cmd, 2);
         assert!(result.success);
@@ -1025,7 +1142,8 @@ mod tests {
         assert_eq!(sm.get("key1"), Some(b"new".to_vec()));
 
         // CAS with wrong expected value
-        cmd.metadata.insert("expected".to_string(), "wrong".to_string());
+        cmd.metadata
+            .insert("expected".to_string(), "wrong".to_string());
         cmd.value = Some(b"newer".to_vec());
         let result = sm.apply(&cmd, 3);
         assert!(result.success);

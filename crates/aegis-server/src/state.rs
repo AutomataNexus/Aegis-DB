@@ -16,19 +16,21 @@ use crate::gdpr::GdprService;
 use crate::handlers::{MetricsDataPoint, ServerSettings};
 use crate::middleware::RateLimiter;
 use aegis_document::{Document, DocumentEngine};
-use aegis_query::{Executor, Parser, Planner, Statement};
-use aegis_query::planner::{PlanNode, PlannerSchema};
 use aegis_query::executor::{ExecutionContext, ExecutionContextSnapshot};
+use aegis_query::planner::{PlanNode, PlannerSchema};
+use aegis_query::{Executor, Parser, Planner, Statement};
+use aegis_shield::ShieldEngine;
 use aegis_streaming::StreamingEngine;
 use aegis_timeseries::TimeSeriesEngine;
 use aegis_updates::orchestrator::UpdateOrchestrator;
+use aegis_vault::AegisVault;
+use chrono::Utc;
+use parking_lot::RwLock as SyncRwLock;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::RwLock;
-use parking_lot::RwLock as SyncRwLock;
-use chrono::Utc;
 
 // =============================================================================
 // Application State
@@ -57,6 +59,8 @@ pub struct AppState {
     pub consent_manager: Arc<ConsentManager>,
     pub breach_detector: Arc<BreachDetector>,
     pub update_orchestrator: Arc<UpdateOrchestrator>,
+    pub vault: Arc<AegisVault>,
+    pub shield: Arc<ShieldEngine>,
     data_dir: Option<PathBuf>,
 }
 
@@ -102,18 +106,26 @@ impl AppState {
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if path.extension().is_some_and(|e| e == "json") {
-                            if let Some(collection_name) = path.file_stem().and_then(|s| s.to_str()) {
+                            if let Some(collection_name) = path.file_stem().and_then(|s| s.to_str())
+                            {
                                 if let Ok(data) = std::fs::read_to_string(&path) {
-                                    if let Ok(docs) = serde_json::from_str::<Vec<serde_json::Value>>(&data) {
+                                    if let Ok(docs) =
+                                        serde_json::from_str::<Vec<serde_json::Value>>(&data)
+                                    {
                                         let _ = document_engine.create_collection(collection_name);
                                         let mut count = 0;
                                         for doc_json in docs {
                                             let doc = json_to_document(doc_json);
-                                            if document_engine.insert(collection_name, doc).is_ok() {
+                                            if document_engine.insert(collection_name, doc).is_ok()
+                                            {
                                                 count += 1;
                                             }
                                         }
-                                        tracing::info!("Loaded {} documents into collection '{}'", count, collection_name);
+                                        tracing::info!(
+                                            "Loaded {} documents into collection '{}'",
+                                            count,
+                                            collection_name
+                                        );
                                     }
                                 }
                             }
@@ -124,8 +136,15 @@ impl AppState {
         }
 
         // Log server startup
-        let node_name_display = config.node_name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default();
-        activity.log_system(&format!("Aegis DB server started - Node: {}{}", config.node_id, node_name_display));
+        let node_name_display = config
+            .node_name
+            .as_ref()
+            .map(|n| format!(" ({})", n))
+            .unwrap_or_default();
+        activity.log_system(&format!(
+            "Aegis DB server started - Node: {}{}",
+            config.node_id, node_name_display
+        ));
 
         // Create graph store with persistence
         let graph_store = Arc::new(GraphStore::with_data_dir(data_dir.clone()));
@@ -174,8 +193,12 @@ impl AppState {
 
         // Initialize update orchestrator
         let update_orchestrator = {
-            let binary_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis-server"));
-            let base_dir = data_dir.as_ref().map(|d| d.clone()).unwrap_or_else(|| PathBuf::from("/tmp/aegis-updates"));
+            let binary_path =
+                std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis-server"));
+            let base_dir = data_dir
+                .as_ref()
+                .map(|d| d.clone())
+                .unwrap_or_else(|| PathBuf::from("/tmp/aegis-updates"));
             Arc::new(UpdateOrchestrator::new(
                 binary_path,
                 base_dir.join("staging"),
@@ -242,6 +265,10 @@ impl AppState {
             consent_manager: Arc::new(ConsentManager::with_data_dir(data_dir.clone())),
             breach_detector,
             update_orchestrator,
+            vault: Arc::new(AegisVault::new_auto(
+                data_dir.as_ref().map(|d| d.join("vault")),
+            )),
+            shield: Arc::new(ShieldEngine::new(aegis_shield::ShieldConfig::default())),
             data_dir,
         }
     }
@@ -275,10 +302,8 @@ impl AppState {
         }
         let query = aegis_document::Query::new();
         if let Ok(result) = self.document_engine.find(collection_name, &query) {
-            let docs: Vec<serde_json::Value> = result.documents
-                .iter()
-                .map(document_to_json)
-                .collect();
+            let docs: Vec<serde_json::Value> =
+                result.documents.iter().map(document_to_json).collect();
             let path = docs_dir.join(format!("{}.json", collection_name));
             match serde_json::to_string_pretty(&docs) {
                 Ok(json) => {
@@ -286,7 +311,11 @@ impl AppState {
                         tracing::error!("Failed to write collection '{}': {}", collection_name, e);
                     }
                 }
-                Err(e) => tracing::error!("Failed to serialize collection '{}': {}", collection_name, e),
+                Err(e) => tracing::error!(
+                    "Failed to serialize collection '{}': {}",
+                    collection_name,
+                    e
+                ),
             }
         }
     }
@@ -309,10 +338,8 @@ impl AppState {
         for collection_name in self.document_engine.list_collections() {
             let query = aegis_document::Query::new();
             if let Ok(result) = self.document_engine.find(&collection_name, &query) {
-                let docs: Vec<serde_json::Value> = result.documents
-                    .iter()
-                    .map(document_to_json)
-                    .collect();
+                let docs: Vec<serde_json::Value> =
+                    result.documents.iter().map(document_to_json).collect();
                 let json = serde_json::to_string(&docs)?;
                 let path = docs_dir.join(format!("{}.json", collection_name));
                 std::fs::write(&path, json)?;
@@ -336,7 +363,11 @@ impl AppState {
     }
 
     /// Execute a SQL query against the specified database.
-    pub async fn execute_query(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
+    pub async fn execute_query(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+    ) -> Result<QueryResult, QueryError> {
         let result = self.query_engine.execute(sql, database)?;
         let db_name = database.unwrap_or("default");
         // Replicate mutations to peers and emit CDC events
@@ -358,11 +389,17 @@ impl AppState {
             if upper.starts_with("INSERT") {
                 (ChangeType::Insert, extract_table_after(sql_trimmed, "INTO"))
             } else if upper.starts_with("UPDATE") {
-                (ChangeType::Update, extract_table_after(sql_trimmed, "UPDATE"))
+                (
+                    ChangeType::Update,
+                    extract_table_after(sql_trimmed, "UPDATE"),
+                )
             } else if upper.starts_with("DELETE") {
                 (ChangeType::Delete, extract_table_after(sql_trimmed, "FROM"))
             } else if upper.starts_with("TRUNCATE") {
-                (ChangeType::Truncate, extract_table_after(sql_trimmed, "TRUNCATE"))
+                (
+                    ChangeType::Truncate,
+                    extract_table_after(sql_trimmed, "TRUNCATE"),
+                )
             } else {
                 return; // DDL — skip CDC
             }
@@ -400,7 +437,11 @@ impl AppState {
     }
 
     /// Execute a query that was received via replication (skip re-replication).
-    pub async fn execute_query_replicated(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
+    pub async fn execute_query_replicated(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+    ) -> Result<QueryResult, QueryError> {
         self.query_engine.execute(sql, database)
     }
 
@@ -426,7 +467,7 @@ impl AppState {
 
     /// Background task to collect real system metrics periodically.
     async fn collect_metrics_loop(metrics_history: Arc<RwLock<VecDeque<MetricsDataPoint>>>) {
-        use sysinfo::{System, Networks};
+        use sysinfo::{Networks, System};
 
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
         let mut sys = System::new_all();
@@ -450,9 +491,12 @@ impl AppState {
             let now = Utc::now().timestamp();
 
             // Calculate CPU usage (average across all CPUs)
-            let cpu_percent = sys.cpus().iter()
+            let cpu_percent = sys
+                .cpus()
+                .iter()
                 .map(|cpu| cpu.cpu_usage() as f64)
-                .sum::<f64>() / sys.cpus().len().max(1) as f64;
+                .sum::<f64>()
+                / sys.cpus().len().max(1) as f64;
 
             // Calculate memory usage
             let memory_total = sys.total_memory();
@@ -505,7 +549,10 @@ impl AppState {
         // Metrics history starts empty and is populated by the background collection task
         // with real system metrics. No fake historical data is generated.
         let history = self.metrics_history.write().await;
-        tracing::info!("Metrics history initialized (currently {} data points)", history.len());
+        tracing::info!(
+            "Metrics history initialized (currently {} data points)",
+            history.len()
+        );
     }
 
     /// Get comprehensive database statistics.
@@ -515,7 +562,8 @@ impl AppState {
 
         // Count documents across all collections
         let collections = self.document_engine.list_collections();
-        let total_documents: usize = collections.iter()
+        let total_documents: usize = collections
+            .iter()
             .filter_map(|name| self.document_engine.collection_stats(name))
             .map(|stats| stats.document_count)
             .sum();
@@ -736,7 +784,11 @@ impl GraphStore {
             if graph_path.exists() {
                 if let Ok(data) = std::fs::read_to_string(&graph_path) {
                     if let Ok(snapshot) = serde_json::from_str::<GraphSnapshot>(&data) {
-                        tracing::info!("Loaded {} graph nodes and {} edges from disk", snapshot.nodes.len(), snapshot.edges.len());
+                        tracing::info!(
+                            "Loaded {} graph nodes and {} edges from disk",
+                            snapshot.nodes.len(),
+                            snapshot.edges.len()
+                        );
                         return Self {
                             nodes: SyncRwLock::new(snapshot.nodes),
                             edges: SyncRwLock::new(snapshot.edges),
@@ -783,7 +835,11 @@ impl GraphStore {
 
     /// Create a new node.
     pub fn create_node(&self, label: &str, properties: serde_json::Value) -> GraphNode {
-        let id = format!("{}:{}", label.to_lowercase(), self.node_counter.fetch_add(1, Ordering::SeqCst));
+        let id = format!(
+            "{}:{}",
+            label.to_lowercase(),
+            self.node_counter.fetch_add(1, Ordering::SeqCst)
+        );
         let node = GraphNode {
             id: id.clone(),
             label: label.to_string(),
@@ -795,7 +851,12 @@ impl GraphStore {
     }
 
     /// Create a new edge between nodes.
-    pub fn create_edge(&self, source: &str, target: &str, relationship: &str) -> Result<GraphEdge, String> {
+    pub fn create_edge(
+        &self,
+        source: &str,
+        target: &str,
+        relationship: &str,
+    ) -> Result<GraphEdge, String> {
         let nodes = self.nodes.read();
         if !nodes.contains_key(source) {
             return Err(format!("Source node '{}' not found", source));
@@ -866,7 +927,8 @@ impl GraphStore {
 
     /// Search nodes by label.
     pub fn find_by_label(&self, label: &str) -> Vec<GraphNode> {
-        self.nodes.read()
+        self.nodes
+            .read()
             .values()
             .filter(|n| n.label.to_lowercase() == label.to_lowercase())
             .cloned()
@@ -875,7 +937,8 @@ impl GraphStore {
 
     /// Get edges for a node.
     pub fn get_edges_for_node(&self, node_id: &str) -> Vec<GraphEdge> {
-        self.edges.read()
+        self.edges
+            .read()
             .values()
             .filter(|e| e.source == node_id || e.target == node_id)
             .cloned()
@@ -916,7 +979,10 @@ impl QueryEngine {
         let schema = Arc::new(PlannerSchema::new());
         let mut contexts = HashMap::new();
         // Create default database
-        contexts.insert("default".to_string(), Arc::new(std::sync::RwLock::new(ExecutionContext::new())));
+        contexts.insert(
+            "default".to_string(),
+            Arc::new(std::sync::RwLock::new(ExecutionContext::new())),
+        );
         Self {
             parser: Parser::new(),
             planner: Planner::new(schema),
@@ -949,10 +1015,18 @@ impl QueryEngine {
                         match ExecutionContext::load_from_file(&path) {
                             Ok(ctx) => {
                                 tracing::info!("Loaded database '{}' from {:?}", db_name, path);
-                                contexts.insert(db_name.to_string(), Arc::new(std::sync::RwLock::new(ctx)));
+                                contexts.insert(
+                                    db_name.to_string(),
+                                    Arc::new(std::sync::RwLock::new(ctx)),
+                                );
                             }
                             Err(e) => {
-                                tracing::warn!("Failed to load database '{}' from {:?}: {}", db_name, path, e);
+                                tracing::warn!(
+                                    "Failed to load database '{}' from {:?}: {}",
+                                    db_name,
+                                    path,
+                                    e
+                                );
                             }
                         }
                     }
@@ -962,7 +1036,10 @@ impl QueryEngine {
 
         // Ensure default database exists
         if !contexts.contains_key("default") {
-            contexts.insert("default".to_string(), Arc::new(std::sync::RwLock::new(ExecutionContext::new())));
+            contexts.insert(
+                "default".to_string(),
+                Arc::new(std::sync::RwLock::new(ExecutionContext::new())),
+            );
         }
 
         // Initialize WAL with crash recovery — replay any committed records
@@ -1030,7 +1107,10 @@ impl QueryEngine {
                 let mut success = false;
                 for attempt in 0..3u32 {
                     if attempt > 0 {
-                        tokio::time::sleep(std::time::Duration::from_millis(100 * 2u64.pow(attempt))).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            100 * 2u64.pow(attempt),
+                        ))
+                        .await;
                     }
                     let resp = client
                         .post(&url)
@@ -1041,15 +1121,29 @@ impl QueryEngine {
 
                     match resp {
                         Ok(r) if r.status().is_success() => {
-                            tracing::debug!("Replicated to {}: {}", peer, &sql[..sql.len().min(80)]);
+                            tracing::debug!(
+                                "Replicated to {}: {}",
+                                peer,
+                                &sql[..sql.len().min(80)]
+                            );
                             success = true;
                             break;
                         }
                         Ok(r) => {
-                            tracing::warn!("Replication to {} returned {} (attempt {})", peer, r.status(), attempt + 1);
+                            tracing::warn!(
+                                "Replication to {} returned {} (attempt {})",
+                                peer,
+                                r.status(),
+                                attempt + 1
+                            );
                         }
                         Err(e) => {
-                            tracing::warn!("Replication to {} failed: {} (attempt {})", peer, e, attempt + 1);
+                            tracing::warn!(
+                                "Replication to {} failed: {} (attempt {})",
+                                peer,
+                                e,
+                                attempt + 1
+                            );
                         }
                     }
                 }
@@ -1079,7 +1173,9 @@ impl QueryEngine {
         }
 
         // Plan and cache
-        let plan = self.planner.plan(stmt)
+        let plan = self
+            .planner
+            .plan(stmt)
             .map_err(|e| QueryError::Plan(e.to_string()))?;
 
         if let Some(key) = cache_key {
@@ -1097,7 +1193,11 @@ impl QueryEngine {
 
     /// Get or create an ExecutionContext for the specified database.
     fn get_or_create_context(&self, database: &str) -> Arc<std::sync::RwLock<ExecutionContext>> {
-        let db_name = if database.is_empty() { "default" } else { database };
+        let db_name = if database.is_empty() {
+            "default"
+        } else {
+            database
+        };
 
         // Try to get existing context
         {
@@ -1123,13 +1223,17 @@ impl QueryEngine {
     /// Persist a specific database to disk.
     fn persist(&self, database: &str) {
         if let Some(ref base_path) = self.data_path {
-            let db_name = if database.is_empty() { "default" } else { database };
+            let db_name = if database.is_empty() {
+                "default"
+            } else {
+                database
+            };
             let path = base_path.join(format!("{}.json", db_name));
 
             // Write to WAL before persisting snapshot (write-ahead guarantee)
             if let Some(ref wal) = self.wal {
-                use aegis_storage::wal::{LogRecord, LogRecordType};
                 use aegis_common::{Lsn, TransactionId};
+                use aegis_storage::wal::{LogRecord, LogRecordType};
 
                 let lsn = wal.next_lsn();
                 let record = LogRecord {
@@ -1149,7 +1253,12 @@ impl QueryEngine {
             if let Some(ctx) = contexts.get(db_name) {
                 if let Ok(ctx_guard) = ctx.read() {
                     if let Err(e) = ctx_guard.save_to_file(&path) {
-                        tracing::error!("Failed to persist database '{}' to {:?}: {}", db_name, path, e);
+                        tracing::error!(
+                            "Failed to persist database '{}' to {:?}: {}",
+                            db_name,
+                            path,
+                            e
+                        );
                     }
                 }
             }
@@ -1159,13 +1268,13 @@ impl QueryEngine {
     /// Check if a SQL statement is a mutation (DDL/DML that modifies data).
     pub fn is_mutation(sql: &str) -> bool {
         let sql_upper = sql.trim().to_uppercase();
-        sql_upper.starts_with("CREATE") ||
-        sql_upper.starts_with("DROP") ||
-        sql_upper.starts_with("ALTER") ||
-        sql_upper.starts_with("INSERT") ||
-        sql_upper.starts_with("UPDATE") ||
-        sql_upper.starts_with("DELETE") ||
-        sql_upper.starts_with("TRUNCATE")
+        sql_upper.starts_with("CREATE")
+            || sql_upper.starts_with("DROP")
+            || sql_upper.starts_with("ALTER")
+            || sql_upper.starts_with("INSERT")
+            || sql_upper.starts_with("UPDATE")
+            || sql_upper.starts_with("DELETE")
+            || sql_upper.starts_with("TRUNCATE")
     }
 
     /// Check if a parsed statement is a mutation (DDL/DML).
@@ -1210,7 +1319,9 @@ impl QueryEngine {
     pub fn execute(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
         let db_name = database.unwrap_or("default");
 
-        let statements = self.parser.parse(sql)
+        let statements = self
+            .parser
+            .parse(sql)
             .map_err(|e| QueryError::Parse(e.to_string()))?;
 
         if statements.is_empty() {
@@ -1242,7 +1353,8 @@ impl QueryEngine {
                         return Err(QueryError::Execute("Already in a transaction".to_string()));
                     }
                     // Snapshot current state for rollback + MVCC snapshot isolation
-                    let mut ctx = context.write()
+                    let mut ctx = context
+                        .write()
                         .map_err(|_| QueryError::Execute("Lock poisoned".to_string()))?;
                     txn_snapshot = Some(ctx.to_snapshot());
                     ctx.begin_snapshot();
@@ -1256,11 +1368,14 @@ impl QueryEngine {
                 }
                 PlanNode::CommitTransaction => {
                     if !in_transaction {
-                        return Err(QueryError::Execute("No transaction in progress".to_string()));
+                        return Err(QueryError::Execute(
+                            "No transaction in progress".to_string(),
+                        ));
                     }
                     // Commit: release MVCC snapshot, advance version, discard rollback snapshot, persist
                     {
-                        let mut ctx = context.write()
+                        let mut ctx = context
+                            .write()
                             .map_err(|_| QueryError::Execute("Lock poisoned".to_string()))?;
                         ctx.commit_snapshot();
                     }
@@ -1278,11 +1393,14 @@ impl QueryEngine {
                 }
                 PlanNode::RollbackTransaction => {
                     if !in_transaction {
-                        return Err(QueryError::Execute("No transaction in progress".to_string()));
+                        return Err(QueryError::Execute(
+                            "No transaction in progress".to_string(),
+                        ));
                     }
                     // Rollback: restore snapshot and release MVCC snapshot
                     if let Some(snapshot) = txn_snapshot.take() {
-                        let mut ctx = context.write()
+                        let mut ctx = context
+                            .write()
                             .map_err(|_| QueryError::Execute("Lock poisoned".to_string()))?;
                         ctx.restore_from_snapshot(snapshot);
                         ctx.rollback_snapshot();
@@ -1322,9 +1440,11 @@ impl QueryEngine {
 
                     last_result = QueryResult {
                         columns: result.columns,
-                        rows: result.rows.into_iter().map(|r| {
-                            r.values.into_iter().map(value_to_json).collect()
-                        }).collect(),
+                        rows: result
+                            .rows
+                            .into_iter()
+                            .map(|r| r.values.into_iter().map(value_to_json).collect())
+                            .collect(),
                         rows_affected: result.rows_affected,
                     };
 
@@ -1345,7 +1465,7 @@ impl QueryEngine {
                 }
             }
             return Err(QueryError::Execute(
-                "Transaction was not committed (missing COMMIT). Changes rolled back.".to_string()
+                "Transaction was not committed (missing COMMIT). Changes rolled back.".to_string(),
             ));
         }
 
@@ -1367,23 +1487,32 @@ impl QueryEngine {
 
         let db_name = database.unwrap_or("default");
 
-        let statements = self.parser.parse(sql)
+        let statements = self
+            .parser
+            .parse(sql)
             .map_err(|e| QueryError::Parse(e.to_string()))?;
 
         if statements.is_empty() {
-            return Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 0 });
+            return Ok(QueryResult {
+                columns: vec![],
+                rows: vec![],
+                rows_affected: 0,
+            });
         }
 
         // Convert JSON params to aegis Values
         let values: Vec<aegis_common::Value> = params.iter().map(json_param_to_value).collect();
 
         let statement = &statements[0];
-        let plan = self.planner.plan(statement)
+        let plan = self
+            .planner
+            .plan(statement)
             .map_err(|e| QueryError::Plan(e.to_string()))?;
 
         let context = self.get_or_create_context(db_name);
         let executor = Executor::with_shared_context(context);
-        let result = executor.execute_with_params(&plan, &values)
+        let result = executor
+            .execute_with_params(&plan, &values)
             .map_err(|e| QueryError::Execute(e.to_string()))?;
 
         if Self::is_mutation(sql) {
@@ -1392,9 +1521,11 @@ impl QueryEngine {
 
         Ok(QueryResult {
             columns: result.columns,
-            rows: result.rows.into_iter().map(|r| {
-                r.values.into_iter().map(value_to_json).collect()
-            }).collect(),
+            rows: result
+                .rows
+                .into_iter()
+                .map(|r| r.values.into_iter().map(value_to_json).collect())
+                .collect(),
             rows_affected: result.rows_affected,
         })
     }
@@ -1402,7 +1533,8 @@ impl QueryEngine {
     pub fn list_tables(&self, database: Option<&str>) -> Vec<String> {
         let db_name = database.unwrap_or("default");
         let contexts = self.contexts.read().unwrap();
-        contexts.get(db_name)
+        contexts
+            .get(db_name)
             .and_then(|ctx| ctx.read().ok())
             .map(|ctx| ctx.list_tables())
             .unwrap_or_default()
@@ -1410,7 +1542,8 @@ impl QueryEngine {
 
     /// List all databases.
     pub fn list_databases(&self) -> Vec<String> {
-        self.contexts.read()
+        self.contexts
+            .read()
             .map(|contexts| contexts.keys().cloned().collect())
             .unwrap_or_default()
     }
@@ -1427,11 +1560,15 @@ impl QueryEngine {
 
         Some(TableInfo {
             name: schema.name.clone(),
-            columns: schema.columns.iter().map(|c| ColumnInfo {
-                name: c.name.clone(),
-                data_type: format!("{:?}", c.data_type),
-                nullable: c.nullable,
-            }).collect(),
+            columns: schema
+                .columns
+                .iter()
+                .map(|c| ColumnInfo {
+                    name: c.name.clone(),
+                    data_type: format!("{:?}", c.data_type),
+                    nullable: c.nullable,
+                })
+                .collect(),
             row_count,
         })
     }
@@ -1444,7 +1581,12 @@ impl QueryEngine {
                 let path = base_path.join(format!("{}.json", db_name));
                 if let Ok(ctx_guard) = ctx.read() {
                     if let Err(e) = ctx_guard.save_to_file(&path) {
-                        tracing::error!("Failed to persist database '{}' to {:?}: {}", db_name, path, e);
+                        tracing::error!(
+                            "Failed to persist database '{}' to {:?}: {}",
+                            db_name,
+                            path,
+                            e
+                        );
                     }
                 }
             }
@@ -1511,7 +1653,8 @@ fn extract_table_after(sql: &str, keyword: &str) -> String {
     let upper = sql.to_uppercase();
     if let Some(pos) = upper.find(keyword) {
         let after = &sql[pos + keyword.len()..].trim_start();
-        after.split(|c: char| c.is_whitespace() || c == '(')
+        after
+            .split(|c: char| c.is_whitespace() || c == '(')
             .next()
             .unwrap_or("unknown")
             .to_string()
@@ -1525,18 +1668,12 @@ fn value_to_json(value: aegis_common::Value) -> serde_json::Value {
         aegis_common::Value::Null => serde_json::Value::Null,
         aegis_common::Value::Boolean(b) => serde_json::Value::Bool(b),
         aegis_common::Value::Integer(i) => serde_json::Value::Number(i.into()),
-        aegis_common::Value::Float(f) => {
-            serde_json::Number::from_f64(f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        aegis_common::Value::Float(f) => serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         aegis_common::Value::String(s) => serde_json::Value::String(s),
-        aegis_common::Value::Bytes(b) => {
-            serde_json::Value::String(base64_encode(&b))
-        }
-        aegis_common::Value::Timestamp(t) => {
-            serde_json::Value::String(t.to_rfc3339())
-        }
+        aegis_common::Value::Bytes(b) => serde_json::Value::String(base64_encode(&b)),
+        aegis_common::Value::Timestamp(t) => serde_json::Value::String(t.to_rfc3339()),
         aegis_common::Value::Array(arr) => {
             serde_json::Value::Array(arr.into_iter().map(value_to_json).collect())
         }
@@ -1652,7 +1789,10 @@ fn json_to_document(json: serde_json::Value) -> Document {
 /// Convert Document to JSON for saving to disk.
 fn document_to_json(doc: &Document) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    map.insert("_id".to_string(), serde_json::Value::String(doc.id.to_string()));
+    map.insert(
+        "_id".to_string(),
+        serde_json::Value::String(doc.id.to_string()),
+    );
     for (key, value) in &doc.data {
         map.insert(key.clone(), doc_value_to_json(value));
     }
@@ -1677,11 +1817,11 @@ fn json_to_doc_value(json: serde_json::Value) -> aegis_document::Value {
         serde_json::Value::Array(arr) => {
             aegis_document::Value::Array(arr.into_iter().map(json_to_doc_value).collect())
         }
-        serde_json::Value::Object(map) => {
-            aegis_document::Value::Object(
-                map.into_iter().map(|(k, v)| (k, json_to_doc_value(v))).collect()
-            )
-        }
+        serde_json::Value::Object(map) => aegis_document::Value::Object(
+            map.into_iter()
+                .map(|(k, v)| (k, json_to_doc_value(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -1691,11 +1831,9 @@ fn doc_value_to_json(value: &aegis_document::Value) -> serde_json::Value {
         aegis_document::Value::Null => serde_json::Value::Null,
         aegis_document::Value::Bool(b) => serde_json::Value::Bool(*b),
         aegis_document::Value::Int(i) => serde_json::Value::Number((*i).into()),
-        aegis_document::Value::Float(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        aegis_document::Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         aegis_document::Value::String(s) => serde_json::Value::String(s.clone()),
         aegis_document::Value::Array(arr) => {
             serde_json::Value::Array(arr.iter().map(doc_value_to_json).collect())
@@ -1763,14 +1901,19 @@ mod tests {
     #[test]
     fn test_transaction_commit() {
         let engine = QueryEngine::new();
-        engine.execute("CREATE TABLE txn_test (id INT, name VARCHAR(50))", None).unwrap();
+        engine
+            .execute("CREATE TABLE txn_test (id INT, name VARCHAR(50))", None)
+            .unwrap();
 
         // Multi-statement transaction with COMMIT
         let result = engine.execute(
             "BEGIN; INSERT INTO txn_test VALUES (1, 'Alice'); INSERT INTO txn_test VALUES (2, 'Bob'); COMMIT",
             None,
         ).unwrap();
-        assert_eq!(result.rows[0][0], serde_json::Value::String("COMMIT".to_string()));
+        assert_eq!(
+            result.rows[0][0],
+            serde_json::Value::String("COMMIT".to_string())
+        );
 
         // Data should be visible after commit
         let select = engine.execute("SELECT * FROM txn_test", None).unwrap();
@@ -1780,15 +1923,22 @@ mod tests {
     #[test]
     fn test_transaction_rollback() {
         let engine = QueryEngine::new();
-        engine.execute("CREATE TABLE txn_rb (id INT, name VARCHAR(50))", None).unwrap();
-        engine.execute("INSERT INTO txn_rb VALUES (1, 'Original')", None).unwrap();
+        engine
+            .execute("CREATE TABLE txn_rb (id INT, name VARCHAR(50))", None)
+            .unwrap();
+        engine
+            .execute("INSERT INTO txn_rb VALUES (1, 'Original')", None)
+            .unwrap();
 
         // Transaction with ROLLBACK — inserts should be undone
         let result = engine.execute(
             "BEGIN; INSERT INTO txn_rb VALUES (2, 'Should vanish'); INSERT INTO txn_rb VALUES (3, 'Also gone'); ROLLBACK",
             None,
         ).unwrap();
-        assert_eq!(result.rows[0][0], serde_json::Value::String("ROLLBACK".to_string()));
+        assert_eq!(
+            result.rows[0][0],
+            serde_json::Value::String("ROLLBACK".to_string())
+        );
 
         // Only the original row should remain
         let select = engine.execute("SELECT * FROM txn_rb", None).unwrap();
@@ -1798,14 +1948,15 @@ mod tests {
     #[test]
     fn test_transaction_auto_rollback_on_missing_commit() {
         let engine = QueryEngine::new();
-        engine.execute("CREATE TABLE txn_nocommit (id INT)", None).unwrap();
-        engine.execute("INSERT INTO txn_nocommit VALUES (1)", None).unwrap();
+        engine
+            .execute("CREATE TABLE txn_nocommit (id INT)", None)
+            .unwrap();
+        engine
+            .execute("INSERT INTO txn_nocommit VALUES (1)", None)
+            .unwrap();
 
         // BEGIN without COMMIT should error and auto-rollback
-        let result = engine.execute(
-            "BEGIN; INSERT INTO txn_nocommit VALUES (2)",
-            None,
-        );
+        let result = engine.execute("BEGIN; INSERT INTO txn_nocommit VALUES (2)", None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not committed"));
 
@@ -1817,8 +1968,12 @@ mod tests {
     #[test]
     fn test_transaction_auto_rollback_on_error() {
         let engine = QueryEngine::new();
-        engine.execute("CREATE TABLE txn_err (id INT, name VARCHAR(50))", None).unwrap();
-        engine.execute("INSERT INTO txn_err VALUES (1, 'Keep')", None).unwrap();
+        engine
+            .execute("CREATE TABLE txn_err (id INT, name VARCHAR(50))", None)
+            .unwrap();
+        engine
+            .execute("INSERT INTO txn_err VALUES (1, 'Keep')", None)
+            .unwrap();
 
         // Transaction with an error mid-way — should auto-rollback
         let result = engine.execute(
@@ -1835,9 +1990,15 @@ mod tests {
     #[test]
     fn test_single_statement_still_works() {
         let engine = QueryEngine::new();
-        engine.execute("CREATE TABLE single (id INT)", None).unwrap();
-        engine.execute("INSERT INTO single VALUES (1)", None).unwrap();
-        engine.execute("INSERT INTO single VALUES (2)", None).unwrap();
+        engine
+            .execute("CREATE TABLE single (id INT)", None)
+            .unwrap();
+        engine
+            .execute("INSERT INTO single VALUES (1)", None)
+            .unwrap();
+        engine
+            .execute("INSERT INTO single VALUES (2)", None)
+            .unwrap();
 
         let select = engine.execute("SELECT * FROM single", None).unwrap();
         assert_eq!(select.rows.len(), 2);
@@ -1846,58 +2007,94 @@ mod tests {
     #[test]
     fn test_parameterized_insert() {
         let engine = QueryEngine::new();
-        engine.execute("CREATE TABLE param_test (id INT, name VARCHAR(50))", None).unwrap();
+        engine
+            .execute("CREATE TABLE param_test (id INT, name VARCHAR(50))", None)
+            .unwrap();
 
         // Insert with $1, $2 placeholders
-        engine.execute_with_params(
-            "INSERT INTO param_test VALUES ($1, $2)",
-            None,
-            &[serde_json::json!(1), serde_json::json!("Alice")],
-        ).unwrap();
+        engine
+            .execute_with_params(
+                "INSERT INTO param_test VALUES ($1, $2)",
+                None,
+                &[serde_json::json!(1), serde_json::json!("Alice")],
+            )
+            .unwrap();
 
-        engine.execute_with_params(
-            "INSERT INTO param_test VALUES ($1, $2)",
-            None,
-            &[serde_json::json!(2), serde_json::json!("Bob")],
-        ).unwrap();
+        engine
+            .execute_with_params(
+                "INSERT INTO param_test VALUES ($1, $2)",
+                None,
+                &[serde_json::json!(2), serde_json::json!("Bob")],
+            )
+            .unwrap();
 
         let select = engine.execute("SELECT * FROM param_test", None).unwrap();
         assert_eq!(select.rows.len(), 2);
-        assert_eq!(select.rows[0][1], serde_json::Value::String("Alice".to_string()));
-        assert_eq!(select.rows[1][1], serde_json::Value::String("Bob".to_string()));
+        assert_eq!(
+            select.rows[0][1],
+            serde_json::Value::String("Alice".to_string())
+        );
+        assert_eq!(
+            select.rows[1][1],
+            serde_json::Value::String("Bob".to_string())
+        );
     }
 
     #[test]
     fn test_parameterized_select() {
         let engine = QueryEngine::new();
-        engine.execute("CREATE TABLE param_sel (id INT, name VARCHAR(50))", None).unwrap();
-        engine.execute("INSERT INTO param_sel VALUES (1, 'Alice')", None).unwrap();
-        engine.execute("INSERT INTO param_sel VALUES (2, 'Bob')", None).unwrap();
-        engine.execute("INSERT INTO param_sel VALUES (3, 'Charlie')", None).unwrap();
+        engine
+            .execute("CREATE TABLE param_sel (id INT, name VARCHAR(50))", None)
+            .unwrap();
+        engine
+            .execute("INSERT INTO param_sel VALUES (1, 'Alice')", None)
+            .unwrap();
+        engine
+            .execute("INSERT INTO param_sel VALUES (2, 'Bob')", None)
+            .unwrap();
+        engine
+            .execute("INSERT INTO param_sel VALUES (3, 'Charlie')", None)
+            .unwrap();
 
         // SELECT with parameterized WHERE
-        let result = engine.execute_with_params(
-            "SELECT * FROM param_sel WHERE id = $1",
-            None,
-            &[serde_json::json!(2)],
-        ).unwrap();
+        let result = engine
+            .execute_with_params(
+                "SELECT * FROM param_sel WHERE id = $1",
+                None,
+                &[serde_json::json!(2)],
+            )
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0][1], serde_json::Value::String("Bob".to_string()));
+        assert_eq!(
+            result.rows[0][1],
+            serde_json::Value::String("Bob".to_string())
+        );
     }
 
     #[test]
     fn test_parameterized_update() {
         let engine = QueryEngine::new();
-        engine.execute("CREATE TABLE param_upd (id INT, name VARCHAR(50))", None).unwrap();
-        engine.execute("INSERT INTO param_upd VALUES (1, 'Alice')", None).unwrap();
+        engine
+            .execute("CREATE TABLE param_upd (id INT, name VARCHAR(50))", None)
+            .unwrap();
+        engine
+            .execute("INSERT INTO param_upd VALUES (1, 'Alice')", None)
+            .unwrap();
 
-        engine.execute_with_params(
-            "UPDATE param_upd SET name = $1 WHERE id = $2",
-            None,
-            &[serde_json::json!("Alicia"), serde_json::json!(1)],
-        ).unwrap();
+        engine
+            .execute_with_params(
+                "UPDATE param_upd SET name = $1 WHERE id = $2",
+                None,
+                &[serde_json::json!("Alicia"), serde_json::json!(1)],
+            )
+            .unwrap();
 
-        let result = engine.execute("SELECT * FROM param_upd WHERE id = 1", None).unwrap();
-        assert_eq!(result.rows[0][1], serde_json::Value::String("Alicia".to_string()));
+        let result = engine
+            .execute("SELECT * FROM param_upd WHERE id = 1", None)
+            .unwrap();
+        assert_eq!(
+            result.rows[0][1],
+            serde_json::Value::String("Alicia".to_string())
+        );
     }
 }

@@ -1,14 +1,15 @@
 //! Aegis Memory - Memory Management System
 //!
-//! High-performance memory allocation and management for the Aegis database.
-//! Provides arena allocators, memory pools, and resource tracking for
-//! efficient memory utilization.
+//! High-performance memory allocation for the Aegis database.
+//! Provides arena allocators for efficient, bump-pointer memory allocation
+//! during query execution and temporary data processing.
 //!
 //! Key Features:
-//! - Arena-based memory allocation for query execution
-//! - Memory pool management for fixed-size allocations
-//! - Resource tracking and memory pressure monitoring
-//! - Zero-copy buffer management
+//! - Arena-based bump allocation with configurable chunk sizes
+//! - Thread-safe via interior mutability (Mutex-protected)
+//! - Typed allocation (values and slices) with proper alignment
+//! - Memory usage tracking (total allocated and used bytes)
+//! - Overflow-safe size calculations
 //!
 //! @version 0.1.0
 //! @author AutomataNexus Development Team

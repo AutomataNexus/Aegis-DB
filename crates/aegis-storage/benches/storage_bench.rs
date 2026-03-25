@@ -6,13 +6,13 @@
 //! @version 0.1.1
 //! @author AutomataNexus Development Team
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput, BenchmarkId};
+use aegis_common::{BlockId, BlockType, PageId};
 use aegis_storage::backend::MemoryBackend;
-use aegis_storage::{StorageBackend, Block};
 use aegis_storage::buffer::{BufferPool, BufferPoolConfig};
 use aegis_storage::page::PageType;
-use aegis_common::{BlockId, BlockType, PageId};
+use aegis_storage::{Block, StorageBackend};
 use bytes::Bytes;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use tokio::runtime::Runtime;
 
 fn memory_backend_write_benchmark(c: &mut Criterion) {
@@ -79,26 +79,30 @@ fn buffer_pool_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("buffer_pool");
 
     for pool_size in [16, 64, 256, 1024].iter() {
-        group.bench_with_input(BenchmarkId::from_parameter(pool_size), pool_size, |b, &pool_size| {
-            let config = BufferPoolConfig {
-                pool_size,
-                prefetch_size: 8,
-            };
-            let pool = BufferPool::new(config);
+        group.bench_with_input(
+            BenchmarkId::from_parameter(pool_size),
+            pool_size,
+            |b, &pool_size| {
+                let config = BufferPoolConfig {
+                    pool_size,
+                    prefetch_size: 8,
+                };
+                let pool = BufferPool::new(config);
 
-            // Pre-populate pool
-            for i in 0..(pool_size / 2) {
-                let _ = pool.new_page(PageId(i as u64), PageType::Data);
-            }
+                // Pre-populate pool
+                for i in 0..(pool_size / 2) {
+                    let _ = pool.new_page(PageId(i as u64), PageType::Data);
+                }
 
-            let mut idx = 0u64;
-            b.iter(|| {
-                let page_id = PageId(idx % (pool_size as u64 / 2));
-                idx += 1;
-                let result = pool.fetch_page(page_id);
-                black_box(result)
-            });
-        });
+                let mut idx = 0u64;
+                b.iter(|| {
+                    let page_id = PageId(idx % (pool_size as u64 / 2));
+                    idx += 1;
+                    let result = pool.fetch_page(page_id);
+                    black_box(result)
+                });
+            },
+        );
     }
 
     group.finish();

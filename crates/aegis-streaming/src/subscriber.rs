@@ -8,7 +8,7 @@
 use crate::channel::ChannelId;
 use crate::event::EventFilter;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // =============================================================================
@@ -245,8 +245,7 @@ impl Subscriber {
 
     /// Check if the subscriber is active.
     pub fn is_active(&self) -> bool {
-        !self.subscriptions.is_empty()
-            && self.subscriptions.iter().any(|s| s.active)
+        !self.subscriptions.is_empty() && self.subscriptions.iter().any(|s| s.active)
     }
 }
 
@@ -255,6 +254,76 @@ fn current_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+// =============================================================================
+// Consumer Group
+// =============================================================================
+
+/// A consumer group that coordinates message consumption across multiple subscribers.
+///
+/// Each member is assigned a set of channels, and the group tracks committed offsets
+/// per channel so that consumers can resume from where they left off.
+#[derive(Debug, Clone)]
+pub struct ConsumerGroup {
+    /// Unique identifier for this consumer group.
+    pub group_id: String,
+    /// Map of subscriber_id -> set of assigned channel names.
+    pub members: HashMap<SubscriberId, HashSet<String>>,
+    /// Map of channel_name -> committed offset.
+    pub committed_offsets: HashMap<String, u64>,
+    /// Timestamp when the group was created.
+    pub created_at: u64,
+}
+
+impl ConsumerGroup {
+    /// Create a new consumer group with the given ID.
+    pub fn new(group_id: impl Into<String>) -> Self {
+        Self {
+            group_id: group_id.into(),
+            members: HashMap::new(),
+            committed_offsets: HashMap::new(),
+            created_at: current_timestamp(),
+        }
+    }
+
+    /// Add a member to the consumer group with an initial set of assigned channels.
+    pub fn add_member(&mut self, subscriber_id: SubscriberId, channels: HashSet<String>) {
+        self.members.insert(subscriber_id, channels);
+    }
+
+    /// Remove a member from the consumer group. Returns the channels that were assigned
+    /// to the removed member, or None if the member was not found.
+    pub fn remove_member(&mut self, subscriber_id: &SubscriberId) -> Option<HashSet<String>> {
+        self.members.remove(subscriber_id)
+    }
+
+    /// Commit an offset for a channel. This records the position up to which
+    /// messages have been successfully processed.
+    pub fn commit_offset(&mut self, channel_name: impl Into<String>, offset: u64) {
+        self.committed_offsets.insert(channel_name.into(), offset);
+    }
+
+    /// Get the committed offset for a channel. Returns None if no offset
+    /// has been committed for that channel.
+    pub fn get_offset(&self, channel_name: &str) -> Option<u64> {
+        self.committed_offsets.get(channel_name).copied()
+    }
+
+    /// Get the number of members in the group.
+    pub fn member_count(&self) -> usize {
+        self.members.len()
+    }
+
+    /// Check if a subscriber is a member of this group.
+    pub fn is_member(&self, subscriber_id: &SubscriberId) -> bool {
+        self.members.contains_key(subscriber_id)
+    }
+
+    /// Get the channels assigned to a specific member.
+    pub fn get_member_channels(&self, subscriber_id: &SubscriberId) -> Option<&HashSet<String>> {
+        self.members.get(subscriber_id)
+    }
 }
 
 // =============================================================================
@@ -312,5 +381,69 @@ mod tests {
 
         assert_eq!(metadata.name, Some("Test Subscription".to_string()));
         assert_eq!(metadata.delivery_mode, DeliveryMode::ExactlyOnce);
+    }
+
+    #[test]
+    fn test_consumer_group_creation() {
+        let group = ConsumerGroup::new("group1");
+        assert_eq!(group.group_id, "group1");
+        assert_eq!(group.member_count(), 0);
+        assert!(group.committed_offsets.is_empty());
+        assert!(group.created_at > 0);
+    }
+
+    #[test]
+    fn test_consumer_group_add_remove_members() {
+        let mut group = ConsumerGroup::new("group1");
+
+        let sub1 = SubscriberId::new("sub1");
+        let sub2 = SubscriberId::new("sub2");
+
+        let mut channels1 = HashSet::new();
+        channels1.insert("events".to_string());
+        channels1.insert("logs".to_string());
+
+        let mut channels2 = HashSet::new();
+        channels2.insert("metrics".to_string());
+
+        group.add_member(sub1.clone(), channels1);
+        group.add_member(sub2.clone(), channels2);
+
+        assert_eq!(group.member_count(), 2);
+        assert!(group.is_member(&sub1));
+        assert!(group.is_member(&sub2));
+
+        let member_channels = group.get_member_channels(&sub1).unwrap();
+        assert!(member_channels.contains("events"));
+        assert!(member_channels.contains("logs"));
+
+        let removed = group.remove_member(&sub1);
+        assert!(removed.is_some());
+        assert_eq!(group.member_count(), 1);
+        assert!(!group.is_member(&sub1));
+
+        // Removing a non-existent member returns None
+        let removed = group.remove_member(&SubscriberId::new("nonexistent"));
+        assert!(removed.is_none());
+    }
+
+    #[test]
+    fn test_consumer_group_offset_tracking() {
+        let mut group = ConsumerGroup::new("group1");
+
+        // No offset committed yet
+        assert_eq!(group.get_offset("events"), None);
+
+        group.commit_offset("events", 42);
+        assert_eq!(group.get_offset("events"), Some(42));
+
+        // Update offset
+        group.commit_offset("events", 100);
+        assert_eq!(group.get_offset("events"), Some(100));
+
+        // Different channel
+        group.commit_offset("logs", 5);
+        assert_eq!(group.get_offset("logs"), Some(5));
+        assert_eq!(group.get_offset("events"), Some(100));
     }
 }

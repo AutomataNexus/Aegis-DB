@@ -15,15 +15,15 @@ Monitoring and observability for the Aegis Database Platform.
 
 ## Overview
 
-`aegis-monitoring` provides comprehensive observability including metrics collection, distributed tracing, health checks, and alerting. It integrates with Prometheus, Grafana, and OpenTelemetry.
+`aegis-monitoring` provides observability including metrics collection, distributed tracing, and health checks. It exports metrics in Prometheus format.
 
 ## Features
 
-- **Metrics Collection** - Counters, gauges, histograms
-- **Distributed Tracing** - Request tracing across services
-- **Health Checks** - Liveness and readiness probes
-- **Alerting** - Configurable alert rules
-- **Dashboards** - Pre-built Grafana dashboards
+- **Metrics Collection** - Counters, gauges, histograms, summaries with label support
+- **Distributed Tracing** - Spans, trace context, W3C Trace Context format
+- **Health Checks** - Liveness and readiness probes (memory, disk, connection pool, latency)
+- **Structured Logging** - Log entries with trace correlation and level filtering
+- **Prometheus Export** - Native Prometheus text format export
 
 ## Architecture
 
@@ -31,15 +31,16 @@ Monitoring and observability for the Aegis Database Platform.
 ┌─────────────────────────────────────────────────┐
 │            Monitoring System                     │
 ├─────────────────────────────────────────────────┤
-│              Metrics Collector                   │
+│              Metrics Registry                    │
 │  ┌──────────┬──────────────┬─────────────────┐  │
 │  │ Counters │   Gauges     │  Histograms     │  │
+│  │          │              │  Summaries      │  │
 │  └──────────┴──────────────┴─────────────────┘  │
 ├─────────────────────────────────────────────────┤
 │              Tracing System                      │
 │  ┌──────────┬──────────────┬─────────────────┐  │
-│  │  Spans   │   Context    │   Exporters     │  │
-│  │          │  Propagation │                 │  │
+│  │  Spans   │   Trace      │  Structured     │  │
+│  │          │   Context    │  Logging        │  │
 │  └──────────┴──────────────┴─────────────────┘  │
 ├─────────────────────────────────────────────────┤
 │              Health Manager                      │
@@ -51,9 +52,9 @@ Monitoring and observability for the Aegis Database Platform.
 
 | Module | Description |
 |--------|-------------|
-| `metrics` | Metrics collection and export |
-| `tracing` | Distributed tracing |
-| `health` | Health check system |
+| `metrics` | Counters, gauges, histograms, summaries, Prometheus export |
+| `tracing` | Spans, trace context, structured logging |
+| `health` | Health checks with built-in memory, disk, connection, latency checks |
 
 ## Usage
 
@@ -65,18 +66,26 @@ aegis-monitoring = { path = "../aegis-monitoring" }
 ### Metrics
 
 ```rust
-use aegis_monitoring::metrics::{Counter, Gauge, Histogram, MetricsRegistry};
+use aegis_monitoring::metrics::{MetricRegistry, DatabaseMetrics};
 
-let registry = MetricsRegistry::new();
+let registry = MetricRegistry::new();
 
 // Counter - monotonically increasing
 let requests = registry.counter("aegis_requests_total", "Total requests");
 requests.inc();
 requests.inc_by(5);
 
+// Counter with labels
+let requests = registry.counter_with_labels(
+    "aegis_http_total",
+    "Total HTTP requests",
+    &[("method", "GET"), ("endpoint", "/api/users")],
+);
+requests.inc();
+
 // Gauge - can go up or down
 let connections = registry.gauge("aegis_connections", "Active connections");
-connections.set(42);
+connections.set(42.0);
 connections.inc();
 connections.dec();
 
@@ -88,108 +97,82 @@ let latency = registry.histogram(
 );
 latency.observe(0.023);
 
-// Labels
-let requests = registry.counter_vec(
-    "aegis_requests_total",
-    "Total requests",
-    &["method", "endpoint"],
+// Summary - quantile estimation
+let summary = registry.summary(
+    "aegis_query_seconds",
+    "Query duration summary",
 );
-requests.with_labels(&["GET", "/api/users"]).inc();
+summary.observe(0.15);
+
+// Pre-built database metrics
+let db_metrics = DatabaseMetrics::new(&registry);
+db_metrics.record_query(0.023, true);
+db_metrics.record_read(4096);
 ```
 
 ### Tracing
 
 ```rust
-use aegis_monitoring::tracing::{Tracer, Span, SpanContext};
+use aegis_monitoring::tracing::{Tracer, TraceContext};
 
 let tracer = Tracer::new("aegis-server");
 
 // Create a span
-let span = tracer.start_span("handle_request");
-span.set_attribute("http.method", "GET");
-span.set_attribute("http.url", "/api/users");
-
-// Child span
-let child = span.start_child("database_query");
-child.set_attribute("db.statement", "SELECT * FROM users");
+let span_id = tracer.start_span("handle_request");
 // ... do work ...
-child.end();
+tracer.end_span(span_id);
 
-// Add events
-span.add_event("cache_miss", vec![("key", "users:123")]);
+// Trace context (W3C format)
+let ctx = TraceContext::new();
+let traceparent = ctx.to_traceparent();
+// e.g. "00-<trace_id>-<span_id>-01"
 
-// End span
-span.end();
-```
-
-### Context Propagation
-
-```rust
-use aegis_monitoring::tracing::{propagate, extract};
-
-// Inject context into headers (for outgoing requests)
-let mut headers = HashMap::new();
-propagate(&span.context(), &mut headers);
-
-// Extract context from headers (for incoming requests)
-let context = extract(&request.headers());
-let span = tracer.start_span_with_context("child_operation", context);
+// Structured logging
+use aegis_monitoring::tracing::Logger;
+let logger = Logger::new("aegis-server");
+logger.info("Request handled", &[("status", "200"), ("path", "/api/users")]);
 ```
 
 ### Health Checks
 
 ```rust
-use aegis_monitoring::health::{HealthChecker, HealthStatus, Check};
+use aegis_monitoring::health::{HealthChecker, HealthStatus, MemoryHealthCheck, DiskHealthCheck};
 
-let health = HealthChecker::new();
+let mut checker = HealthChecker::new();
 
-// Add checks
-health.add_check("database", Check::new(|| async {
-    if database.ping().await.is_ok() {
-        HealthStatus::Healthy
-    } else {
-        HealthStatus::Unhealthy("Connection failed".into())
-    }
-}));
+// Add built-in checks
+checker.add_check(Box::new(MemoryHealthCheck::new(80.0, 95.0)));
+checker.add_check(Box::new(DiskHealthCheck::new("/", 80.0, 95.0)));
 
-health.add_check("disk_space", Check::new(|| async {
-    let usage = get_disk_usage()?;
-    if usage < 90.0 {
-        HealthStatus::Healthy
-    } else if usage < 95.0 {
-        HealthStatus::Degraded(format!("Disk {}% full", usage))
-    } else {
-        HealthStatus::Unhealthy(format!("Disk {}% full", usage))
-    }
-}));
+// Run all checks
+checker.run_checks();
+let report = checker.get_report();
+println!("Status: {:?}", report.status);
+println!("{}", report.to_json());
 
-// Check health
-let status = health.check_all().await;
-println!("Overall: {:?}", status.overall);
-for (name, result) in status.checks {
-    println!("  {}: {:?}", name, result);
-}
-
-// HTTP endpoints
-// GET /health/live   -> Liveness probe
-// GET /health/ready  -> Readiness probe
+// Kubernetes-style probes
+use aegis_monitoring::health::ProbeChecker;
+let probes = ProbeChecker::new();
+let liveness = probes.check_liveness();   // is the process alive?
+let readiness = probes.check_readiness(); // is it ready to serve?
 ```
 
 ### Pre-built Metrics
 
-The following metrics are automatically collected:
+The `DatabaseMetrics` struct provides these pre-registered metrics:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `aegis_requests_total` | Counter | Total HTTP requests |
-| `aegis_request_duration_seconds` | Histogram | Request latency |
-| `aegis_connections_active` | Gauge | Active connections |
 | `aegis_queries_total` | Counter | Total queries executed |
 | `aegis_query_duration_seconds` | Histogram | Query latency |
-| `aegis_storage_bytes` | Gauge | Storage used |
-| `aegis_cache_hits_total` | Counter | Cache hits |
-| `aegis_cache_misses_total` | Counter | Cache misses |
-| `aegis_replication_lag_seconds` | Gauge | Replication lag |
+| `aegis_active_connections` | Gauge | Active connections |
+| `aegis_bytes_read` | Counter | Bytes read from storage |
+| `aegis_bytes_written` | Counter | Bytes written to storage |
+| `aegis_cache_hits` | Counter | Cache hits |
+| `aegis_cache_misses` | Counter | Cache misses |
+| `aegis_transactions_total` | Counter | Total transactions |
+| `aegis_transaction_duration_seconds` | Histogram | Transaction latency |
+| `aegis_errors_total` | Counter | Total errors |
 
 ### Prometheus Export
 
@@ -197,38 +180,9 @@ The following metrics are automatically collected:
 // Get metrics in Prometheus format
 let output = registry.export_prometheus();
 // Returns text like:
-// # HELP aegis_requests_total Total requests
-// # TYPE aegis_requests_total counter
-// aegis_requests_total 1234
-```
-
-### Grafana Integration
-
-Pre-built dashboards are available in `/integrations/grafana-datasource/`:
-
-- **Aegis Overview** - Cluster health, throughput, latency
-- **Query Performance** - Query metrics and slow query log
-- **Storage Metrics** - Disk usage, compaction, WAL
-- **Replication Status** - Raft state, lag, throughput
-
-## Configuration
-
-```toml
-[monitoring]
-enabled = true
-
-[monitoring.metrics]
-export_interval = "15s"
-prometheus_endpoint = "/metrics"
-
-[monitoring.tracing]
-enabled = true
-sample_rate = 0.1
-exporter = "jaeger"
-jaeger_endpoint = "http://localhost:14268/api/traces"
-
-[monitoring.health]
-check_interval = "10s"
+// # HELP aegis_queries_total Total queries executed
+// # TYPE aegis_queries_total counter
+// aegis_queries_total 1234
 ```
 
 ## Tests
@@ -236,8 +190,6 @@ check_interval = "10s"
 ```bash
 cargo test -p aegis-monitoring
 ```
-
-**Test count:** 634 tests (workspace total)
 
 ## License
 

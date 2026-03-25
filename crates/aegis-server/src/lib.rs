@@ -25,15 +25,17 @@ pub mod handlers;
 pub mod middleware;
 pub mod router;
 pub mod secrets;
+pub mod shield_handlers;
 pub mod state;
+pub mod vault_handlers;
 
 pub use activity::{Activity, ActivityLogger, ActivityType};
 pub use admin::{AdminService, ClusterInfo, DashboardSummary, NodeInfo, QueryStats};
 pub use auth::{
-    AuthProvider, AuthResponse, AuthService, AuditEntry, AuditEventType, AuditLogger,
-    AuditResult, LdapAuthenticator, LdapConfig, LoginRequest, MfaVerifyRequest,
-    OAuth2Authenticator, OAuth2Config, Permission, RbacManager, Role, RowLevelPolicy,
-    RowPolicyOperation, UserInfo, UserRole,
+    AuditEntry, AuditEventType, AuditLogger, AuditResult, AuthProvider, AuthResponse, AuthService,
+    LdapAuthenticator, LdapConfig, LoginRequest, MfaVerifyRequest, OAuth2Authenticator,
+    OAuth2Config, Permission, RbacManager, Role, RowLevelPolicy, RowPolicyOperation, UserInfo,
+    UserRole,
 };
 pub use backup::{BackupInfo, BackupManager, BackupStatus};
 pub use breach::{
@@ -42,12 +44,12 @@ pub use breach::{
 };
 pub use config::{ClusterTlsConfig, ServerConfig};
 pub use consent::{
-    check_consent, check_all_consents, check_any_consent, ConsentAction, ConsentHistoryEntry,
+    check_all_consents, check_any_consent, check_consent, ConsentAction, ConsentHistoryEntry,
     ConsentManager, ConsentRecord, ConsentSource, ConsentStats, Purpose, SubjectConsentExport,
 };
 pub use gdpr::{
-    DeletionAuditEntry, DeletionAuditLog, DeletionCertificate, DeletionEventType, DeletionRequest,
-    DeletionResponse, DeletionScope, DeletedItem, GdprService,
+    DeletedItem, DeletionAuditEntry, DeletionAuditLog, DeletionCertificate, DeletionEventType,
+    DeletionRequest, DeletionResponse, DeletionScope, GdprService,
 };
 pub use router::create_router;
 pub use state::AppState;

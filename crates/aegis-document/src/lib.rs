@@ -12,16 +12,16 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-pub mod types;
 pub mod collection;
+pub mod engine;
 pub mod index;
 pub mod query;
+pub mod types;
 pub mod validation;
-pub mod engine;
 
-pub use types::{Document, DocumentId, Value};
 pub use collection::Collection;
+pub use engine::DocumentEngine;
 pub use index::{DocumentIndex, IndexType};
 pub use query::{Query, QueryResult};
+pub use types::{Document, DocumentId, Value};
 pub use validation::{Schema, ValidationResult};
-pub use engine::DocumentEngine;

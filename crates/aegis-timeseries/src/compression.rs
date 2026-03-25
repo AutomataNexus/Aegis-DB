@@ -192,9 +192,7 @@ impl Compressor {
         let leading_zeros = xor.leading_zeros() as u8;
         let trailing_zeros = xor.trailing_zeros() as u8;
 
-        if leading_zeros >= self.prev_leading_zeros
-            && trailing_zeros >= self.prev_trailing_zeros
-        {
+        if leading_zeros >= self.prev_leading_zeros && trailing_zeros >= self.prev_trailing_zeros {
             self.writer.write_bit(false);
             let meaningful_bits = 64 - self.prev_leading_zeros - self.prev_trailing_zeros;
             let shifted = xor >> self.prev_trailing_zeros;

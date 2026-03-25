@@ -10,7 +10,7 @@ use crate::aggregation::AggregateFunction;
 use crate::compression::{CompressedBlock, Compressor, Decompressor};
 use crate::index::TimeSeriesIndex;
 use crate::partition::{PartitionConfig, PartitionManager};
-use crate::persistence::{PersistenceManager, PersistedBlock, PersistedSeries, PersistedState};
+use crate::persistence::{PersistedBlock, PersistedSeries, PersistedState, PersistenceManager};
 use crate::query::{QueryExecutor, QueryResult, TimeSeriesQuery};
 use crate::retention::{RetentionManager, RetentionResult};
 use crate::types::{DataPoint, Metric, Series, Tags};
@@ -71,15 +71,19 @@ impl TimeSeriesEngine {
 
     /// Create a new time series engine with custom configuration.
     pub fn with_config(config: EngineConfig) -> Self {
-        let persistence = config.data_path.as_ref().and_then(|path| {
-            match PersistenceManager::new(path) {
+        let persistence = config
+            .data_path
+            .as_ref()
+            .and_then(|path| match PersistenceManager::new(path) {
                 Ok(pm) => Some(pm),
                 Err(e) => {
-                    eprintln!("Failed to initialize timeseries persistence at {:?}: {}", path, e);
+                    eprintln!(
+                        "Failed to initialize timeseries persistence at {:?}: {}",
+                        path, e
+                    );
                     None
                 }
-            }
-        });
+            });
 
         let mut engine = Self {
             partition_manager: PartitionManager::new(config.partition_config.clone()),
@@ -130,7 +134,12 @@ impl TimeSeriesEngine {
     // -------------------------------------------------------------------------
 
     /// Write a single data point.
-    pub fn write(&self, metric_name: &str, tags: Tags, point: DataPoint) -> Result<(), EngineError> {
+    pub fn write(
+        &self,
+        metric_name: &str,
+        tags: Tags,
+        point: DataPoint,
+    ) -> Result<(), EngineError> {
         self.write_batch(metric_name, tags, vec![point])
     }
 
@@ -166,9 +175,9 @@ impl TimeSeriesEngine {
 
         {
             let mut data = self.series_data.write();
-            let buffer = data.entry(series_id.clone()).or_insert_with(|| {
-                SeriesBuffer::new(metric.clone(), tags.clone())
-            });
+            let buffer = data
+                .entry(series_id.clone())
+                .or_insert_with(|| SeriesBuffer::new(metric.clone(), tags.clone()));
 
             for point in &points {
                 buffer.add_point(point.clone());
@@ -236,8 +245,7 @@ impl TimeSeriesEngine {
 
     /// Get the latest value for a metric.
     pub fn latest(&self, metric_name: &str, tags: Option<&Tags>) -> Option<DataPoint> {
-        let query = TimeSeriesQuery::last(metric_name, Duration::minutes(5))
-            .with_limit(1);
+        let query = TimeSeriesQuery::last(metric_name, Duration::minutes(5)).with_limit(1);
 
         let query = if let Some(t) = tags {
             query.with_tags(t.clone())
@@ -246,10 +254,7 @@ impl TimeSeriesEngine {
         };
 
         let result = self.query(&query);
-        result
-            .series
-            .first()
-            .and_then(|s| s.points.last().cloned())
+        result.series.first().and_then(|s| s.points.last().cloned())
     }
 
     /// Get aggregated value over a time range.
@@ -634,7 +639,9 @@ mod tests {
                 timestamp: Utc::now() - Duration::minutes(100 - i),
                 value: i as f64,
             };
-            engine.write("cpu_usage", tags.clone(), point).expect("write should succeed");
+            engine
+                .write("cpu_usage", tags.clone(), point)
+                .expect("write should succeed");
         }
 
         let query = TimeSeriesQuery::last("cpu_usage", Duration::hours(2));
@@ -671,7 +678,9 @@ mod tests {
                 timestamp: Utc::now() - Duration::seconds(10 - i),
                 value: i as f64,
             };
-            engine.write("values", tags.clone(), point).expect("write should succeed");
+            engine
+                .write("values", tags.clone(), point)
+                .expect("write should succeed");
         }
 
         let avg = engine.aggregate("values", Duration::minutes(1), AggregateFunction::Avg);
@@ -687,7 +696,9 @@ mod tests {
             let mut tags = Tags::new();
             tags.insert("host", *host);
 
-            engine.write_now("cpu", tags, 50.0).expect("write_now should succeed");
+            engine
+                .write_now("cpu", tags, 50.0)
+                .expect("write_now should succeed");
         }
 
         assert_eq!(engine.series_count(), 3);
@@ -700,12 +711,16 @@ mod tests {
         let mut tags1 = Tags::new();
         tags1.insert("region", "us-east");
         tags1.insert("host", "server1");
-        engine.write_now("memory", tags1, 1024.0).expect("write_now should succeed");
+        engine
+            .write_now("memory", tags1, 1024.0)
+            .expect("write_now should succeed");
 
         let mut tags2 = Tags::new();
         tags2.insert("region", "us-west");
         tags2.insert("host", "server2");
-        engine.write_now("memory", tags2, 2048.0).expect("write_now should succeed");
+        engine
+            .write_now("memory", tags2, 2048.0)
+            .expect("write_now should succeed");
 
         let keys = engine.tag_keys();
         assert!(keys.contains(&"region".to_string()));
@@ -722,7 +737,9 @@ mod tests {
 
         let mut tags = Tags::new();
         tags.insert("host", "server1");
-        engine.write_now("test_metric", tags.clone(), 100.0).expect("write_now should succeed");
+        engine
+            .write_now("test_metric", tags.clone(), 100.0)
+            .expect("write_now should succeed");
 
         assert_eq!(engine.series_count(), 1);
 
@@ -745,12 +762,17 @@ mod tests {
         for i in 0..3 {
             let mut tags = Tags::new();
             tags.insert("host", &format!("server{}", i));
-            engine.write_now("cpu", tags, 50.0).expect("write should succeed");
+            engine
+                .write_now("cpu", tags, 50.0)
+                .expect("write should succeed");
         }
 
         let mut tags = Tags::new();
         tags.insert("host", "server_new");
         let result = engine.write_now("cpu", tags, 50.0);
-        assert!(result.is_err(), "Should reject writes exceeding cardinality limit");
+        assert!(
+            result.is_err(),
+            "Should reject writes exceeding cardinality limit"
+        );
     }
 }
