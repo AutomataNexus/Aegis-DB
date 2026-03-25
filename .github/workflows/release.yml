@@ -1,0 +1,124 @@
+name: Release with SLSA Provenance
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Release Binary
+    runs-on: ubuntu-latest
+    outputs:
+      hash: ${{ steps.hash.outputs.hash }}
+      artifact_name: ${{ steps.info.outputs.artifact_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Build release binary
+        run: cargo build --release -p aegis-server
+
+      - name: Set artifact info
+        id: info
+        run: |
+          VERSION=${GITHUB_REF_NAME}
+          ARTIFACT="aegis-server-${VERSION}-linux-x86_64"
+          cp target/release/aegis-server "${ARTIFACT}"
+          echo "artifact_name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute SHA-256 digest
+        id: hash
+        run: |
+          ARTIFACT="${{ steps.info.outputs.artifact_name }}"
+          SHA256=$(sha256sum "${ARTIFACT}" | awk '{print $1}')
+          echo "hash=${SHA256}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binary
+          path: ${{ steps.info.outputs.artifact_name }}
+          if-no-files-found: error
+
+  provenance:
+    name: Generate SLSA Provenance
+    needs: build
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hash }}  ${{ needs.build.outputs.artifact_name }}"
+      upload-assets: true
+      provenance-name: "aegis-server.intoto.jsonl"
+
+  release:
+    name: Create GitHub Release
+    needs: [build, provenance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-binary
+
+      - name: Generate checksums file
+        run: sha256sum "${{ needs.build.outputs.artifact_name }}" > SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            ${{ needs.build.outputs.artifact_name }}
+            SHA256SUMS.txt
+          body: |
+            ## Aegis-DB ${{ github.ref_name }}
+
+            Unified multi-paradigm database platform. SQL, time series, document, graph, streaming.
+
+            ### Binary
+            - `${{ needs.build.outputs.artifact_name }}` (linux/x86_64)
+
+            ### Verification
+            ```
+            ${{ needs.build.outputs.hash }}  ${{ needs.build.outputs.artifact_name }}
+            ```
+
+            **SLSA Provenance:** Verify with:
+            ```bash
+            slsa-verifier verify-artifact \
+              ${{ needs.build.outputs.artifact_name }} \
+              --provenance-path aegis-server.intoto.jsonl \
+              --source-uri github.com/AutomataNexus/Aegis-DB \
+              --source-tag ${{ github.ref_name }}
+            ```
