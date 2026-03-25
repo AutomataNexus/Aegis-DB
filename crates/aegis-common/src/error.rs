@@ -139,6 +139,14 @@ pub enum AegisError {
 
     #[error("timeout: {0}")]
     Timeout(String),
+
+    // Vault errors
+    #[error("vault error: {0}")]
+    Vault(String),
+
+    // Shield errors
+    #[error("shield error: {0}")]
+    Shield(String),
 }
 
 // =============================================================================
@@ -164,6 +172,13 @@ impl AegisError {
                 | AegisError::LeaderNotElected
                 | AegisError::Network(_)
                 | AegisError::Timeout(_)
+                | AegisError::TransactionAborted(_)
+                | AegisError::Replication(_)
+                | AegisError::NodeNotFound(_)
+                | AegisError::ConnectionRefused(_)
+                | AegisError::ResourceExhausted(_)
+                | AegisError::MemoryLimitExceeded
+                | AegisError::Io(_)
         )
     }
 
@@ -181,6 +196,23 @@ impl AegisError {
                 | AegisError::CheckViolation(_)
                 | AegisError::AuthenticationFailed(_)
                 | AegisError::AuthorizationDenied(_)
+                | AegisError::Execution(_)
+                | AegisError::IndexNotFound(_)
+                | AegisError::BlockNotFound(_)
+                | AegisError::PageNotFound(_)
+                | AegisError::Configuration(_)
+        )
+    }
+
+    /// Returns true if this is a system/internal error.
+    pub fn is_system_error(&self) -> bool {
+        matches!(
+            self,
+            AegisError::Storage(_)
+                | AegisError::Corruption(_)
+                | AegisError::Internal(_)
+                | AegisError::Encryption(_)
+                | AegisError::Serialization(_)
         )
     }
 

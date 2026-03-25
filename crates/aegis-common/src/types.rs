@@ -150,6 +150,38 @@ impl Value {
             _ => None,
         }
     }
+
+    /// Attempts to extract a byte slice.
+    pub fn as_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Value::Bytes(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// Attempts to extract a timestamp value.
+    pub fn as_timestamp(&self) -> Option<&DateTime<Utc>> {
+        match self {
+            Value::Timestamp(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Attempts to extract an array reference.
+    pub fn as_array(&self) -> Option<&Vec<Value>> {
+        match self {
+            Value::Array(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Attempts to extract an object reference.
+    pub fn as_object(&self) -> Option<&HashMap<String, Value>> {
+        match self {
+            Value::Object(o) => Some(o),
+            _ => None,
+        }
+    }
 }
 
 // =============================================================================

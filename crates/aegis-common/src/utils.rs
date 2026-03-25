@@ -12,7 +12,7 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
-use xxhash_rust::xxh3::{xxh3_64, xxh3_128};
+use xxhash_rust::xxh3::{xxh3_128, xxh3_64};
 
 // =============================================================================
 // Hashing Functions
@@ -99,7 +99,11 @@ pub fn parse_size(s: &str) -> Option<u64> {
         (s.as_str(), 1_u64)
     };
 
-    num_str.trim().parse::<f64>().ok().map(|n| (n * unit as f64) as u64)
+    num_str
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|n| (n * unit as f64) as u64)
 }
 
 // =============================================================================
@@ -147,7 +151,10 @@ mod tests {
         assert_eq!(parse_size("1024"), Some(1024));
         assert_eq!(parse_size("1KB"), Some(1024));
         assert_eq!(parse_size("1 MB"), Some(1024 * 1024));
-        assert_eq!(parse_size("1.5GB"), Some((1.5 * 1024.0 * 1024.0 * 1024.0) as u64));
+        assert_eq!(
+            parse_size("1.5GB"),
+            Some((1.5 * 1024.0 * 1024.0 * 1024.0) as u64)
+        );
     }
 
     #[test]

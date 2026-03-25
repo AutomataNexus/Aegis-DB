@@ -14,6 +14,8 @@ members = [
     "crates/aegis-streaming",
     "crates/aegis-monitoring",
     "crates/aegis-updates",
+    "crates/aegis-vault",
+    "crates/aegis-shield",
 ]
 # WASM crates built separately with Trunk
 exclude = [
@@ -69,6 +71,10 @@ snap = "1.1"
 # Cryptography
 ring = "0.17"
 aes-gcm = "0.10"
+zeroize = "1.7"
+rand = "0.8"
+base64 = "0.22"
+regex = "1.10"
 
 # Networking
 axum = "0.7"
@@ -113,6 +119,8 @@ aegis-document = { version = "0.2.2", path = "crates/aegis-document" }
 aegis-streaming = { version = "0.2.2", path = "crates/aegis-streaming" }
 aegis-monitoring = { version = "0.2.2", path = "crates/aegis-monitoring" }
 aegis-updates = { version = "0.2.2", path = "crates/aegis-updates" }
+aegis-vault = { version = "0.2.2", path = "crates/aegis-vault" }
+aegis-shield = { version = "0.2.2", path = "crates/aegis-shield" }
 
 [profile.release]
 lto = "thin"
