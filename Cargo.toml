@@ -23,7 +23,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 rust-version = "1.75"
 authors = ["AutomataNexus Development Team"]
@@ -107,20 +107,20 @@ proptest = "1.4"
 tempfile = "3.10"
 
 # Internal crates
-aegis-common = { version = "0.2.2", path = "crates/aegis-common" }
-aegis-storage = { version = "0.2.2", path = "crates/aegis-storage" }
-aegis-memory = { version = "0.2.2", path = "crates/aegis-memory" }
-aegis-query = { version = "0.2.2", path = "crates/aegis-query" }
-aegis-server = { version = "0.2.2", path = "crates/aegis-server" }
-aegis-client = { version = "0.2.2", path = "crates/aegis-client" }
-aegis-replication = { version = "0.2.2", path = "crates/aegis-replication" }
-aegis-timeseries = { version = "0.2.2", path = "crates/aegis-timeseries" }
-aegis-document = { version = "0.2.2", path = "crates/aegis-document" }
-aegis-streaming = { version = "0.2.2", path = "crates/aegis-streaming" }
-aegis-monitoring = { version = "0.2.2", path = "crates/aegis-monitoring" }
-aegis-updates = { version = "0.2.2", path = "crates/aegis-updates" }
-aegis-vault = { version = "0.2.2", path = "crates/aegis-vault" }
-aegis-shield = { version = "0.2.2", path = "crates/aegis-shield" }
+aegis-common = { version = "0.2.3", path = "crates/aegis-common" }
+aegis-storage = { version = "0.2.3", path = "crates/aegis-storage" }
+aegis-memory = { version = "0.2.3", path = "crates/aegis-memory" }
+aegis-query = { version = "0.2.3", path = "crates/aegis-query" }
+aegis-server = { version = "0.2.3", path = "crates/aegis-server" }
+aegis-client = { version = "0.2.3", path = "crates/aegis-client" }
+aegis-replication = { version = "0.2.3", path = "crates/aegis-replication" }
+aegis-timeseries = { version = "0.2.3", path = "crates/aegis-timeseries" }
+aegis-document = { version = "0.2.3", path = "crates/aegis-document" }
+aegis-streaming = { version = "0.2.3", path = "crates/aegis-streaming" }
+aegis-monitoring = { version = "0.2.3", path = "crates/aegis-monitoring" }
+aegis-updates = { version = "0.2.3", path = "crates/aegis-updates" }
+aegis-vault = { version = "0.2.3", path = "crates/aegis-vault" }
+aegis-shield = { version = "0.2.3", path = "crates/aegis-shield" }
 
 [profile.release]
 lto = "thin"
