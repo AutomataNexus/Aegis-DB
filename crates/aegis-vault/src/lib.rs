@@ -305,6 +305,7 @@ impl AegisVault {
         // Auto-unseal with a generated key (no passphrase needed)
         if let Err(e) = seal_manager.auto_unseal(None) {
             tracing::warn!("Vault auto-unseal failed: {}. Starting sealed.", e);
+            audit_log.record_failure(VaultOperation::Unseal, None, Some("system"), &e.to_string());
         } else {
             audit_log.record_success(VaultOperation::Unseal, None, Some("system"));
         }
@@ -340,24 +341,6 @@ impl AegisVault {
             store,
             transit: Arc::new(TransitEngine::new()),
             config,
-        }
-    }
-
-    /// Create a sealed, empty vault (fallback when init fails).
-    fn new_sealed() -> Self {
-        let seal_manager = Arc::new(SealManager::new());
-        let audit_log = Arc::new(VaultAuditLog::new(10000));
-        let access_controller = Arc::new(AccessController::new());
-        let store = Arc::new(VaultStore::new(
-            seal_manager,
-            std::path::PathBuf::from("vault.dat"),
-            audit_log,
-            access_controller,
-        ));
-        Self {
-            store,
-            transit: Arc::new(TransitEngine::new()),
-            config: VaultConfig::default(),
         }
     }
 

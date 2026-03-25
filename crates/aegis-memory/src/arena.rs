@@ -63,7 +63,7 @@ impl Chunk {
     }
 
     /// Returns the number of bytes remaining in this chunk.
-    pub fn remaining(&self) -> usize {
+    fn remaining(&self) -> usize {
         self.size - self.used
     }
 
@@ -183,6 +183,11 @@ impl MemoryArena {
     /// Get the total memory used within allocated chunks.
     pub fn total_used(&self) -> usize {
         self.chunks.lock().iter().map(|c| c.used).sum()
+    }
+
+    /// Get the total remaining capacity across all allocated chunks.
+    pub fn total_remaining(&self) -> usize {
+        self.chunks.lock().iter().map(|c| c.remaining()).sum()
     }
 }
 

@@ -2006,7 +2006,6 @@ impl<'a> Operator for ProjectOperator<'a> {
 // Join Operator
 // =============================================================================
 
-#[allow(dead_code)]
 struct JoinOperator<'a> {
     left: Box<dyn Operator + 'a>,
     right: Box<dyn Operator + 'a>,
@@ -2014,8 +2013,7 @@ struct JoinOperator<'a> {
     condition: Option<PlanExpression>,
     _strategy: JoinStrategy,
     columns: Vec<String>,
-    left_columns: Vec<String>,
-    right_columns: Vec<String>,
+    right_col_count: usize,
     right_data: Option<Vec<Row>>,
     left_batch: Option<ResultBatch>,
     left_row_idx: usize,
@@ -2030,11 +2028,9 @@ impl<'a> JoinOperator<'a> {
         condition: Option<PlanExpression>,
         strategy: JoinStrategy,
     ) -> ExecutorResult<Self> {
-        let left_columns = left.columns().to_vec();
-        let right_columns = right.columns().to_vec();
-
-        let mut columns = left_columns.clone();
-        columns.extend(right_columns.clone());
+        let mut columns = left.columns().to_vec();
+        let right_col_count = right.columns().len();
+        columns.extend(right.columns().to_vec());
 
         Ok(Self {
             left,
@@ -2043,8 +2039,7 @@ impl<'a> JoinOperator<'a> {
             condition,
             _strategy: strategy,
             columns,
-            left_columns,
-            right_columns,
+            right_col_count,
             right_data: None,
             left_batch: None,
             left_row_idx: 0,
@@ -2114,6 +2109,7 @@ impl<'a> Operator for JoinOperator<'a> {
 
             while self.left_row_idx < left_batch.rows.len() {
                 let left_row = &left_batch.rows[self.left_row_idx];
+                let mut matched = false;
 
                 while self.right_row_idx < right_data.len() {
                     let right_row = &right_data[self.right_row_idx];
@@ -2123,6 +2119,7 @@ impl<'a> Operator for JoinOperator<'a> {
                         let mut combined = left_row.values.clone();
                         combined.extend(right_row.values.clone());
                         result_rows.push(Row { values: combined });
+                        matched = true;
 
                         if result_rows.len() >= 1024 {
                             return Ok(Some(ResultBatch::with_rows(
@@ -2131,6 +2128,13 @@ impl<'a> Operator for JoinOperator<'a> {
                             )));
                         }
                     }
+                }
+
+                // For LEFT joins, emit left + NULLs if no match found
+                if !matched && self.join_type == PlanJoinType::Left {
+                    let mut combined = left_row.values.clone();
+                    combined.extend(vec![Value::Null; self.right_col_count]);
+                    result_rows.push(Row { values: combined });
                 }
 
                 self.left_row_idx += 1;
@@ -2164,12 +2168,9 @@ struct HashJoinOperator<'a> {
     join_type: PlanJoinType,
     condition: Option<PlanExpression>,
     columns: Vec<String>,
-    left_columns: Vec<String>,
     right_columns: Vec<String>,
     /// Hash table: key is the stringified join-key value, value is matching rows
     hash_table: Option<HashMap<String, Vec<Row>>>,
-    /// Index of the right-side column used as the hash key (within right_columns)
-    right_key_idx: Option<usize>,
     /// Index of the left-side column used as the probe key (within left_columns)
     left_key_idx: Option<usize>,
     done: bool,
@@ -2210,10 +2211,8 @@ impl<'a> HashJoinOperator<'a> {
             join_type,
             condition,
             columns,
-            left_columns,
             right_columns,
             hash_table: Some(hash_table),
-            right_key_idx,
             left_key_idx,
             done: false,
         })
