@@ -11,7 +11,7 @@ description: "AegisQL query language documentation and reference"
 Query language documentation for SQL, Document, TimeSeries, and Graph operations
 {: .fs-6 .fw-300 }
 
-**Version:** 0.2.2
+**Version:** 0.2.4
 {: .label .label-green }
 
 ---
@@ -1416,7 +1416,7 @@ VALUES, WHEN, WHERE, WITH
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 0.2.2 | Feb 2026 | VACUUM statement, B-tree/Hash index types, graph queries |
+| 0.2.4 | Feb 2026 | VACUUM statement, B-tree/Hash index types, graph queries |
 | 0.2.1 | Jan 2026 | Multi-database support |
 | 1.0.0 | Jan 2026 | Initial release |
 

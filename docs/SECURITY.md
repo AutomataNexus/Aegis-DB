@@ -42,7 +42,7 @@ Security features, best practices, and configuration for production deployments
 
 ## Overview
 
-AegisDB v0.2.2 includes production-ready security features:
+AegisDB v0.2.4 includes production-ready security features:
 
 | Feature | Implementation | Status |
 |---------|---------------|--------|
@@ -66,7 +66,7 @@ AegisDB v0.2.2 includes production-ready security features:
 
 ## Data Classification
 
-AegisDB v0.2.2 supports 6-level data classification for columns and fields, enabling fine-grained access control and compliance enforcement for PHI, PII, and other sensitive data categories.
+AegisDB v0.2.4 supports 6-level data classification for columns and fields, enabling fine-grained access control and compliance enforcement for PHI, PII, and other sensitive data categories.
 
 ### Classification Levels
 
@@ -121,7 +121,7 @@ mask_phi_in_logs = true
 
 ## Query Safety Limits
 
-AegisDB v0.2.2 enforces query safety limits to prevent accidental resource exhaustion and protect against runaway queries.
+AegisDB v0.2.4 enforces query safety limits to prevent accidental resource exhaustion and protect against runaway queries.
 
 ### Default Limits
 
@@ -1146,6 +1146,6 @@ If you discover a security vulnerability in AegisDB, please report it responsibl
 
 ---
 
-**Document Version:** 2.0.0 (Aegis-DB v0.2.2)
+**Document Version:** 2.0.0 (Aegis-DB v0.2.4)
 **Last Updated:** February 2026
 **Maintainer:** AutomataNexus Security Team
