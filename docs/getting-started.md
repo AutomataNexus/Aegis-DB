@@ -38,12 +38,12 @@ cargo install aegisdb-cli
 ### From Binary Release
 
 ```bash
-# Download latest release (v0.2.2)
-curl -LO https://github.com/AutomataNexus/Aegis-DB/releases/latest/download/aegis-db-0.2.2-linux-x86_64.tar.gz
+# Download latest release (v0.2.4)
+curl -LO https://github.com/AutomataNexus/Aegis-DB/releases/latest/download/aegis-db-0.2.4-linux-x86_64.tar.gz
 
 # Extract
-tar -xzf aegis-db-0.2.2-linux-x86_64.tar.gz
-cd aegis-db-0.2.2-linux-x86_64
+tar -xzf aegis-db-0.2.4-linux-x86_64.tar.gz
+cd aegis-db-0.2.4-linux-x86_64
 
 # Run server (default port 9090)
 ./aegis-server
@@ -119,7 +119,7 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "uptime": 123
 }
 ```

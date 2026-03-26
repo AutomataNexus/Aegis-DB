@@ -82,8 +82,8 @@ let orchestrator = UpdateOrchestrator::new(
 
 // Create update plan
 let plan = orchestrator.create_plan(
-    "0.2.2",
-    "https://releases.example.com/aegis-server-0.2.2",
+    "0.2.4",
+    "https://releases.example.com/aegis-server-0.2.4",
     "sha256hash...",
     vec![
         ClusterNode {
