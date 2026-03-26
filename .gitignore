@@ -36,16 +36,29 @@ Thumbs.db
 Aegis_PRD.md
 PROGRESS.md
 progress.txt
+progress.md
+AUDIT_PROGRESS.md
+CLAUDE.md
+
+# Deployment configs
+ecosystem.config.js
+
+# Scripts (dev/install)
+install.sh
+scripts/
+aegis
 
 # Coverage
 /coverage/
 *.lcov
-CLAUDE.md
 
 # TLS certificates and keys
 certs/
 *.key
 *.pem
+
+# Full-resolution logo source files in repo root
+/NexusShield-Logo.png
 
 # Release binaries (use GitHub Releases instead)
 release-artifacts/
