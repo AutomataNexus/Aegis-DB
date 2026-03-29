@@ -20,6 +20,7 @@ jobs:
     outputs:
       hash: ${{ steps.hash.outputs.hash }}
       artifact_name: ${{ steps.info.outputs.artifact_name }}
+      subjects_base64: ${{ steps.hash.outputs.subjects_base64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,6 +59,8 @@ jobs:
           ARTIFACT="${{ steps.info.outputs.artifact_name }}"
           SHA256=$(sha256sum "${ARTIFACT}" | awk '{print $1}')
           echo "hash=${SHA256}" >> "$GITHUB_OUTPUT"
+          SUBJECTS_BASE64=$(echo "${SHA256}  ${ARTIFACT}" | base64 -w0)
+          echo "subjects_base64=${SUBJECTS_BASE64}" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -75,7 +78,7 @@ jobs:
       contents: write
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
-      base64-subjects: "${{ needs.build.outputs.hash }}  ${{ needs.build.outputs.artifact_name }}"
+      base64-subjects: "${{ needs.build.outputs.subjects_base64 }}"
       upload-assets: true
       provenance-name: "aegis-server.intoto.jsonl"
 
