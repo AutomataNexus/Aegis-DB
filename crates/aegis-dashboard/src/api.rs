@@ -125,16 +125,28 @@ impl AegisClient {
 
         // Parse the server's ClusterInfo response and convert to dashboard's ClusterStatus
         let cluster_info: ServerClusterInfo = response.json().await?;
+        let total_nodes = cluster_info.node_count as u32;
+
+        // Derive healthy_nodes from cluster state:
+        // - "Healthy" means all nodes are online
+        // - "Degraded" means majority are online (at least half + 1)
+        // - "Unavailable"/"Initializing" means at most half are online
+        let healthy_nodes = match cluster_info.state.as_str() {
+            "Healthy" => total_nodes,
+            "Degraded" => (total_nodes / 2) + 1,
+            _ => 0,
+        };
+
         Ok(ClusterStatus {
             name: cluster_info.name,
             version: cluster_info.version,
-            total_nodes: cluster_info.node_count as u32,
-            healthy_nodes: cluster_info.node_count as u32, // All nodes are healthy for now
+            total_nodes,
+            healthy_nodes,
             leader_id: cluster_info.leader_id.unwrap_or_else(|| "unknown".to_string()),
-            term: 1, // Raft term - would come from actual consensus module
-            commit_index: 0, // Would come from actual consensus module
-            shard_count: 1, // Would come from sharding module
-            replication_factor: 3,
+            term: 0,    // Server does not provide this
+            commit_index: 0, // Server does not provide this
+            shard_count: 1,  // Server does not provide this
+            replication_factor: 3, // Server does not provide this
         })
     }
 
@@ -198,30 +210,65 @@ impl AegisClient {
     }
 
     /// Get database statistics from the server.
+    ///
+    /// Combines data from `/api/v1/admin/storage` (storage metrics) and
+    /// `/api/v1/admin/database` (key/document/query counts).
     pub async fn get_database_stats(&self) -> Result<DatabaseStats, ApiError> {
-        let url = format!("{}/api/v1/admin/storage", self.base_url);
-        let response = self.build_request(&url).send().await?;
+        // Fetch storage info
+        let storage_url = format!("{}/api/v1/admin/storage", self.base_url);
+        let storage_response = self.build_request(&storage_url).send().await?;
 
-        if !response.ok() {
+        if !storage_response.ok() {
             return Err(ApiError {
-                message: format!("Server returned status {}", response.status()),
-                status_code: Some(response.status()),
+                message: format!("Storage endpoint returned status {}", storage_response.status()),
+                status_code: Some(storage_response.status()),
             });
         }
 
-        let storage: ServerStorageInfo = response.json().await?;
+        let storage: ServerStorageInfo = storage_response.json().await?;
+
+        // Fetch database stats
+        let db_url = format!("{}/api/v1/admin/database", self.base_url);
+        let db_response = self.build_request(&db_url).send().await?;
+
+        let db_stats = if db_response.ok() {
+            db_response.json::<ServerDatabaseStats>().await.ok()
+        } else {
+            None
+        };
+
+        // Fetch graph stats (best-effort)
+        let graph_url = format!("{}/api/v1/graph/stats", self.base_url);
+        let graph_response = self.build_request(&graph_url).send().await?;
+
+        let (graph_nodes, graph_edges) = if graph_response.ok() {
+            #[derive(serde::Deserialize)]
+            struct GraphStats {
+                #[serde(default)]
+                total_nodes: u64,
+                #[serde(default)]
+                total_edges: u64,
+            }
+            match graph_response.json::<GraphStats>().await {
+                Ok(g) => (g.total_nodes, g.total_edges),
+                Err(_) => (0, 0),
+            }
+        } else {
+            (0, 0)
+        };
+
         Ok(DatabaseStats {
-            total_keys: 0, // Would need separate endpoint
-            total_documents: 0,
-            total_graph_nodes: 0,
-            total_graph_edges: 0,
+            total_keys: db_stats.as_ref().map_or(0, |d| d.total_keys),
+            total_documents: db_stats.as_ref().map_or(0, |d| d.total_documents),
+            total_graph_nodes: graph_nodes,
+            total_graph_edges: graph_edges,
             storage_used: storage.used_bytes,
             storage_total: storage.total_bytes,
             data_bytes: storage.data_bytes,
             wal_bytes: storage.wal_bytes,
             index_bytes: storage.index_bytes,
-            cache_hit_rate: 0.0, // Would need cache metrics endpoint
-            ops_last_minute: 0, // Would need query metrics endpoint
+            cache_hit_rate: 0.0,
+            ops_last_minute: db_stats.as_ref().map_or(0, |d| d.queries_executed),
         })
     }
 
@@ -373,6 +420,22 @@ struct ServerStorageInfo {
     index_bytes: u64,
     wal_bytes: u64,
     temp_bytes: u64,
+}
+
+/// Server's database stats format (from /api/v1/admin/database)
+#[derive(serde::Deserialize, Debug)]
+struct ServerDatabaseStats {
+    total_keys: u64,
+    total_documents: u64,
+    #[allow(dead_code)]
+    collection_count: u64,
+    #[allow(dead_code)]
+    documents_inserted: u64,
+    #[allow(dead_code)]
+    documents_updated: u64,
+    #[allow(dead_code)]
+    documents_deleted: u64,
+    queries_executed: u64,
 }
 
 /// Server's alert info format

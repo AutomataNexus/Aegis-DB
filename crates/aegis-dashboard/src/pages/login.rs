@@ -259,11 +259,6 @@ pub fn Login() -> impl IntoView {
                                 </button>
                             </form>
 
-                            <div class="demo-hint">
-                                <strong>"Demo credentials:"</strong><br/>
-                                "admin / (set via AEGIS_ADMIN_PASSWORD)"<br/>
-                                "demo / demo (viewer)"
-                            </div>
                         </Show>
 
                         // MFA Verification
@@ -319,9 +314,6 @@ pub fn Login() -> impl IntoView {
                                 </button>
                             </form>
 
-                            <div class="demo-hint">
-                                <strong>"Demo:"</strong>" Enter 123456 to verify"
-                            </div>
                         </Show>
 
                         // MFA Setup

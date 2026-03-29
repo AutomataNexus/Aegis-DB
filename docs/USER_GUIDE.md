@@ -2297,7 +2297,7 @@ A: AegisDB can serve as a replacement or complement for:
 - Kafka (streaming)
 
 **Q: Is AegisDB production-ready?**
-A: Yes, AegisDB v0.2.5 includes production security features: TLS/HTTPS support, Argon2id password hashing, rate limiting, HashiCorp Vault integration, secure token generation, PHI data classification, consent management, breach detection, and HIPAA/GDPR/CCPA compliance APIs. It's suitable for production deployments with proper configuration.
+A: Yes, AegisDB v0.2.6 includes production security features: TLS/HTTPS support, Argon2id password hashing, rate limiting, HashiCorp Vault integration, secure token generation, PHI data classification, consent management, breach detection, and HIPAA/GDPR/CCPA compliance APIs. It's suitable for production deployments with proper configuration.
 
 **Q: What's the license?**
 A: Apache 2.0 for the core platform. Enterprise features may require a commercial license.

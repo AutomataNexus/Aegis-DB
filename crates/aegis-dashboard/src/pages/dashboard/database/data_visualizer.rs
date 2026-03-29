@@ -363,11 +363,144 @@ fn render_chart(
                 </svg>
             }.into_view()
         }
-        _ => {
+        DataChartType::BubbleChart => {
+            let circles: Vec<_> = points.iter().map(|(x, y)| {
+                let cx = padding + (x - x_min) / (x_max - x_min) * (width - 2.0 * padding);
+                let cy = height - padding - (y - y_min) / (y_max - y_min) * (height - 2.0 * padding);
+                let r = 4.0 + ((y - y_min) / (y_max - y_min)) * 20.0;
+                view! {
+                    <circle cx=cx cy=cy r=r fill="#14b8a6" opacity="0.5" stroke="#14b8a6" stroke-width="1"/>
+                }
+            }).collect();
+
             view! {
-                <div class="chart-placeholder">
-                    <p>"Chart type not yet implemented"</p>
-                </div>
+                <svg class="viz-chart" viewBox=format!("0 0 {} {}", width, height)>
+                    <line x1=padding y1=height-padding x2=width-padding y2=height-padding stroke="#94a3b8" stroke-width="2"/>
+                    <line x1=padding y1=padding x2=padding y2=height-padding stroke="#94a3b8" stroke-width="2"/>
+                    {circles}
+                </svg>
+            }.into_view()
+        }
+        DataChartType::RadarChart => {
+            let n = points.len();
+            if n < 3 {
+                return view! { <div class="chart-error">"Radar chart requires at least 3 data points"</div> }.into_view();
+            }
+
+            let cx = width / 2.0;
+            let cy = height / 2.0;
+            let max_r = (width.min(height) / 2.0) - padding;
+
+            // Normalize y values to 0..1 for radius
+            let normalized: Vec<f64> = points.iter().map(|(_, y)| {
+                if (y_max - y_min).abs() < f64::EPSILON { 0.5 } else { (y - y_min) / (y_max - y_min) }
+            }).collect();
+
+            // Draw axis lines from center
+            let axes: Vec<_> = (0..n).map(|i| {
+                let angle = std::f64::consts::PI * 2.0 * i as f64 / n as f64 - std::f64::consts::FRAC_PI_2;
+                let ex = cx + max_r * angle.cos();
+                let ey = cy + max_r * angle.sin();
+                view! {
+                    <line x1=cx y1=cy x2=ex y2=ey stroke="#94a3b8" stroke-width="1" opacity="0.5"/>
+                }
+            }).collect();
+
+            // Draw concentric guide polygons (3 levels)
+            let guides: Vec<_> = (1..=3).map(|level| {
+                let frac = level as f64 / 3.0;
+                let guide_d: String = (0..=n).map(|i| {
+                    let idx = i % n;
+                    let angle = std::f64::consts::PI * 2.0 * idx as f64 / n as f64 - std::f64::consts::FRAC_PI_2;
+                    let r = max_r * frac;
+                    let px = cx + r * angle.cos();
+                    let py = cy + r * angle.sin();
+                    if i == 0 { format!("M{},{}", px, py) } else { format!("L{},{}", px, py) }
+                }).collect::<Vec<_>>().join(" ");
+                view! {
+                    <path d=guide_d fill="none" stroke="#94a3b8" stroke-width="1" opacity="0.3"/>
+                }
+            }).collect();
+
+            // Draw data polygon
+            let poly_d: String = (0..=n).map(|i| {
+                let idx = i % n;
+                let angle = std::f64::consts::PI * 2.0 * idx as f64 / n as f64 - std::f64::consts::FRAC_PI_2;
+                let r = max_r * normalized[idx];
+                let px = cx + r * angle.cos();
+                let py = cy + r * angle.sin();
+                if i == 0 { format!("M{},{}", px, py) } else { format!("L{},{}", px, py) }
+            }).collect::<Vec<_>>().join(" ");
+
+            // Draw data point dots
+            let dots: Vec<_> = (0..n).map(|i| {
+                let angle = std::f64::consts::PI * 2.0 * i as f64 / n as f64 - std::f64::consts::FRAC_PI_2;
+                let r = max_r * normalized[i];
+                let px = cx + r * angle.cos();
+                let py = cy + r * angle.sin();
+                view! {
+                    <circle cx=px cy=py r="4" fill="#14b8a6"/>
+                }
+            }).collect();
+
+            view! {
+                <svg class="viz-chart" viewBox=format!("0 0 {} {}", width, height)>
+                    {guides}
+                    {axes}
+                    <path d=poly_d fill="#14b8a6" fill-opacity="0.2" stroke="#14b8a6" stroke-width="2"/>
+                    {dots}
+                </svg>
+            }.into_view()
+        }
+        DataChartType::HeatMap => {
+            let grid_cols = ((points.len() as f64).sqrt().ceil() as usize).max(2).min(20);
+            let grid_rows = grid_cols;
+
+            let chart_w = width - 2.0 * padding;
+            let chart_h = height - 2.0 * padding;
+            let cell_w = chart_w / grid_cols as f64;
+            let cell_h = chart_h / grid_rows as f64;
+
+            // Count points in each grid cell
+            let mut grid = vec![vec![0u32; grid_cols]; grid_rows];
+            let mut max_count: u32 = 0;
+
+            for (x, y) in &points {
+                let col = if (x_max - x_min).abs() < f64::EPSILON {
+                    grid_cols / 2
+                } else {
+                    (((x - x_min) / (x_max - x_min) * (grid_cols as f64 - 0.001)) as usize).min(grid_cols - 1)
+                };
+                let row = if (y_max - y_min).abs() < f64::EPSILON {
+                    grid_rows / 2
+                } else {
+                    (((y - y_min) / (y_max - y_min) * (grid_rows as f64 - 0.001)) as usize).min(grid_rows - 1)
+                };
+                grid[row][col] += 1;
+                if grid[row][col] > max_count {
+                    max_count = grid[row][col];
+                }
+            }
+
+            let cells: Vec<_> = (0..grid_rows).flat_map(|row| {
+                (0..grid_cols).map(move |col| (row, col))
+            }).map(|(row, col)| {
+                let x = padding + col as f64 * cell_w;
+                // Invert row so higher y is at top
+                let y = padding + (grid_rows - 1 - row) as f64 * cell_h;
+                let intensity = if max_count == 0 { 0.0 } else { grid[row][col] as f64 / max_count as f64 };
+                let opacity = 0.1 + intensity * 0.9;
+                view! {
+                    <rect x=x y=y width=cell_w height=cell_h fill="#14b8a6" opacity=opacity stroke="#0f172a" stroke-width="1"/>
+                }
+            }).collect();
+
+            view! {
+                <svg class="viz-chart" viewBox=format!("0 0 {} {}", width, height)>
+                    <line x1=padding y1=height-padding x2=width-padding y2=height-padding stroke="#94a3b8" stroke-width="2"/>
+                    <line x1=padding y1=padding x2=padding y2=height-padding stroke="#94a3b8" stroke-width="2"/>
+                    {cells}
+                </svg>
             }.into_view()
         }
     }

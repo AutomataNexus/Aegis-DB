@@ -91,6 +91,7 @@ pub struct DashboardContext {
     pub edit_user_2fa: RwSignal<bool>,
     pub new_user_name: RwSignal<String>,
     pub new_user_email: RwSignal<String>,
+    pub new_user_password: RwSignal<String>,
     pub new_user_role: RwSignal<String>,
     pub new_user_2fa: RwSignal<bool>,
     pub users_list: RwSignal<Vec<(String, String, String, String, bool)>>,
@@ -98,6 +99,7 @@ pub struct DashboardContext {
     // Role management state
     pub show_add_role: RwSignal<bool>,
     pub new_role_name: RwSignal<String>,
+    pub new_role_description: RwSignal<String>,
     pub roles_list: RwSignal<Vec<(String, String, Vec<String>)>>,
 
     // General Settings state
@@ -210,24 +212,16 @@ impl DashboardContext {
             edit_user_2fa: create_rw_signal(false),
             new_user_name: create_rw_signal(String::new()),
             new_user_email: create_rw_signal(String::new()),
+            new_user_password: create_rw_signal(String::new()),
             new_user_role: create_rw_signal("viewer".to_string()),
             new_user_2fa: create_rw_signal(false),
-            users_list: create_rw_signal(vec![
-                ("user-1".to_string(), "Admin User".to_string(), "admin@aegis.db".to_string(), "admin".to_string(), true),
-                ("user-2".to_string(), "John Developer".to_string(), "john@company.com".to_string(), "developer".to_string(), true),
-                ("user-3".to_string(), "Jane Analyst".to_string(), "jane@company.com".to_string(), "analyst".to_string(), false),
-                ("user-4".to_string(), "Demo User".to_string(), "demo@aegis.db".to_string(), "viewer".to_string(), false),
-            ]),
+            users_list: create_rw_signal(vec![]),
 
             // Role management state
             show_add_role: create_rw_signal(false),
             new_role_name: create_rw_signal(String::new()),
-            roles_list: create_rw_signal(vec![
-                ("admin".to_string(), "Full access to all features".to_string(), vec!["*".to_string()]),
-                ("developer".to_string(), "Read/write access to data".to_string(), vec!["data:read".to_string(), "data:write".to_string(), "query:execute".to_string()]),
-                ("analyst".to_string(), "Read-only access to data and metrics".to_string(), vec!["data:read".to_string(), "metrics:read".to_string()]),
-                ("viewer".to_string(), "View-only dashboard access".to_string(), vec!["dashboard:view".to_string()]),
-            ]),
+            new_role_description: create_rw_signal(String::new()),
+            roles_list: create_rw_signal(vec![]),
 
             // General Settings state
             replication_factor: create_rw_signal(3),
