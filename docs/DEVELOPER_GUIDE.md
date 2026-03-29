@@ -2187,7 +2187,7 @@ pub fn UserMenu() -> impl IntoView {
 
 ## Performance Optimization
 
-### Benchmark Results (v0.2.5)
+### Benchmark Results (v0.2.6)
 
 | Workload | Throughput |
 |----------|-----------|
@@ -2353,7 +2353,7 @@ fn debug_validate(&self) {
 
 ```bash
 # Update version in all Cargo.toml files
-./scripts/bump-version.sh 0.2.5
+./scripts/bump-version.sh 0.2.6
 ```
 
 ### Release Checklist
@@ -2373,17 +2373,17 @@ fn debug_validate(&self) {
 
 3. **Create Release:**
    ```bash
-   git tag -a v0.2.5 -m "Release v0.2.5"
-   git push origin v0.2.5
+   git tag -a v0.2.6 -m "Release v0.2.6"
+   git push origin v0.2.6
    ```
 
 4. **Build Artifacts:**
    ```bash
    ./scripts/release.sh
    # Creates:
-   # - aegis-db-0.2.5-linux-x86_64.tar.gz
-   # - aegis-db-0.2.5-macos-x86_64.tar.gz
-   # - aegis-db-0.2.5-windows-x86_64.zip
+   # - aegis-db-0.2.6-linux-x86_64.tar.gz
+   # - aegis-db-0.2.6-macos-x86_64.tar.gz
+   # - aegis-db-0.2.6-windows-x86_64.zip
    ```
 
 5. **Publish to crates.io (if applicable):**

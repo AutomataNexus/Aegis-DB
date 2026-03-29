@@ -9,7 +9,7 @@ description: "Rust crate architecture and documentation"
 # Crate Documentation
 {: .no_toc }
 
-Aegis-DB v0.2.5 is built as a Rust workspace with 13 specialized crates and 634 tests.
+Aegis-DB v0.2.6 is built as a Rust workspace with 13 specialized crates and 634 tests.
 
 ---
 
