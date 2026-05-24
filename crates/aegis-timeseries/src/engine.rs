@@ -196,6 +196,15 @@ impl TimeSeriesEngine {
             stats.bytes_written += (points.len() * 16) as u64;
         }
 
+        // Global memory pressure check — compress all buffers when total
+        // raw point memory exceeds 150MB. Prevents unbounded RSS growth
+        // across hundreds of series that individually stay below the
+        // per-buffer compression_threshold.
+        const MEMORY_PRESSURE_BYTES: usize = 150 * 1024 * 1024;
+        if self.memory_usage() > MEMORY_PRESSURE_BYTES {
+            self.compact();
+        }
+
         Ok(())
     }
 
@@ -383,6 +392,27 @@ impl TimeSeriesEngine {
         }
     }
 
+    /// Prune data points older than `cutoff` from all series buffers.
+    /// Returns the number of points removed.
+    pub fn prune_before(&self, cutoff: chrono::DateTime<Utc>) -> usize {
+        let mut data = self.series_data.write();
+        let mut total_removed = 0;
+        let mut empty_keys = Vec::new();
+
+        for (key, buffer) in data.iter_mut() {
+            total_removed += buffer.prune_before(cutoff);
+            if buffer.points.is_empty() && buffer.compressed_blocks.is_empty() {
+                empty_keys.push(key.clone());
+            }
+        }
+
+        for key in &empty_keys {
+            data.remove(key);
+        }
+
+        total_removed
+    }
+
     /// Flush all pending writes to disk.
     pub fn flush(&self) {
         if let Some(ref pm) = self.persistence {
@@ -404,6 +434,7 @@ impl TimeSeriesEngine {
                             .iter()
                             .map(PersistedBlock::from)
                             .collect(),
+                        nc_frames: buffer.nc_frames.clone(),
                     })
                     .collect()
             };
@@ -462,6 +493,7 @@ impl TimeSeriesEngine {
                         .into_iter()
                         .map(CompressedBlock::from)
                         .collect(),
+                    nc_frames: ps.nc_frames,
                 };
 
                 data.insert(ps.series_id, buffer);
@@ -480,12 +512,56 @@ impl Default for TimeSeriesEngine {
 // Series Buffer
 // =============================================================================
 
+/// NexusCompress frame — stores compressed timeseries data with timestamp
+/// bounds for range-skip during queries.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NcFrame {
+    data: Vec<u8>,
+    count: usize,
+    first_ts_ms: i64,
+    last_ts_ms: i64,
+}
+
+impl NcFrame {
+    fn decompress_points(&self) -> Vec<DataPoint> {
+        use nexuscompress_core::{DType, Domain, schema::SchemaBuilder};
+        use nexuscompress_timeseries::TimeSeriesCompressor;
+
+        let schema = SchemaBuilder::new()
+            .type_name("timeseries")
+            .domain(Domain::TimeSeries)
+            .field("timestamp", DType::I64)
+            .field("value", DType::F64)
+            .build();
+        let nc = TimeSeriesCompressor::from_schema(schema);
+        let fields = match nc.decompress_batch(&self.data) {
+            Ok(f) => f,
+            Err(_) => return Vec::new(),
+        };
+        if fields.len() < 2 {
+            return Vec::new();
+        }
+        let ts_bytes = &fields[0];
+        let val_bytes = &fields[1];
+        let n = ts_bytes.len() / 8;
+        (0..n)
+            .filter_map(|i| {
+                let ts_ms = i64::from_le_bytes(ts_bytes[i * 8..(i + 1) * 8].try_into().ok()?);
+                let val = f64::from_le_bytes(val_bytes[i * 8..(i + 1) * 8].try_into().ok()?);
+                let dt = chrono::DateTime::from_timestamp_millis(ts_ms)?;
+                Some(DataPoint { timestamp: dt, value: val })
+            })
+            .collect()
+    }
+}
+
 /// Buffer for a single time series.
 struct SeriesBuffer {
     metric: Metric,
     tags: Tags,
     points: Vec<DataPoint>,
     compressed_blocks: Vec<CompressedBlock>,
+    nc_frames: Vec<NcFrame>,
 }
 
 impl SeriesBuffer {
@@ -495,6 +571,7 @@ impl SeriesBuffer {
             tags,
             points: Vec::new(),
             compressed_blocks: Vec::new(),
+            nc_frames: Vec::new(),
         }
     }
 
@@ -507,14 +584,64 @@ impl SeriesBuffer {
             return;
         }
 
-        let mut compressor = Compressor::new();
-        for point in &self.points {
-            compressor.compress(point);
-        }
+        use nexuscompress_core::{DType, Domain, schema::SchemaBuilder};
+        use nexuscompress_timeseries::TimeSeriesCompressor;
 
-        let block = compressor.finish();
-        self.compressed_blocks.push(block);
-        self.points.clear();
+        let schema = SchemaBuilder::new()
+            .type_name("timeseries")
+            .domain(Domain::TimeSeries)
+            .field("timestamp", DType::I64)
+            .field("value", DType::F64)
+            .build();
+        let nc = TimeSeriesCompressor::from_schema(schema);
+        let timestamps: Vec<u8> = self.points.iter()
+            .flat_map(|p| p.timestamp.timestamp_millis().to_le_bytes())
+            .collect();
+        let values: Vec<u8> = self.points.iter()
+            .flat_map(|p| p.value.to_le_bytes())
+            .collect();
+        let first_ts = self.points.first().map(|p| p.timestamp.timestamp_millis()).unwrap_or(0);
+        let last_ts = self.points.last().map(|p| p.timestamp.timestamp_millis()).unwrap_or(0);
+        let count = self.points.len();
+
+        match nc.compress_batch(&vec![timestamps, values], count as u64) {
+            Ok(frame_data) => {
+                self.nc_frames.push(NcFrame {
+                    data: frame_data,
+                    count,
+                    first_ts_ms: first_ts,
+                    last_ts_ms: last_ts,
+                });
+                self.points.clear();
+            }
+            Err(e) => {
+                eprintln!("NexusCompress failed, falling back to Gorilla: {e}");
+                let mut compressor = Compressor::new();
+                for point in &self.points {
+                    compressor.compress(point);
+                }
+                self.compressed_blocks.push(compressor.finish());
+                self.points.clear();
+            }
+        }
+    }
+
+    fn prune_before(&mut self, cutoff: chrono::DateTime<Utc>) -> usize {
+        let before = self.points.len();
+        self.points.retain(|p| p.timestamp >= cutoff);
+        let points_removed = before - self.points.len();
+
+        let cutoff_ms = cutoff.timestamp_millis();
+
+        self.compressed_blocks.retain(|block| {
+            let mut d = Decompressor::new(block);
+            let pts = d.decompress_all();
+            pts.iter().any(|p| p.timestamp >= cutoff)
+        });
+
+        self.nc_frames.retain(|f| f.last_ts_ms >= cutoff_ms);
+
+        points_removed
     }
 
     fn to_series(&self) -> Series {
@@ -525,36 +652,44 @@ impl SeriesBuffer {
             all_points.extend(decompressor.decompress_all());
         }
 
+        for frame in &self.nc_frames {
+            all_points.extend(frame.decompress_points());
+        }
+
         all_points.extend(self.points.clone());
         all_points.sort_by_key(|p| p.timestamp);
 
         Series::with_points(self.metric.clone(), self.tags.clone(), all_points)
     }
 
-    /// Query-optimized version that skips blocks outside the time range.
     fn to_series_in_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Series {
         let mut all_points = Vec::new();
         let start_ms = start.timestamp_millis();
         let end_ms = end.timestamp_millis();
 
         for block in &self.compressed_blocks {
-            // Skip blocks entirely outside the query range
             if block.last_timestamp < start_ms || block.first_timestamp > end_ms {
                 continue;
             }
-
             let mut decompressor = Decompressor::new(block);
             let points = decompressor.decompress_all();
             all_points.extend(
-                points
-                    .into_iter()
+                points.into_iter().filter(|p| p.timestamp >= start && p.timestamp < end),
+            );
+        }
+
+        for frame in &self.nc_frames {
+            if frame.last_ts_ms < start_ms || frame.first_ts_ms > end_ms {
+                continue;
+            }
+            all_points.extend(
+                frame.decompress_points().into_iter()
                     .filter(|p| p.timestamp >= start && p.timestamp < end),
             );
         }
 
         all_points.extend(
-            self.points
-                .iter()
+            self.points.iter()
                 .filter(|p| p.timestamp >= start && p.timestamp < end)
                 .cloned(),
         );
@@ -566,7 +701,8 @@ impl SeriesBuffer {
     fn memory_usage(&self) -> usize {
         let points_size = self.points.len() * std::mem::size_of::<DataPoint>();
         let blocks_size: usize = self.compressed_blocks.iter().map(|b| b.data.len()).sum();
-        points_size + blocks_size
+        let nc_size: usize = self.nc_frames.iter().map(|f| f.data.len()).sum();
+        points_size + blocks_size + nc_size
     }
 }
 

@@ -1550,6 +1550,22 @@ impl QueryEngine {
             .unwrap_or_default()
     }
 
+    /// Vacuum all tables in all databases — physically remove deleted rows.
+    pub fn vacuum_all(&self) -> usize {
+        let contexts = self.contexts.read().unwrap();
+        let mut total = 0;
+        for (db_name, ctx_lock) in contexts.iter() {
+            if let Ok(mut ctx) = ctx_lock.write() {
+                let n = ExecutionContext::vacuum_all(&mut ctx);
+                if n > 0 {
+                    tracing::info!("Vacuumed {} rows from database '{}'", n, db_name);
+                }
+                total += n;
+            }
+        }
+        total
+    }
+
     /// List all databases.
     pub fn list_databases(&self) -> Vec<String> {
         self.contexts

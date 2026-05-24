@@ -21,6 +21,8 @@ bincode = { workspace = true }
 parking_lot = { workspace = true }
 crc32fast = "1.4"
 regex = "1.10"
+nexuscompress-core = { workspace = true }
+nexuscompress-timeseries = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

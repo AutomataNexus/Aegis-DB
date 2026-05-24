@@ -31,6 +31,8 @@ pub struct PersistedSeries {
     pub tags: Tags,
     pub points: Vec<DataPoint>,
     pub compressed_blocks: Vec<PersistedBlock>,
+    #[serde(default)]
+    pub nc_frames: Vec<crate::engine::NcFrame>,
 }
 
 /// Serializable representation of a compressed block.

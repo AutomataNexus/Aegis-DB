@@ -318,6 +318,62 @@ async fn main() {
         });
     }
 
+    // Periodic retention — prune timeseries data older than retention_days,
+    // vacuum SQL tables, compact series buffers. Runs every 30 minutes to
+    // keep memory bounded (aegis-server was hitting 3GB+ RSS in hours).
+    {
+        let state_for_retention = state_for_shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(30 * 60));
+            loop {
+                interval.tick().await;
+                let retention_days = {
+                    let s = state_for_retention.settings.read().await;
+                    s.retention_days.max(1)
+                };
+                let cutoff =
+                    chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+                let removed = state_for_retention.timeseries_engine.prune_before(cutoff);
+                state_for_retention.timeseries_engine.compact();
+                if removed > 0 {
+                    tracing::info!(
+                        "Retention: pruned {} old data points (cutoff={}d)",
+                        removed,
+                        retention_days
+                    );
+                }
+
+                // SQL table retention — DELETE rows older than retention_days
+                // from tables that have a 'timestamp' column, then vacuum.
+                // This preserves up to retention_days of trend data.
+                let cutoff_ms = cutoff.timestamp_millis();
+                let tables = state_for_retention.query_engine.list_tables(None);
+                for table in &tables {
+                    let sql = format!(
+                        "DELETE FROM \"{}\" WHERE timestamp < {}",
+                        table.replace('"', "\"\""),
+                        cutoff_ms
+                    );
+                    // Ignore errors — table may not have a timestamp column
+                    let _ = state_for_retention.query_engine.execute(&sql, None);
+                }
+
+                let vacuumed = state_for_retention.query_engine.vacuum_all();
+                if vacuumed > 0 {
+                    tracing::info!(
+                        "Retention+vacuum: removed {} expired rows from SQL tables (cutoff={}d)",
+                        vacuumed, retention_days
+                    );
+                    if let Err(e) = state_for_retention.save_to_disk() {
+                        tracing::warn!("Post-vacuum save failed: {e}");
+                    }
+                }
+            }
+        });
+    }
+
     // Start peer discovery and heartbeat task
     let state_for_cluster = state_for_shutdown.clone();
     let peers_for_task = peers.clone();
@@ -411,10 +467,28 @@ async fn main() {
             .await
             .expect("Server error");
     } else {
-        // HTTP mode
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .expect("Failed to bind to address");
+        // HTTP mode — with TCP keepalive to prevent CLOSE-WAIT socket leak
+        let std_listener = {
+            let socket = socket2::Socket::new(
+                socket2::Domain::for_address(addr),
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )
+            .expect("Failed to create socket");
+            socket.set_reuse_address(true).ok();
+            let keepalive = socket2::TcpKeepalive::new()
+                .with_time(std::time::Duration::from_secs(60))
+                .with_interval(std::time::Duration::from_secs(15));
+            socket.set_tcp_keepalive(&keepalive).ok();
+            socket
+                .bind(&socket2::SockAddr::from(addr))
+                .expect("Failed to bind to address");
+            socket.listen(1024).expect("Failed to listen");
+            socket.set_nonblocking(true).ok();
+            std::net::TcpListener::from(socket)
+        };
+        let listener = tokio::net::TcpListener::from_std(std_listener)
+            .expect("Failed to create tokio listener");
 
         tracing::info!("Aegis Server listening on http://{}", addr);
         tracing::info!("Dashboard API ready at http://{}/api/v1", addr);

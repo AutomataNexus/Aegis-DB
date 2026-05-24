@@ -60,6 +60,8 @@ rand = "0.8"
 aes-gcm = { workspace = true }
 hex = "0.4"
 getrandom = "0.2"
+# TCP keepalive for connection leak prevention
+socket2 = "0.5"
 # TLS support
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls-pemfile = "2.0"

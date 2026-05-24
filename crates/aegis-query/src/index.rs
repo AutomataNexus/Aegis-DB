@@ -639,6 +639,33 @@ impl TableIndexManager {
         Ok(())
     }
 
+    /// Clear all indexes and re-insert every row. Called after vacuum
+    /// physically removes rows, which shifts all row_ids.
+    pub fn rebuild_all(&self, columns: &[String], rows: &[aegis_common::Row]) {
+        // Clear existing index data
+        if let Ok(btree) = self.btree_indexes.read() {
+            for index in btree.values() {
+                index.clear();
+            }
+        }
+        if let Ok(hash) = self.hash_indexes.read() {
+            for index in hash.values() {
+                index.clear();
+            }
+        }
+
+        // Re-insert every row with its new position
+        for (row_id, row) in rows.iter().enumerate() {
+            let mut col_vals = HashMap::new();
+            for (i, col) in columns.iter().enumerate() {
+                if let Some(v) = row.values.get(i) {
+                    col_vals.insert(col.clone(), v.clone());
+                }
+            }
+            let _ = self.insert_row(row_id, &col_vals);
+        }
+    }
+
     /// Remove a row from all indexes.
     pub fn remove_row(&self, row_id: RowId, column_values: &HashMap<String, Value>) {
         // Remove from B-tree indexes

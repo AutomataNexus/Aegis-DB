@@ -1081,26 +1081,69 @@ impl ExecutionContext {
             }
         }
 
-        // If no active snapshot, physically remove deleted rows (compaction)
-        if self.snapshot_version.is_none() {
-            let mut i = 0;
-            while i < table_data.rows.len() {
-                let del_ver = table_data.row_deleted_version.get(i).copied().unwrap_or(0);
-                if del_ver > 0 {
-                    table_data.rows.remove(i);
-                    if i < table_data.row_created_version.len() {
-                        table_data.row_created_version.remove(i);
-                    }
-                    if i < table_data.row_deleted_version.len() {
-                        table_data.row_deleted_version.remove(i);
-                    }
-                } else {
-                    i += 1;
+        // Logical delete only — physical row removal is deferred to
+        // vacuum/compaction which rebuilds indexes. Inline compaction here
+        // corrupted index row_ids and caused persistent HTTP 500 on all
+        // subsequent writes (the indexes pointed at shifted/missing rows).
+
+        Ok(deleted)
+    }
+
+    /// Vacuum a table — physically remove logically-deleted rows and rebuild
+    /// all indexes. Safe to call at any time when no snapshot is active.
+    /// Returns the number of rows physically removed.
+    pub fn vacuum_table(&mut self, table_name: &str) -> Result<usize, String> {
+        if self.snapshot_version.is_some() {
+            return Err("Cannot vacuum during an active transaction".to_string());
+        }
+
+        let table = self
+            .tables
+            .get(table_name)
+            .ok_or_else(|| format!("Table not found: {table_name}"))?
+            .clone();
+        let mut guard = table
+            .write()
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
+
+        let mut removed = 0;
+        let mut i = 0;
+        while i < guard.rows.len() {
+            let del_ver = guard.row_deleted_version.get(i).copied().unwrap_or(0);
+            if del_ver > 0 {
+                guard.rows.remove(i);
+                if i < guard.row_created_version.len() {
+                    guard.row_created_version.remove(i);
                 }
+                if i < guard.row_deleted_version.len() {
+                    guard.row_deleted_version.remove(i);
+                }
+                removed += 1;
+            } else {
+                i += 1;
             }
         }
 
-        Ok(deleted)
+        if removed > 0 {
+            if let Some(index_mgr) = self.table_indexes.get(table_name) {
+                index_mgr.rebuild_all(&guard.columns, &guard.rows);
+            }
+        }
+
+        Ok(removed)
+    }
+
+    /// Vacuum all tables. Returns total rows removed.
+    pub fn vacuum_all(&mut self) -> usize {
+        let table_names: Vec<String> = self.tables.keys().cloned().collect();
+        let mut total = 0;
+        for name in table_names {
+            match self.vacuum_table(&name) {
+                Ok(n) => total += n,
+                Err(e) => eprintln!("Vacuum failed for {name}: {e}"),
+            }
+        }
+        total
     }
 }
 

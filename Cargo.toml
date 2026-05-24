@@ -23,7 +23,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.2.6"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["AutomataNexus Development Team"]
@@ -122,6 +122,10 @@ aegis-updates = { version = "0.2.6", path = "crates/aegis-updates" }
 aegis-db-vault = { version = "0.2.6", path = "crates/aegis-vault" }
 aegis-vault = { version = "0.2.6", path = "crates/aegis-vault", package = "aegis-db-vault" }
 aegis-shield = { version = "0.2.6", path = "crates/aegis-shield" }
+
+# Optional compression (NexusCompress)
+nexuscompress-core = { git = "https://github.com/AutomataNexus/NexusCompress.git", branch = "main" }
+nexuscompress-timeseries = { git = "https://github.com/AutomataNexus/NexusCompress.git", branch = "main" }
 
 [profile.release]
 lto = "thin"

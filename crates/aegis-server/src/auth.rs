@@ -309,9 +309,20 @@ pub struct AuthService {
     users: RwLock<HashMap<String, User>>,
     sessions: RwLock<HashMap<String, Session>>,
     pending_mfa: RwLock<HashMap<String, PendingMfaSession>>,
+    api_keys: RwLock<HashMap<String, ApiKey>>,
     session_duration: Duration,
     mfa_timeout: Duration,
     data_dir: Option<PathBuf>,
+}
+
+/// Persistent API key — never expires, used by controllers and services.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKey {
+    pub key: String,
+    pub name: String,
+    pub user_id: String,
+    pub role: UserRole,
+    pub created_at: u64,
 }
 
 impl AuthService {
@@ -415,10 +426,24 @@ impl AuthService {
             );
         }
 
+        let mut api_keys: HashMap<String, ApiKey> = HashMap::new();
+        if let Some(ref dir) = data_dir {
+            let keys_path = dir.join("api_keys.json");
+            if keys_path.exists() {
+                if let Ok(data) = std::fs::read_to_string(&keys_path) {
+                    if let Ok(loaded) = serde_json::from_str::<HashMap<String, ApiKey>>(&data) {
+                        tracing::info!("Loaded {} API keys from {}", loaded.len(), keys_path.display());
+                        api_keys = loaded;
+                    }
+                }
+            }
+        }
+
         let service = Self {
             users: RwLock::new(users),
             sessions: RwLock::new(HashMap::new()),
             pending_mfa: RwLock::new(HashMap::new()),
+            api_keys: RwLock::new(api_keys),
             session_duration: Duration::from_secs(24 * 60 * 60), // 24 hours
             mfa_timeout: Duration::from_secs(5 * 60),            // 5 minutes
             data_dir,
@@ -547,19 +572,74 @@ impl AuthService {
         AuthResponse::success(token, UserInfo::from(user))
     }
 
-    /// Validate a session token and return user info.
+    /// Validate a session token or persistent API key and return user info.
     pub fn validate_session(&self, token: &str) -> Option<UserInfo> {
-        let sessions = self.sessions.read();
-        let session = sessions.get(token)?;
-
-        if session.is_expired() {
-            return None;
+        // Check session tokens first
+        {
+            let sessions = self.sessions.read();
+            if let Some(session) = sessions.get(token) {
+                if !session.is_expired() {
+                    let users = self.users.read();
+                    if let Some(user) = users.values().find(|u| u.id == session.user_id) {
+                        return Some(UserInfo::from(user));
+                    }
+                }
+            }
         }
 
-        let users = self.users.read();
-        let user = users.values().find(|u| u.id == session.user_id)?;
+        // Fall back to persistent API keys (never expire)
+        let api_keys = self.api_keys.read();
+        if let Some(api_key) = api_keys.get(token) {
+            return Some(UserInfo {
+                id: api_key.user_id.clone(),
+                username: api_key.name.clone(),
+                email: String::new(),
+                role: api_key.role,
+                mfa_enabled: false,
+                created_at: String::new(),
+            });
+        }
 
-        Some(UserInfo::from(user))
+        None
+    }
+
+    /// Create a persistent API key for a service or controller.
+    pub fn create_api_key(&self, name: &str, role: UserRole) -> String {
+        let key = format!("ak_{}", generate_token());
+        let api_key = ApiKey {
+            key: key.clone(),
+            name: name.to_string(),
+            user_id: format!("apikey-{}", name.to_lowercase().replace(' ', "-")),
+            role,
+            created_at: now_timestamp(),
+        };
+        self.api_keys.write().insert(key.clone(), api_key);
+        self.persist_api_keys();
+        key
+    }
+
+    /// List all API keys (without exposing the full key).
+    pub fn list_api_keys(&self) -> Vec<ApiKey> {
+        self.api_keys.read().values().cloned().collect()
+    }
+
+    /// Revoke an API key.
+    pub fn revoke_api_key(&self, key: &str) -> bool {
+        let removed = self.api_keys.write().remove(key).is_some();
+        if removed {
+            self.persist_api_keys();
+        }
+        removed
+    }
+
+    fn persist_api_keys(&self) {
+        if let Some(ref dir) = self.data_dir {
+            let keys_path = dir.join("api_keys.json");
+            let keys = self.api_keys.read();
+            if let Ok(json) = serde_json::to_string_pretty(&*keys) {
+                let _ = std::fs::write(&keys_path, json);
+            }
+        }
     }
 
     /// Logout and invalidate session.
