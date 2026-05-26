@@ -21,6 +21,12 @@ pub struct AutoBlocker {
     allowlist: RwLock<HashSet<String>>,
 }
 
+impl Default for AutoBlocker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AutoBlocker {
     pub fn new() -> Self {
         Self {
@@ -94,7 +100,7 @@ impl AutoBlocker {
         self.blocked
             .read()
             .values()
-            .filter(|e| e.expires_at.map_or(true, |exp| now < exp))
+            .filter(|e| e.expires_at.is_none_or(|exp| now < exp))
             .cloned()
             .collect()
     }
@@ -109,7 +115,7 @@ impl AutoBlocker {
         let now = chrono::Utc::now().timestamp() as u64;
         self.blocked
             .write()
-            .retain(|_, e| e.expires_at.map_or(true, |exp| now < exp));
+            .retain(|_, e| e.expires_at.is_none_or(|exp| now < exp));
     }
 }
 

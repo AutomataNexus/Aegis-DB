@@ -206,8 +206,7 @@ impl AppState {
             let binary_path =
                 std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aegis-server"));
             let base_dir = data_dir
-                .as_ref()
-                .map(|d| d.clone())
+                .clone()
                 .unwrap_or_else(|| PathBuf::from("/tmp/aegis-updates"));
             Arc::new(UpdateOrchestrator::new(
                 binary_path,
@@ -231,7 +230,10 @@ impl AppState {
             kv_store,
             metrics: Arc::new(RwLock::new(Metrics::default())),
             admin,
-            auth: Arc::new(AuthService::with_data_dir_and_secrets(data_dir.clone(), secrets)),
+            auth: Arc::new(AuthService::with_data_dir_and_secrets(
+                data_dir.clone(),
+                secrets,
+            )),
             activity,
             settings: Arc::new(RwLock::new({
                 let mut loaded_settings = ServerSettings::default();

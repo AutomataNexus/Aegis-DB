@@ -274,7 +274,9 @@ impl VaultStore {
 
         // Validate decrypted data is valid UTF-8 before parsing
         let json_str = std::str::from_utf8(&json).map_err(|_| {
-            VaultError::Other("decrypted vault data is not valid UTF-8 — file may be corrupt".into())
+            VaultError::Other(
+                "decrypted vault data is not valid UTF-8 — file may be corrupt".into(),
+            )
         })?;
 
         let data: VaultData = serde_json::from_str(json_str).map_err(|e| {

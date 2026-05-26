@@ -82,6 +82,12 @@ pub struct RequestFingerprinter {
     _private: (),
 }
 
+impl Default for RequestFingerprinter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RequestFingerprinter {
     pub fn new() -> Self {
         Self { _private: () }
@@ -169,10 +175,11 @@ impl RequestFingerprinter {
         }
 
         // Missing common browser headers when claiming to be a browser
-        if class == UserAgentClass::Browser {
-            if !headers.contains_key("accept") && !headers.contains_key("Accept") {
-                score += 10;
-            }
+        if class == UserAgentClass::Browser
+            && !headers.contains_key("accept")
+            && !headers.contains_key("Accept")
+        {
+            score += 10;
         }
 
         RequestFingerprint {

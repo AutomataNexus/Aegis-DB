@@ -39,19 +39,15 @@ use std::sync::Arc;
 /// Scope of data deletion.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DeletionScope {
     /// Delete all data for the subject
+    #[default]
     All,
     /// Delete only from specific collections/tables
     SpecificCollections { collections: Vec<String> },
     /// Delete all data except audit logs (for legal hold)
     ExcludeAuditLogs,
-}
-
-impl Default for DeletionScope {
-    fn default() -> Self {
-        DeletionScope::All
-    }
 }
 
 // =============================================================================
@@ -61,17 +57,13 @@ impl Default for DeletionScope {
 /// Export format for data portability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ExportFormat {
     /// JSON format - machine-readable, nested structure
+    #[default]
     Json,
     /// CSV format - flat structure for spreadsheets
     Csv,
-}
-
-impl Default for ExportFormat {
-    fn default() -> Self {
-        ExportFormat::Json
-    }
 }
 
 /// Scope of data export.

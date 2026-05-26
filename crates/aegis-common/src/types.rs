@@ -303,8 +303,8 @@ impl KeyRange {
     }
 
     pub fn contains(&self, key: &[u8]) -> bool {
-        let after_start = self.start.as_ref().map_or(true, |s| key >= s.as_slice());
-        let before_end = self.end.as_ref().map_or(true, |e| key < e.as_slice());
+        let after_start = self.start.as_ref().is_none_or(|s| key >= s.as_slice());
+        let before_end = self.end.as_ref().is_none_or(|e| key < e.as_slice());
         after_start && before_end
     }
 }

@@ -59,6 +59,12 @@ pub struct TransitEngine {
     keys: RwLock<HashMap<String, TransitKey>>,
 }
 
+impl Default for TransitEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransitEngine {
     pub fn new() -> Self {
         Self {

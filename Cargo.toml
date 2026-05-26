@@ -25,7 +25,7 @@ exclude = [
 [workspace.package]
 version = "0.2.6"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 authors = ["AutomataNexus Development Team"]
 license = "LicenseRef-BSL-1.1"
 repository = "https://github.com/AutomataNexus/Aegis-DB"

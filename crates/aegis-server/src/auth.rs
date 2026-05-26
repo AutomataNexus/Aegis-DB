@@ -386,8 +386,7 @@ impl AuthService {
         if let (Some(username), Some(password)) = (admin_username, admin_password) {
             if !users.contains_key(&username) {
                 if password.len() >= 12 {
-                    let email =
-                        admin_email.unwrap_or_else(|| format!("{}@localhost", username));
+                    let email = admin_email.unwrap_or_else(|| format!("{}@localhost", username));
 
                     let user_count = users.len() + 1;
                     let admin = User {
@@ -401,7 +400,10 @@ impl AuthService {
                         created_at: now_timestamp(),
                         last_login: None,
                     };
-                    tracing::info!("Created initial admin user '{}' from secrets provider", username);
+                    tracing::info!(
+                        "Created initial admin user '{}' from secrets provider",
+                        username
+                    );
                     users.insert(admin.username.clone(), admin);
                 } else {
                     tracing::warn!(

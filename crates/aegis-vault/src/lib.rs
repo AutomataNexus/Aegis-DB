@@ -158,10 +158,7 @@ impl AegisVault {
                         }
                         std::fs::write(kp, &blob)?;
                         #[cfg(unix)]
-                        std::fs::set_permissions(
-                            kp,
-                            std::fs::Permissions::from_mode(0o600),
-                        )?;
+                        std::fs::set_permissions(kp, std::fs::Permissions::from_mode(0o600))?;
                         tracing::info!("Vault key persisted to disk");
                     }
                 }

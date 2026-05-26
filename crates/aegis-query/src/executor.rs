@@ -3754,7 +3754,7 @@ fn evaluate_function(name: &str, args: &[Value]) -> ExecutorResult<Value> {
             Ok(Value::String(s.replace(&from, &to)))
         }
         "CONCAT" => {
-            let result: String = args.iter().map(|a| value_to_string(a)).collect();
+            let result: String = args.iter().map(value_to_string).collect();
             Ok(Value::String(result))
         }
         _ => Err(ExecutorError::InvalidOperation(format!(

@@ -55,6 +55,12 @@ pub struct SealManager {
     encrypted_key_blob: RwLock<Option<Vec<u8>>>,
 }
 
+impl Default for SealManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SealManager {
     pub fn new() -> Self {
         Self {

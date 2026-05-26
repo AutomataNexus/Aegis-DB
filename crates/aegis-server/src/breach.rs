@@ -511,7 +511,11 @@ impl BreachNotifier for LogNotifier {
         let mut writer = self.writer.write();
         // Reopen the file if the writer was lost (e.g., log rotation)
         if writer.is_none() {
-            match OpenOptions::new().create(true).append(true).open(&self.log_path) {
+            match OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.log_path)
+            {
                 Ok(file) => {
                     *writer = Some(BufWriter::new(file));
                 }
@@ -805,9 +809,7 @@ impl BreachDetector {
         // Track access pattern
         {
             let mut patterns = self.access_patterns.write();
-            let queue = patterns
-                .entry(user.to_string())
-                .or_insert_with(VecDeque::new);
+            let queue = patterns.entry(user.to_string()).or_default();
             queue.push_back(now);
         }
 
@@ -937,7 +939,7 @@ impl BreachDetector {
         // Track failed login
         let count = {
             let mut logins = self.failed_logins.write();
-            let queue = logins.entry(key.clone()).or_insert_with(VecDeque::new);
+            let queue = logins.entry(key.clone()).or_default();
             queue.push_back(now);
 
             // Remove old entries
@@ -1067,9 +1069,13 @@ impl BreachDetector {
             BreachSeverity::High
         };
 
-        let mut incident =
-            BreachIncident::new(event.event_type, severity, &event.description, &self.incident_counter)
-                .with_related_event(&event.id);
+        let mut incident = BreachIncident::new(
+            event.event_type,
+            severity,
+            &event.description,
+            &self.incident_counter,
+        )
+        .with_related_event(&event.id);
 
         if let Some(ref user) = event.user {
             incident = incident.with_affected_subject(user);
@@ -1109,9 +1115,13 @@ impl BreachDetector {
 
     /// Create a high severity incident.
     fn create_high_severity_incident(&self, event: &SecurityEvent) -> Option<BreachIncident> {
-        let mut incident =
-            BreachIncident::new(event.event_type, BreachSeverity::High, &event.description, &self.incident_counter)
-                .with_related_event(&event.id);
+        let mut incident = BreachIncident::new(
+            event.event_type,
+            BreachSeverity::High,
+            &event.description,
+            &self.incident_counter,
+        )
+        .with_related_event(&event.id);
 
         if let Some(ref user) = event.user {
             incident = incident.with_affected_subject(user);
@@ -1798,9 +1808,13 @@ mod tests {
     #[test]
     fn test_security_event_creation() {
         let counter = AtomicU64::new(1);
-        let event = SecurityEvent::new(SecurityEventType::FailedLogin, "Test failed login", &counter)
-            .with_user("testuser")
-            .with_ip("192.168.1.1");
+        let event = SecurityEvent::new(
+            SecurityEventType::FailedLogin,
+            "Test failed login",
+            &counter,
+        )
+        .with_user("testuser")
+        .with_ip("192.168.1.1");
 
         assert!(event.id.starts_with("evt-"));
         assert_eq!(event.event_type, SecurityEventType::FailedLogin);
@@ -1975,8 +1989,12 @@ mod tests {
     #[test]
     fn test_requires_immediate_notification() {
         let counter = AtomicU64::new(1);
-        let low_incident =
-            BreachIncident::new(SecurityEventType::FailedLogin, BreachSeverity::Low, "test", &counter);
+        let low_incident = BreachIncident::new(
+            SecurityEventType::FailedLogin,
+            BreachSeverity::Low,
+            "test",
+            &counter,
+        );
         assert!(!low_incident.requires_immediate_notification());
 
         let high_incident = BreachIncident::new(

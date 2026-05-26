@@ -48,6 +48,12 @@ pub struct IpReputationTracker {
     reputations: RwLock<HashMap<String, IpReputation>>,
 }
 
+impl Default for IpReputationTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IpReputationTracker {
     pub fn new() -> Self {
         Self {
@@ -149,7 +155,7 @@ impl IpReputationTracker {
         self.reputations
             .read()
             .values()
-            .filter(|r| r.banned_until.map_or(false, |u| now < u))
+            .filter(|r| r.banned_until.is_some_and(|u| now < u))
             .cloned()
             .collect()
     }

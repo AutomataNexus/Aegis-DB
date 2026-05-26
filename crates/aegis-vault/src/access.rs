@@ -46,6 +46,12 @@ pub struct AccessController {
     default_allow: bool,
 }
 
+impl Default for AccessController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AccessController {
     pub fn new() -> Self {
         Self {
