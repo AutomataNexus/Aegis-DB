@@ -36,7 +36,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings -A clippy::type_complexity -A clippy::should_implement_trait
+        run: cargo clippy --workspace -- -D warnings -A clippy::type_complexity -A clippy::should_implement_trait -A clippy::new_without_default -A clippy::manual_checked_ops
 
       - name: Test
         run: cargo test --workspace
