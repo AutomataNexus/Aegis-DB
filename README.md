@@ -11,8 +11,8 @@
 <p align="center">
   <a href="https://crates.io/crates/aegis-server"><img src="https://img.shields.io/crates/v/aegis-server.svg" alt="crates.io"></a>
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/tests-793%20passing-brightgreen.svg" alt="Tests">
-  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
+  <img src="https://img.shields.io/badge/tests-686%20passing-brightgreen.svg" alt="Tests">
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.85%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/paradigms-6-blueviolet.svg" alt="6 Data Paradigms">
   <img src="https://img.shields.io/badge/LOC-69K%2B-informational.svg" alt="Lines of Code">
 </p>
@@ -394,7 +394,7 @@ aegis-server (REST API - Axum)
         └── aegis-common (shared types, errors)
 ```
 
-13 crates, ~60,000 lines of Rust code, 635 tests.
+13 crates, ~60,000 lines of Rust code, 686 tests.
 
 ---
 
