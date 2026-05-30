@@ -110,6 +110,7 @@ async fn post_json_auth(
 }
 
 /// Helper to make a DELETE request with auth token.
+#[allow(dead_code)] // symmetric helper set (get/post/put/delete); kept for parity
 async fn delete_auth(app: &mut axum::Router, uri: &str, token: &str) -> (StatusCode, Value) {
     let response = app
         .call(
@@ -664,7 +665,7 @@ async fn test_activities_logged_after_login_e2e() {
 
     let activities = json.as_array().unwrap();
     // Should have activities (at least server startup + login)
-    assert!(activities.len() >= 1);
+    assert!(!activities.is_empty());
 }
 
 // =============================================================================
@@ -1768,7 +1769,7 @@ async fn test_complete_system_flow_e2e() {
     // 8. Check activities were logged (with auth)
     let (status, json) = get_json_auth(&mut app, "/api/v1/admin/activities", &token).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(json.as_array().unwrap().len() > 0);
+    assert!(!json.as_array().unwrap().is_empty());
 
     // 9. Get graph data (with auth)
     let (status, json) = get_json_auth(&mut app, "/api/v1/graph/data", &token).await;

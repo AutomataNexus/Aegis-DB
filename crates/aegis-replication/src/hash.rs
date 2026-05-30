@@ -287,7 +287,7 @@ impl RendezvousHash {
             })
             .collect();
 
-        weighted.sort_by(|a, b| b.0.cmp(&a.0));
+        weighted.sort_by_key(|w| std::cmp::Reverse(w.0));
 
         weighted
             .into_iter()

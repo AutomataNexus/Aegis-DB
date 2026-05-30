@@ -1870,10 +1870,11 @@ mod tests {
 
     #[test]
     fn test_metrics_calculations() {
-        let mut metrics = Metrics::default();
-        metrics.total_requests = 100;
-        metrics.failed_requests = 10;
-        metrics.total_duration_ms = 5000;
+        let metrics = Metrics {
+            total_requests: 100,
+            failed_requests: 10,
+            total_duration_ms: 5000,
+        };
 
         assert_eq!(metrics.avg_duration_ms(), 50.0);
         assert!((metrics.success_rate() - 0.9).abs() < 0.001);

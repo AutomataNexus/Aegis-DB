@@ -126,7 +126,7 @@ impl Analyzer {
         match stmt {
             Statement::Select(select) => {
                 let analyzed = self.analyze_select(select)?;
-                Ok(AnalyzedStatement::Select(analyzed))
+                Ok(AnalyzedStatement::Select(Box::new(analyzed)))
             }
             Statement::Insert(insert) => {
                 self.analyze_insert(insert)?;
@@ -486,7 +486,7 @@ impl Analyzer {
 /// Result of semantic analysis.
 #[derive(Debug, Clone)]
 pub enum AnalyzedStatement {
-    Select(AnalyzedSelect),
+    Select(Box<AnalyzedSelect>),
     Insert(InsertStatement),
     Update(UpdateStatement),
     Delete(DeleteStatement),

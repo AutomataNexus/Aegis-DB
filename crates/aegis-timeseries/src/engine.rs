@@ -761,7 +761,7 @@ mod tests {
 
         for i in 0..3 {
             let mut tags = Tags::new();
-            tags.insert("host", &format!("server{}", i));
+            tags.insert("host", format!("server{}", i));
             engine
                 .write_now("cpu", tags, 50.0)
                 .expect("write should succeed");

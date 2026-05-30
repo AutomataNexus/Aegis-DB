@@ -100,7 +100,7 @@ impl ThreatFeed {
             .iter()
             .map(|(ip, count)| (ip.clone(), *count))
             .collect();
-        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.1));
         entries.truncate(10);
         stats.top_offending_ips = entries;
 

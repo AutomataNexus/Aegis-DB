@@ -167,7 +167,15 @@ impl QueryExecutor {
                 }
 
                 if let Some(limit) = query.limit {
-                    s.points.truncate(limit);
+                    // Keep the most RECENT `limit` points, not the oldest. Points are
+                    // sorted ascending by timestamp on read, so `truncate(limit)` kept
+                    // the OLDEST N — making the latest reading appear stale and hiding
+                    // actively-reporting series downstream. Drop from the front so the
+                    // newest N remain (output stays ascending for `points.last()`).
+                    if s.points.len() > limit {
+                        let drop = s.points.len() - limit;
+                        s.points.drain(0..drop);
+                    }
                 }
 
                 s
@@ -307,6 +315,30 @@ mod tests {
 
         assert_eq!(result.series.len(), 1);
         assert!(result.points_returned > 0);
+    }
+
+    #[test]
+    fn test_query_limit_keeps_newest() {
+        // 100 points, 1/min, ALL in the past (value i at now-(100-i)min, ascending).
+        // With limit=5 the result must be the 5 MOST RECENT points (values 95..=99),
+        // not the oldest 5 (0..=4) — the regression that hid live equipment.
+        let now = Utc::now();
+        let points: Vec<DataPoint> = (0..100)
+            .map(|i| DataPoint {
+                timestamp: now - Duration::minutes((100 - i) as i64),
+                value: i as f64,
+            })
+            .collect();
+        let series = Series::with_points(Metric::gauge("test_metric"), Tags::new(), points);
+        let query = TimeSeriesQuery::last("test_metric", Duration::hours(3)).with_limit(5);
+
+        let result = QueryExecutor::execute(&query, vec![series]);
+
+        assert_eq!(result.series.len(), 1);
+        let pts = &result.series[0].points;
+        assert_eq!(pts.len(), 5);
+        assert_eq!(pts.first().unwrap().value, 95.0);
+        assert_eq!(pts.last().unwrap().value, 99.0); // newest reading, not stale
     }
 
     #[test]

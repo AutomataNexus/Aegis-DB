@@ -337,17 +337,17 @@ pub enum FieldType {
 
 impl FieldType {
     fn matches(&self, value: &Value) -> bool {
-        match (self, value) {
-            (Self::Any, _) => true,
-            (Self::String, Value::String(_)) => true,
-            (Self::Int, Value::Int(_)) => true,
-            (Self::Float, Value::Float(_)) => true,
-            (Self::Number, Value::Int(_) | Value::Float(_)) => true,
-            (Self::Bool, Value::Bool(_)) => true,
-            (Self::Array, Value::Array(_)) => true,
-            (Self::Object, Value::Object(_)) => true,
-            _ => false,
-        }
+        matches!(
+            (self, value),
+            (Self::Any, _)
+                | (Self::String, Value::String(_))
+                | (Self::Int, Value::Int(_))
+                | (Self::Float, Value::Float(_))
+                | (Self::Number, Value::Int(_) | Value::Float(_))
+                | (Self::Bool, Value::Bool(_))
+                | (Self::Array, Value::Array(_))
+                | (Self::Object, Value::Object(_))
+        )
     }
 }
 

@@ -399,11 +399,10 @@ impl QueryAnalyzer {
         // Determine query type
         let query_type = if query_upper.starts_with("SELECT") {
             QueryType::Read
-        } else if query_upper.starts_with("INSERT") {
-            QueryType::Write
-        } else if query_upper.starts_with("UPDATE") {
-            QueryType::Write
-        } else if query_upper.starts_with("DELETE") {
+        } else if query_upper.starts_with("INSERT")
+            || query_upper.starts_with("UPDATE")
+            || query_upper.starts_with("DELETE")
+        {
             QueryType::Write
         } else {
             QueryType::Admin
@@ -439,9 +438,9 @@ impl QueryAnalyzer {
                     let value_start = start + pattern.len();
                     let remaining = &query[value_start..];
 
-                    let value = if remaining.starts_with('\'') {
+                    let value = if let Some(rest) = remaining.strip_prefix('\'') {
                         // String value
-                        remaining[1..].split('\'').next().map(|s| s.to_string())
+                        rest.split('\'').next().map(|s| s.to_string())
                     } else {
                         // Numeric or unquoted
                         remaining

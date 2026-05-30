@@ -383,6 +383,7 @@ impl ConsentManager {
     }
 
     /// Record new consent or update existing consent.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_consent(
         &self,
         subject_id: &str,

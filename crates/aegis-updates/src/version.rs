@@ -61,7 +61,7 @@ mod tests {
         NodeVersion {
             node_id: format!("node-{name}"),
             node_name: name.to_string(),
-            address: format!("http://127.0.0.1:9090"),
+            address: "http://127.0.0.1:9090".to_string(),
             version: version.to_string(),
             binary_hash: None,
             uptime_seconds: 100,

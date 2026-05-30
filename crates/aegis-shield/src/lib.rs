@@ -585,8 +585,10 @@ mod tests {
 
     #[test]
     fn test_disabled_shield_allows_all() {
-        let mut config = ShieldConfig::default();
-        config.enabled = false;
+        let config = ShieldConfig {
+            enabled: false,
+            ..Default::default()
+        };
         let engine = ShieldEngine::new(config);
         let ctx = test_ctx("10.0.0.1");
         let verdict = engine.analyze_query("'; DROP TABLE users; --", &ctx);

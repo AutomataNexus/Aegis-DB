@@ -615,7 +615,7 @@ impl AuthService {
         let user_role = match role.to_lowercase().as_str() {
             "admin" => UserRole::Admin,
             "operator" => UserRole::Operator,
-            "viewer" | _ => UserRole::Viewer,
+            _ => UserRole::Viewer,
         };
 
         let id = format!("user-{:03}", users.len() + 1);
@@ -664,7 +664,7 @@ impl AuthService {
             user.role = match new_role.to_lowercase().as_str() {
                 "admin" => UserRole::Admin,
                 "operator" => UserRole::Operator,
-                "viewer" | _ => UserRole::Viewer,
+                _ => UserRole::Viewer,
             };
         }
 
@@ -1483,6 +1483,7 @@ impl AuditLogger {
     }
 
     /// Log an audit event.
+    #[allow(clippy::too_many_arguments)]
     pub fn log(
         &self,
         event_type: AuditEventType,
@@ -2439,8 +2440,10 @@ mod tests {
     #[test]
     fn test_ldap_authenticator_config_validation() {
         // Test with empty server URL - should fail validation
-        let mut config = LdapConfig::default();
-        config.server_url = String::new();
+        let config = LdapConfig {
+            server_url: String::new(),
+            ..Default::default()
+        };
         let ldap = LdapAuthenticator::new(config);
 
         let result = ldap.authenticate("testuser", "password");

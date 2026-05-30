@@ -1241,7 +1241,7 @@ impl BreachDetector {
         };
 
         // Sort by timestamp descending (most recent first)
-        all_events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        all_events.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
         all_events.truncate(limit);
         all_events
     }
