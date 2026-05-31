@@ -993,6 +993,8 @@ impl ExecutionContext {
     }
 
     /// Update rows in a table.
+    // The predicate is an intentional borrowed row-matcher closure.
+    #[allow(clippy::type_complexity)]
     pub fn update_rows(
         &self,
         table_name: &str,
@@ -1039,6 +1041,8 @@ impl ExecutionContext {
     }
 
     /// Delete rows from a table.
+    // The predicate is an intentional borrowed row-matcher closure.
+    #[allow(clippy::type_complexity)]
     pub fn delete_rows(
         &self,
         table_name: &str,
@@ -1580,6 +1584,7 @@ impl Executor {
 
         // Create predicate closure if where clause exists
         let where_clause = node.where_clause.clone();
+        #[allow(clippy::type_complexity)]
         let predicate: Option<Box<dyn Fn(&Row, &[String]) -> bool>> = where_clause.map(|wc| {
             Box::new(move |row: &Row, cols: &[String]| {
                 evaluate_expression(&wc, row, cols)
@@ -1612,6 +1617,7 @@ impl Executor {
 
         // Create predicate closure if where clause exists
         let where_clause = node.where_clause.clone();
+        #[allow(clippy::type_complexity)]
         let predicate: Option<Box<dyn Fn(&Row, &[String]) -> bool>> = where_clause.map(|wc| {
             Box::new(move |row: &Row, cols: &[String]| {
                 evaluate_expression(&wc, row, cols)

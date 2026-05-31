@@ -21,6 +21,7 @@ bincode = { workspace = true }
 parking_lot = { workspace = true }
 crc32fast = "1.4"
 regex = "1.10"
+nexuscompress = { git = "https://github.com/AutomataNexus/NexusCompress.git", rev = "cb7a5c2863aa4f08cbf4206340b95cd1748459ad" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -18,6 +18,7 @@ pub mod admin;
 pub mod auth;
 pub mod backup;
 pub mod breach;
+pub mod compress;
 pub mod config;
 pub mod consent;
 pub mod gdpr;

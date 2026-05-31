@@ -10,6 +10,8 @@ use crate::types::DataPoint;
 use chrono::DateTime;
 #[cfg(test)]
 use chrono::Utc;
+use nexuscompress::core_types::{DType, Domain, Schema};
+use nexuscompress::timeseries::TimeSeriesCompressor;
 
 // =============================================================================
 // Bit Writer
@@ -296,6 +298,8 @@ impl<'a> Decompressor<'a> {
     }
 
     /// Decompress the next data point.
+    // Intentionally a streaming reader, not an `Iterator` (no IntoIterator use).
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<DataPoint> {
         if self.remaining == 0 {
             return None;
@@ -380,6 +384,110 @@ impl<'a> Decompressor<'a> {
 }
 
 // =============================================================================
+// NexusCompress codec (high-ratio cold-block recompression)
+// =============================================================================
+//
+// Cold Gorilla blocks can be recompressed with NexusCompress for a higher ratio
+// via the admin compress endpoint. To avoid ANY change to the on-disk bincode
+// format — which is positional, so adding a field to `CompressedBlock` /
+// `PersistedBlock` would break loading of every existing `timeseries.bin` — the
+// codec is detected from the block bytes themselves: a NexusCompress frame
+// always begins with the `NCZL` magic, while a Gorilla bitstream begins with the
+// high byte of the first (ms) timestamp, which is `0x00` for any realistic
+// timestamp. The two are therefore unambiguous, and reads dispatch transparently
+// through `decode_block`.
+
+/// Leading bytes of a serialized NexusCompress frame (`NCZL`).
+const NCZL_MAGIC: [u8; 4] = [0x4E, 0x43, 0x5A, 0x4C];
+
+/// Columnar schema for an Aegis time-series block: ms timestamp + value.
+fn nexus_ts_schema() -> Schema {
+    Schema::builder()
+        .type_name("AegisSeriesBlock")
+        .domain(Domain::TimeSeries)
+        .field("timestamp", DType::I64)
+        .field("value", DType::F64)
+        .build()
+}
+
+/// True if a block's bytes are a NexusCompress frame (vs a Gorilla bitstream).
+pub fn is_nexus_block(block: &CompressedBlock) -> bool {
+    block.data.len() >= 4 && block.data[0..4] == NCZL_MAGIC
+}
+
+/// Re-encode points as a NexusCompress-backed `CompressedBlock`. Returns `None`
+/// if there are no points or compression fails, in which case the caller keeps
+/// the original block (fail-safe — never loses data).
+pub fn compress_points_nexus(points: &[DataPoint]) -> Option<CompressedBlock> {
+    if points.is_empty() {
+        return None;
+    }
+    let mut ts_bytes = Vec::with_capacity(points.len() * 8);
+    let mut val_bytes = Vec::with_capacity(points.len() * 8);
+    for p in points {
+        ts_bytes.extend_from_slice(&p.timestamp_millis().to_le_bytes());
+        val_bytes.extend_from_slice(&p.value.to_le_bytes());
+    }
+    let compressor = TimeSeriesCompressor::from_schema(nexus_ts_schema());
+    let frame = compressor
+        .compress_batch(&[ts_bytes, val_bytes], points.len() as u64)
+        .ok()?;
+    // A real frame must lead with the magic, or decode dispatch would misread it.
+    if frame.len() < 4 || frame[0..4] != NCZL_MAGIC {
+        return None;
+    }
+    let first_ts = points
+        .iter()
+        .map(|p| p.timestamp_millis())
+        .min()
+        .unwrap_or(0);
+    let last_ts = points
+        .iter()
+        .map(|p| p.timestamp_millis())
+        .max()
+        .unwrap_or(0);
+    let checksum = crc32fast::hash(&frame);
+    Some(CompressedBlock {
+        data: frame,
+        first_timestamp: first_ts,
+        last_timestamp: last_ts,
+        count: points.len(),
+        checksum,
+    })
+}
+
+/// Decode a block's points, dispatching on the embedded codec (Gorilla vs
+/// NexusCompress). This is the single transparent-read hook used by queries.
+pub fn decode_block(block: &CompressedBlock) -> Vec<DataPoint> {
+    if !is_nexus_block(block) {
+        return Decompressor::new(block).decompress_all();
+    }
+    let compressor = TimeSeriesCompressor::from_schema(nexus_ts_schema());
+    let cols = match compressor.decompress_batch(&block.data) {
+        Ok(c) if c.len() == 2 => c,
+        _ => return Vec::new(),
+    };
+    let (ts_col, val_col) = (&cols[0], &cols[1]);
+    let n = ts_col.len() / 8;
+    let mut points = Vec::with_capacity(n);
+    for i in 0..n {
+        let off = i * 8;
+        let ts = match ts_col.get(off..off + 8).and_then(|s| s.try_into().ok()) {
+            Some(b) => i64::from_le_bytes(b),
+            None => continue,
+        };
+        let value = match val_col.get(off..off + 8).and_then(|s| s.try_into().ok()) {
+            Some(b) => f64::from_le_bytes(b),
+            None => 0.0,
+        };
+        if let Some(timestamp) = DateTime::from_timestamp_millis(ts) {
+            points.push(DataPoint { timestamp, value });
+        }
+    }
+    points
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -432,5 +540,43 @@ mod tests {
         let ratio = block.compression_ratio();
 
         assert!(ratio > 2.0, "Expected compression ratio > 2, got {}", ratio);
+    }
+
+    #[test]
+    fn test_nexus_roundtrip_and_detection() {
+        let base_time = Utc::now();
+        let points: Vec<DataPoint> = (0..500)
+            .map(|i| DataPoint {
+                timestamp: base_time + Duration::seconds(i),
+                value: 70.0 + (i as f64 % 5.0),
+            })
+            .collect();
+
+        // A Gorilla block must NOT be misdetected as a NexusCompress frame.
+        let mut g = Compressor::new();
+        for p in &points {
+            g.compress(p);
+        }
+        let gblock = g.finish();
+        assert!(!is_nexus_block(&gblock));
+
+        // A NexusCompress block is detected, verifies its checksum, round-trips.
+        let nblock = compress_points_nexus(&points).expect("nexus block");
+        assert!(is_nexus_block(&nblock));
+        assert!(nblock.verify_checksum());
+        assert_eq!(nblock.count, points.len());
+
+        // decode_block transparently decodes BOTH codecs to the original points.
+        let from_gorilla = decode_block(&gblock);
+        let from_nexus = decode_block(&nblock);
+        assert_eq!(from_gorilla.len(), points.len());
+        assert_eq!(from_nexus.len(), points.len());
+        for (orig, dec) in points.iter().zip(from_nexus.iter()) {
+            assert_eq!(
+                orig.timestamp.timestamp_millis(),
+                dec.timestamp.timestamp_millis()
+            );
+            assert_eq!(orig.value, dec.value);
+        }
     }
 }

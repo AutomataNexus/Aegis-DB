@@ -28,6 +28,12 @@ pub struct SqlInjectionDetector {
     patterns: Vec<InjectionPattern>,
 }
 
+impl Default for SqlInjectionDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SqlInjectionDetector {
     /// Build the detector with all built-in patterns.
     pub fn new() -> Self {

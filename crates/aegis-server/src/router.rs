@@ -8,6 +8,7 @@
 
 use crate::backup;
 use crate::breach;
+use crate::compress;
 use crate::consent;
 use crate::gdpr;
 use crate::handlers;
@@ -144,6 +145,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/backups", get(backup::list_backups))
         .route("/restore", post(backup::restore_backup))
         .route("/backup/:id", delete(backup::delete_backup))
+        // Section compression (NexusCompress)
+        .route("/compress", post(compress::compress_section))
         // Apply authentication middleware to all admin routes
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

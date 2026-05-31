@@ -493,6 +493,8 @@ pub struct ConnectionStats {
 /// This struct is thread-safe (`Sync`) because the return callback is protected by a Mutex.
 pub struct PooledConnection {
     connection: Arc<Connection>,
+    // Mutex-guarded one-shot return callback handed back to the pool on drop.
+    #[allow(clippy::type_complexity)]
     pool_return: std::sync::Mutex<Option<Box<dyn FnOnce(Arc<Connection>) + Send>>>,
 }
 

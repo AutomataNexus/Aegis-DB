@@ -73,6 +73,8 @@ impl Purpose {
     }
 
     /// Parse a purpose from a string identifier.
+    // Returns `Option`, not `Result`, so this is not the `FromStr` trait method.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "marketing" => Some(Purpose::Marketing),
@@ -144,6 +146,8 @@ pub enum ConsentSource {
 }
 
 impl ConsentSource {
+    // Infallible mapping (returns `Self`, defaulting unknowns), not `FromStr`.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "web_form" | "webform" | "web" => ConsentSource::WebForm,

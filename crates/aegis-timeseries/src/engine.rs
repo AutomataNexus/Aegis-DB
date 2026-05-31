@@ -7,7 +7,9 @@
 //! @author AutomataNexus Development Team
 
 use crate::aggregation::AggregateFunction;
-use crate::compression::{CompressedBlock, Compressor, Decompressor};
+use crate::compression::{
+    compress_points_nexus, decode_block, is_nexus_block, CompressedBlock, Compressor,
+};
 use crate::index::TimeSeriesIndex;
 use crate::partition::{PartitionConfig, PartitionManager};
 use crate::persistence::{PersistedBlock, PersistedSeries, PersistedState, PersistenceManager};
@@ -45,6 +47,16 @@ impl Default for EngineConfig {
             data_path: None,
         }
     }
+}
+
+/// Outcome of a `compress_section` call (returned to the admin endpoint).
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct CompressionReport {
+    pub blocks_scanned: usize,
+    pub blocks_recompressed: usize,
+    pub blocks_already: usize,
+    pub bytes_before: u64,
+    pub bytes_after: u64,
 }
 
 // =============================================================================
@@ -383,6 +395,44 @@ impl TimeSeriesEngine {
         }
     }
 
+    /// Recompress cold Gorilla blocks of `metric` that overlap `[start_ms, end_ms]`
+    /// with NexusCompress for a higher ratio. An empty `metric` matches all series.
+    /// Reads stay transparent (blocks are decoded by codec on query), and the
+    /// authoritative range bounds are preserved so block-skipping is unaffected.
+    /// Already-NexusCompress blocks are skipped, and any block whose recompression
+    /// fails is left untouched (fail-safe — never loses data). The caller should
+    /// `flush()` afterward so the recompressed blocks survive a restart.
+    pub fn compress_section(&self, metric: &str, start_ms: i64, end_ms: i64) -> CompressionReport {
+        let mut report = CompressionReport::default();
+        let mut data = self.series_data.write();
+        for buffer in data.values_mut() {
+            if !metric.is_empty() && buffer.metric.name != metric {
+                continue;
+            }
+            for block in buffer.compressed_blocks.iter_mut() {
+                report.blocks_scanned += 1;
+                if is_nexus_block(block) {
+                    report.blocks_already += 1;
+                    continue;
+                }
+                if block.last_timestamp < start_ms || block.first_timestamp > end_ms {
+                    continue;
+                }
+                let points = decode_block(block);
+                if let Some(mut newblock) = compress_points_nexus(&points) {
+                    // Preserve the original bounds so range-skipping stays correct.
+                    newblock.first_timestamp = block.first_timestamp;
+                    newblock.last_timestamp = block.last_timestamp;
+                    report.bytes_before += block.data.len() as u64;
+                    report.bytes_after += newblock.data.len() as u64;
+                    *block = newblock;
+                    report.blocks_recompressed += 1;
+                }
+            }
+        }
+        report
+    }
+
     /// Flush all pending writes to disk.
     pub fn flush(&self) {
         if let Some(ref pm) = self.persistence {
@@ -521,8 +571,7 @@ impl SeriesBuffer {
         let mut all_points = Vec::new();
 
         for block in &self.compressed_blocks {
-            let mut decompressor = Decompressor::new(block);
-            all_points.extend(decompressor.decompress_all());
+            all_points.extend(decode_block(block));
         }
 
         all_points.extend(self.points.clone());
@@ -543,10 +592,8 @@ impl SeriesBuffer {
                 continue;
             }
 
-            let mut decompressor = Decompressor::new(block);
-            let points = decompressor.decompress_all();
             all_points.extend(
-                points
+                decode_block(block)
                     .into_iter()
                     .filter(|p| p.timestamp >= start && p.timestamp < end),
             );
@@ -774,5 +821,71 @@ mod tests {
             result.is_err(),
             "Should reject writes exceeding cardinality limit"
         );
+    }
+
+    #[test]
+    fn test_compress_section_transparent_and_survives_restart() {
+        fn snapshot(engine: &TimeSeriesEngine, metric: &str) -> Vec<(i64, f64)> {
+            let mut out: Vec<(i64, f64)> = engine
+                .get_series(metric)
+                .iter()
+                .flat_map(|s| {
+                    s.points
+                        .iter()
+                        .map(|p| (p.timestamp.timestamp_millis(), p.value))
+                })
+                .collect();
+            out.sort_by_key(|(t, _)| *t);
+            out
+        }
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let config = EngineConfig {
+            data_path: Some(dir.path().to_path_buf()),
+            compression_threshold: 100,
+            ..Default::default()
+        };
+
+        let baseline = {
+            let engine = TimeSeriesEngine::with_config(config.clone());
+            let mut tags = Tags::new();
+            tags.insert("host", "server1");
+            let base = Utc::now() - Duration::seconds(500);
+            for i in 0..300 {
+                engine
+                    .write(
+                        "metric_x",
+                        tags.clone(),
+                        DataPoint {
+                            timestamp: base + Duration::seconds(i),
+                            value: 50.0 + (i as f64 % 7.0),
+                        },
+                    )
+                    .expect("write");
+            }
+            engine.compact(); // force any buffered points into a Gorilla block
+            let before = snapshot(&engine, "metric_x");
+            assert!(!before.is_empty());
+
+            // Recompress the whole range with NexusCompress.
+            let report = engine.compress_section("metric_x", i64::MIN, i64::MAX);
+            assert!(
+                report.blocks_recompressed >= 1,
+                "expected at least one block recompressed, got {:?}",
+                report
+            );
+            assert!(report.bytes_after > 0);
+
+            // Reads are transparent: data is identical after recompression.
+            assert_eq!(before, snapshot(&engine, "metric_x"));
+
+            engine.flush();
+            before
+        };
+
+        // Restart: a fresh engine over the same data_path must read identically,
+        // proving the NexusCompress blocks survived the bincode persistence cycle.
+        let reloaded = TimeSeriesEngine::with_config(config);
+        assert_eq!(baseline, snapshot(&reloaded, "metric_x"));
     }
 }
