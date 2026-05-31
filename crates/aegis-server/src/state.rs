@@ -10,6 +10,7 @@ use crate::activity::ActivityLogger;
 use crate::admin::AdminService;
 use crate::auth::{AuthService, RbacManager};
 use crate::breach::{BreachDetector, WebhookNotifier};
+use crate::compress::{decompress_docs, encode_docs};
 use crate::config::ServerConfig;
 use crate::consent::ConsentManager;
 use crate::gdpr::GdprService;
@@ -118,10 +119,10 @@ impl AppState {
                         if path.extension().is_some_and(|e| e == "json") {
                             if let Some(collection_name) = path.file_stem().and_then(|s| s.to_str())
                             {
-                                if let Ok(data) = std::fs::read_to_string(&path) {
-                                    if let Ok(docs) =
-                                        serde_json::from_str::<Vec<serde_json::Value>>(&data)
-                                    {
+                                // Files may be a NexusCompress frame or legacy plain
+                                // JSON; decompress_docs() transparently reads either.
+                                if let Ok(bytes) = std::fs::read(&path) {
+                                    if let Some(docs) = decompress_docs(&bytes) {
                                         let _ = document_engine.create_collection(collection_name);
                                         let mut count = 0;
                                         for doc_json in docs {
@@ -135,6 +136,11 @@ impl AppState {
                                             "Loaded {} documents into collection '{}'",
                                             count,
                                             collection_name
+                                        );
+                                    } else {
+                                        tracing::error!(
+                                            "Failed to decode collection file {:?} — leaving it untouched",
+                                            path
                                         );
                                     }
                                 }
@@ -317,19 +323,44 @@ impl AppState {
             let docs: Vec<serde_json::Value> =
                 result.documents.iter().map(document_to_json).collect();
             let path = docs_dir.join(format!("{}.json", collection_name));
-            match serde_json::to_string_pretty(&docs) {
-                Ok(json) => {
-                    if let Err(e) = std::fs::write(&path, json) {
-                        tracing::error!("Failed to write collection '{}': {}", collection_name, e);
-                    }
-                }
-                Err(e) => tracing::error!(
-                    "Failed to serialize collection '{}': {}",
-                    collection_name,
-                    e
-                ),
+            // Stored compressed-at-rest as a NexusCompress frame when that beats
+            // raw JSON; the loader reads either form transparently.
+            let (bytes, _) = encode_docs(&docs);
+            if let Err(e) = std::fs::write(&path, bytes) {
+                tracing::error!("Failed to write collection '{}': {}", collection_name, e);
             }
         }
+    }
+
+    /// Compress one document collection's at-rest file as a NexusCompress frame
+    /// now, returning `(doc_count, uncompressed_bytes, compressed_bytes)`. Returns
+    /// `None` if there's no data dir or the collection doesn't exist.
+    pub fn compress_collection(&self, collection_name: &str) -> Option<(usize, u64, u64)> {
+        let dir = self.data_dir.as_ref()?;
+        if !self
+            .document_engine
+            .list_collections()
+            .iter()
+            .any(|c| c == collection_name)
+        {
+            return None;
+        }
+        let docs_dir = dir.join("documents");
+        if let Err(e) = std::fs::create_dir_all(&docs_dir) {
+            tracing::error!("Failed to create documents dir: {}", e);
+            return None;
+        }
+        let query = aegis_document::Query::new();
+        let result = self.document_engine.find(collection_name, &query).ok()?;
+        let docs: Vec<serde_json::Value> = result.documents.iter().map(document_to_json).collect();
+        let (bytes, uncompressed) = encode_docs(&docs);
+        let stored = bytes.len() as u64;
+        let path = docs_dir.join(format!("{}.json", collection_name));
+        if let Err(e) = std::fs::write(&path, bytes) {
+            tracing::error!("Failed to write collection '{}': {}", collection_name, e);
+            return None;
+        }
+        Some((docs.len(), uncompressed as u64, stored))
     }
 
     /// Save all data to disk (if data_dir is configured).
@@ -352,9 +383,11 @@ impl AppState {
             if let Ok(result) = self.document_engine.find(&collection_name, &query) {
                 let docs: Vec<serde_json::Value> =
                     result.documents.iter().map(document_to_json).collect();
-                let json = serde_json::to_string(&docs)?;
                 let path = docs_dir.join(format!("{}.json", collection_name));
-                std::fs::write(&path, json)?;
+                // Compressed-at-rest as a NexusCompress frame when smaller than
+                // raw JSON; loader reads either form transparently.
+                let (bytes, _) = encode_docs(&docs);
+                std::fs::write(&path, bytes)?;
             }
         }
 

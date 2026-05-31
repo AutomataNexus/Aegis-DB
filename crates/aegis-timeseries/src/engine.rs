@@ -402,30 +402,73 @@ impl TimeSeriesEngine {
     /// Already-NexusCompress blocks are skipped, and any block whose recompression
     /// fails is left untouched (fail-safe — never loses data). The caller should
     /// `flush()` afterward so the recompressed blocks survive a restart.
+    ///
+    /// The expensive decode+re-encode runs WITHOUT any lock held: candidate
+    /// blocks are snapshotted under a brief read lock, recompressed lock-free,
+    /// then swapped back in under a brief write lock by matching the original
+    /// block (checksum + bounds). So ingestion/queries are only blocked for the
+    /// two short critical sections, not for the whole CPU-bound recompression.
     pub fn compress_section(&self, metric: &str, start_ms: i64, end_ms: i64) -> CompressionReport {
         let mut report = CompressionReport::default();
-        let mut data = self.series_data.write();
-        for buffer in data.values_mut() {
-            if !metric.is_empty() && buffer.metric.name != metric {
-                continue;
+
+        // Phase 1 — brief READ lock: snapshot candidate (cold, in-range, Gorilla)
+        // blocks. Cloning cold block bytes is cheap relative to holding the lock.
+        let candidates: Vec<(String, CompressedBlock)> = {
+            let data = self.series_data.read();
+            let mut c = Vec::new();
+            for (sid, buffer) in data.iter() {
+                if !metric.is_empty() && buffer.metric.name != metric {
+                    continue;
+                }
+                for block in &buffer.compressed_blocks {
+                    report.blocks_scanned += 1;
+                    if is_nexus_block(block) {
+                        report.blocks_already += 1;
+                        continue;
+                    }
+                    if block.last_timestamp < start_ms || block.first_timestamp > end_ms {
+                        continue;
+                    }
+                    c.push((sid.clone(), block.clone()));
+                }
             }
-            for block in buffer.compressed_blocks.iter_mut() {
-                report.blocks_scanned += 1;
-                if is_nexus_block(block) {
-                    report.blocks_already += 1;
+            c
+        };
+
+        // Phase 2 — NO lock: the CPU-bound decode + NexusCompress re-encode.
+        let mut prepared: Vec<(String, CompressedBlock, CompressedBlock)> =
+            Vec::with_capacity(candidates.len());
+        for (sid, old) in candidates {
+            let points = decode_block(&old);
+            if let Some(mut nb) = compress_points_nexus(&points) {
+                // Preserve the original bounds so range-skipping stays correct.
+                nb.first_timestamp = old.first_timestamp;
+                nb.last_timestamp = old.last_timestamp;
+                prepared.push((sid, old, nb));
+            }
+        }
+
+        // Phase 3 — brief WRITE lock: swap each recompressed block in by matching
+        // the original (checksum + bounds, still Gorilla). If a block changed or
+        // was pruned (retention/compaction) between phases, it simply isn't found
+        // and is skipped — never corrupting newer state.
+        if !prepared.is_empty() {
+            let mut data = self.series_data.write();
+            for (sid, old, nb) in prepared {
+                let Some(buffer) = data.get_mut(&sid) else {
                     continue;
-                }
-                if block.last_timestamp < start_ms || block.first_timestamp > end_ms {
-                    continue;
-                }
-                let points = decode_block(block);
-                if let Some(mut newblock) = compress_points_nexus(&points) {
-                    // Preserve the original bounds so range-skipping stays correct.
-                    newblock.first_timestamp = block.first_timestamp;
-                    newblock.last_timestamp = block.last_timestamp;
+                };
+                let after = nb.data.len() as u64;
+                if let Some(block) = buffer.compressed_blocks.iter_mut().find(|b| {
+                    !is_nexus_block(b)
+                        && b.checksum == old.checksum
+                        && b.first_timestamp == old.first_timestamp
+                        && b.last_timestamp == old.last_timestamp
+                        && b.count == old.count
+                }) {
                     report.bytes_before += block.data.len() as u64;
-                    report.bytes_after += newblock.data.len() as u64;
-                    *block = newblock;
+                    report.bytes_after += after;
+                    *block = nb;
                     report.blocks_recompressed += 1;
                 }
             }
