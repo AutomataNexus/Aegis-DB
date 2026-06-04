@@ -4,6 +4,27 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) and the format of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] - 2026-06-04
+
+### Added
+- **Section compression (NexusCompress).** New admin endpoint
+  `POST /api/v1/admin/compress` recompresses cold data into NexusCompress
+  frames for a higher ratio, in two paradigms:
+  - **Time series** — cold blocks are re-encoded as NexusCompress frames.
+    Reads stay transparent (each block is decoded by its codec on query), and
+    recompressed blocks are flushed so they survive a restart, minimizing lock
+    hold time during recompression.
+  - **Document collections** — stored at rest as a single compressed
+    NexusCompress `Record` frame (zstd, `NCZL` magic). Decoding transparently
+    accepts both NexusCompress frames and legacy uncompressed bytes.
+
+### Changed
+- `aegis-server` and `aegis-timeseries` now depend on the published
+  [`nexuscompress`](https://crates.io/crates/nexuscompress) crate (`0.1`)
+  instead of a git revision, so the workspace builds from a clean
+  `cargo build` with no git credentials required.
+- Workspace bumped to **0.3.0**; all crates published to crates.io at 0.3.0.
+
 ## [0.2.7] - 2026-05-30
 
 ### Fixed
