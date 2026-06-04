@@ -33,10 +33,15 @@ jobs:
 
       - name: Authenticate cargo to private NexusCompress dependency
         env:
-          NEXUSCOMPRESS_TOKEN: ${{ secrets.PROJECTOPERATOINS }}
+          NEXUSCOMPRESS_DEPLOY_KEY: ${{ secrets.NEXUSCOMPRESS_DEPLOY_KEY }}
         run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$NEXUSCOMPRESS_DEPLOY_KEY" > ~/.ssh/nexuscompress
+          chmod 600 ~/.ssh/nexuscompress
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          printf 'Host github.com\n  IdentityFile ~/.ssh/nexuscompress\n  IdentitiesOnly yes\n' >> ~/.ssh/config
           git config --global \
-            url."https://x-access-token:${NEXUSCOMPRESS_TOKEN}@github.com/AutomataNexus/NexusCompress".insteadOf \
+            url."git@github.com:AutomataNexus/NexusCompress".insteadOf \
             "https://github.com/AutomataNexus/NexusCompress"
 
       - name: Cache cargo registry and build

@@ -20,16 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: DIAG private-dep token check (temporary)
-        env:
-          T1: ${{ secrets.PROJECTOPERATOINS }}
-          T2: ${{ secrets.OPERATIONS }}
-        run: |
-          echo "PROJECTOPERATOINS length: ${#T1}"
-          echo "OPERATIONS length: ${#T2}"
-          git -c credential.helper= ls-remote "https://x-access-token:${T1}@github.com/AutomataNexus/NexusCompress" HEAD >/dev/null 2>&1 && echo "PROJECTOPERATOINS: AUTH_OK" || echo "PROJECTOPERATOINS: AUTH_FAIL"
-          git -c credential.helper= ls-remote "https://x-access-token:${T2}@github.com/AutomataNexus/NexusCompress" HEAD >/dev/null 2>&1 && echo "OPERATIONS: AUTH_OK" || echo "OPERATIONS: AUTH_FAIL"
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,10 +27,15 @@ jobs:
 
       - name: Authenticate cargo to private NexusCompress dependency
         env:
-          NEXUSCOMPRESS_TOKEN: ${{ secrets.PROJECTOPERATOINS }}
+          NEXUSCOMPRESS_DEPLOY_KEY: ${{ secrets.NEXUSCOMPRESS_DEPLOY_KEY }}
         run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$NEXUSCOMPRESS_DEPLOY_KEY" > ~/.ssh/nexuscompress
+          chmod 600 ~/.ssh/nexuscompress
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          printf 'Host github.com\n  IdentityFile ~/.ssh/nexuscompress\n  IdentitiesOnly yes\n' >> ~/.ssh/config
           git config --global \
-            url."https://x-access-token:${NEXUSCOMPRESS_TOKEN}@github.com/AutomataNexus/NexusCompress".insteadOf \
+            url."git@github.com:AutomataNexus/NexusCompress".insteadOf \
             "https://github.com/AutomataNexus/NexusCompress"
 
       - name: Cache cargo
