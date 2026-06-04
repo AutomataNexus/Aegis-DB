@@ -9,6 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Cargo must shell out to the git CLI so the credential rewrite below is honored
+  # when fetching the private NexusCompress git dependency.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   check:
@@ -21,6 +24,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+
+      - name: Authenticate cargo to private NexusCompress dependency
+        env:
+          NEXUSCOMPRESS_TOKEN: ${{ secrets.PROJECTOPERATOINS }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${NEXUSCOMPRESS_TOKEN}@github.com/AutomataNexus/NexusCompress".insteadOf \
+            "https://github.com/AutomataNexus/NexusCompress"
 
       - name: Cache cargo
         uses: actions/cache@v4
