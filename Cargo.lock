@@ -1970,9 +1970,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3930f77c4c64ad5a1ff19f57221d4c4843905fb4c76ecabd4d27d3f361d84812"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "nexuscompress-codecs",
  "nexuscompress-core",
@@ -1988,9 +1987,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-codecs"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa717b446f74eceed95f2d7ffc89b6476ca48b3bf1d676a0c005d6fb7491e914"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "brotli",
  "bytemuck",
@@ -2002,9 +2000,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-core"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d92f2b66c7ee2f0ac668958caf6d9cda4d0d6befe971377275980c228fdce9b6"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -2017,9 +2014,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-graph"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c3f741bd852a22b4d57d7b44a05236b5b843bc7c87361e6a468abd719c6d4e9"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "bincode",
  "indexmap",
@@ -2032,9 +2028,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-record"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79daf3150a383874955d31e9982faea55726b2d5cad5b4fff255bd9742954722"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2045,9 +2040,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-schema"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9ae57ff0f7d27fc6919b523a710528561e37a2f5fe5e6cff16d2508474a80f4"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2056,9 +2050,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-stream"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bb8fb328996a0c48dead61670c009d928b8d74b40c94d83880971a0076c59de"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2070,9 +2063,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-tensor"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f832687802557eb9acf596750cf075011adca040733f3da216dde6496bc2697"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2083,9 +2075,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-text"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28ee9111ad7691ca28be482a851b05d48193f1608eeca3fe84b5d7f1e7c258e0"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2096,9 +2087,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-timeseries"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38c591e056735c49d0462493e869829a265f5ae32452205359da3f65b7c89ed1"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2109,9 +2099,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-trainer"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "223af955792d027b33de68acc273b5be7d86a9f75f2fc1f18903d0324ac064e5"
+version = "0.1.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=a7e7e649910e2a0550933f7b2e30e0aae4a9462e#a7e7e649910e2a0550933f7b2e30e0aae4a9462e"
 dependencies = [
  "arc-swap",
  "bincode",
