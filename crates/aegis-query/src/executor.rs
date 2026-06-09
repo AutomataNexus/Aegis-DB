@@ -2026,6 +2026,22 @@ struct JoinOperator<'a> {
     right_row_idx: usize,
 }
 
+/// RIGHT and FULL OUTER joins are not yet implemented in the executor. Rather
+/// than silently degrade them to INNER (dropping unmatched rows and returning
+/// wrong results), reject them explicitly so callers get a clear error.
+fn reject_unsupported_join_type(join_type: PlanJoinType) -> ExecutorResult<()> {
+    match join_type {
+        PlanJoinType::Right => Err(ExecutorError::InvalidOperation(
+            "RIGHT OUTER JOIN is not supported yet; rewrite as a LEFT JOIN with the tables swapped"
+                .to_string(),
+        )),
+        PlanJoinType::Full => Err(ExecutorError::InvalidOperation(
+            "FULL OUTER JOIN is not supported yet".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 impl<'a> JoinOperator<'a> {
     fn new(
         left: Box<dyn Operator + 'a>,
@@ -2034,6 +2050,8 @@ impl<'a> JoinOperator<'a> {
         condition: Option<PlanExpression>,
         strategy: JoinStrategy,
     ) -> ExecutorResult<Self> {
+        reject_unsupported_join_type(join_type)?;
+
         let mut columns = left.columns().to_vec();
         let right_col_count = right.columns().len();
         columns.extend(right.columns().to_vec());
@@ -2189,6 +2207,8 @@ impl<'a> HashJoinOperator<'a> {
         join_type: PlanJoinType,
         condition: Option<PlanExpression>,
     ) -> ExecutorResult<Self> {
+        reject_unsupported_join_type(join_type)?;
+
         let left_columns = left.columns().to_vec();
         let right_columns = right.columns().to_vec();
 
@@ -2367,9 +2387,14 @@ impl<'a> Operator for HashJoinOperator<'a> {
 
 struct AggregateOperator<'a> {
     input: Box<dyn Operator + 'a>,
-    _group_by: Vec<PlanExpression>,
+    group_by: Vec<PlanExpression>,
     aggregates: Vec<crate::planner::AggregateExpr>,
+    /// Output columns: the group-by key columns first, then the aggregate
+    /// columns. Downstream projection/HAVING/sort resolve references by name,
+    /// so grouped key columns must be emitted (not just aggregates).
     columns: Vec<String>,
+    /// Number of leading output columns that are group-by keys.
+    group_col_count: usize,
     input_columns: Vec<String>,
     done: bool,
 }
@@ -2382,20 +2407,38 @@ impl<'a> AggregateOperator<'a> {
     ) -> Self {
         let input_columns = input.columns().to_vec();
 
-        let columns: Vec<String> = aggregates
+        // Name each group-by key column after the underlying column so that a
+        // `SELECT dept, COUNT(*) ... GROUP BY dept` projection can find `dept`.
+        let group_columns: Vec<String> = group_by
             .iter()
             .enumerate()
-            .map(|(i, agg)| agg.alias.clone().unwrap_or_else(|| format!("agg_{}", i)))
+            .map(|(i, expr)| group_expr_output_name(expr, i))
             .collect();
+        let group_col_count = group_columns.len();
+
+        let agg_columns = aggregates
+            .iter()
+            .enumerate()
+            .map(|(i, agg)| agg.alias.clone().unwrap_or_else(|| format!("agg_{}", i)));
+
+        let columns: Vec<String> = group_columns.into_iter().chain(agg_columns).collect();
 
         Self {
             input,
-            _group_by: group_by,
+            group_by,
             aggregates,
             columns,
+            group_col_count,
             input_columns,
             done: false,
         }
+    }
+
+    fn fresh_accumulators(&self) -> Vec<Accumulator> {
+        self.aggregates
+            .iter()
+            .map(|agg| Accumulator::new(agg.function))
+            .collect()
     }
 }
 
@@ -2405,40 +2448,85 @@ impl<'a> Operator for AggregateOperator<'a> {
             return Ok(None);
         }
 
-        let mut accumulators: Vec<Accumulator> = self
-            .aggregates
-            .iter()
-            .map(|agg| Accumulator::new(agg.function))
-            .collect();
+        // Hash-grouped accumulation. `order` preserves first-seen group order for
+        // deterministic output; `index` maps a group-key fingerprint to its slot.
+        let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut order: Vec<Vec<Value>> = Vec::new();
+        let mut group_accs: Vec<Vec<Accumulator>> = Vec::new();
 
         while let Some(batch) = self.input.next_batch()? {
             for row in &batch.rows {
+                let key_values: Vec<Value> = self
+                    .group_by
+                    .iter()
+                    .map(|expr| evaluate_expression(expr, row, &self.input_columns))
+                    .collect::<ExecutorResult<Vec<_>>>()?;
+
+                let fingerprint = group_key_fingerprint(&key_values);
+                let slot = *index.entry(fingerprint).or_insert_with(|| {
+                    order.push(key_values.clone());
+                    group_accs.push(self.fresh_accumulators());
+                    order.len() - 1
+                });
+
                 for (i, agg) in self.aggregates.iter().enumerate() {
                     let value = if let Some(ref arg) = agg.argument {
                         evaluate_expression(arg, row, &self.input_columns)?
                     } else {
                         Value::Integer(1)
                     };
-                    accumulators[i].accumulate(&value)?;
+                    group_accs[slot][i].accumulate(&value)?;
                 }
             }
         }
 
-        let result_values: Vec<Value> = accumulators.iter().map(|acc| acc.finalize()).collect();
+        // A non-grouped aggregate over an empty input still yields one row
+        // (e.g. SELECT COUNT(*) FROM empty -> 0). Grouped queries yield no rows.
+        if self.group_col_count == 0 && order.is_empty() {
+            order.push(Vec::new());
+            group_accs.push(self.fresh_accumulators());
+        }
+
+        let rows: Vec<Row> = order
+            .iter()
+            .zip(group_accs.iter())
+            .map(|(key_values, accs)| {
+                let mut values = key_values.clone();
+                values.extend(accs.iter().map(|acc| acc.finalize()));
+                Row { values }
+            })
+            .collect();
 
         self.done = true;
 
-        Ok(Some(ResultBatch::with_rows(
-            self.columns.clone(),
-            vec![Row {
-                values: result_values,
-            }],
-        )))
+        Ok(Some(ResultBatch::with_rows(self.columns.clone(), rows)))
     }
 
     fn columns(&self) -> &[String] {
         &self.columns
     }
+}
+
+/// Derive the output column name for a group-by key expression. Column
+/// references keep their name so downstream projections resolve; anything else
+/// gets a stable positional name.
+fn group_expr_output_name(expr: &PlanExpression, index: usize) -> String {
+    match expr {
+        PlanExpression::Column { name, .. } => name.clone(),
+        _ => format!("group_{}", index),
+    }
+}
+
+/// Build a collision-resistant string fingerprint of a group key. The `{:?}`
+/// form of `Value` is variant-tagged, so `Integer(1)` and `Text("1")` never
+/// collide; a control-char separator keeps multi-column keys unambiguous.
+fn group_key_fingerprint(values: &[Value]) -> String {
+    let mut key = String::new();
+    for v in values {
+        key.push_str(&format!("{:?}", v));
+        key.push('\u{1}');
+    }
+    key
 }
 
 /// Accumulator for aggregate functions.
@@ -4149,6 +4237,116 @@ mod tests {
 
         let query_result = executor.execute(&query_plan).unwrap();
         assert_eq!(query_result.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_group_by_aggregates_per_group() {
+        use crate::planner::{AggregateExpr, AggregateFunction, AggregateNode};
+
+        // sales(region, amount): two regions, three rows.
+        let mut context = ExecutionContext::new();
+        context.add_table(TableData {
+            name: "sales".to_string(),
+            columns: vec!["region".to_string(), "amount".to_string()],
+            rows: vec![
+                Row {
+                    values: vec![Value::String("east".into()), Value::Integer(10)],
+                },
+                Row {
+                    values: vec![Value::String("west".into()), Value::Integer(5)],
+                },
+                Row {
+                    values: vec![Value::String("east".into()), Value::Integer(7)],
+                },
+            ],
+            row_created_version: vec![0, 0, 0],
+            row_deleted_version: vec![0, 0, 0],
+        });
+        let executor = Executor::new(context);
+
+        // SELECT region, SUM(amount) AS total, COUNT(*) AS cnt
+        //   FROM sales GROUP BY region
+        let plan = QueryPlan {
+            root: PlanNode::Project(ProjectNode {
+                input: Box::new(PlanNode::Aggregate(AggregateNode {
+                    input: Box::new(PlanNode::Scan(ScanNode {
+                        table_name: "sales".to_string(),
+                        alias: None,
+                        columns: vec!["region".to_string(), "amount".to_string()],
+                        index_scan: None,
+                    })),
+                    group_by: vec![PlanExpression::Column {
+                        table: None,
+                        name: "region".to_string(),
+                        data_type: DataType::Text,
+                    }],
+                    aggregates: vec![
+                        AggregateExpr {
+                            function: AggregateFunction::Sum,
+                            argument: Some(PlanExpression::Column {
+                                table: None,
+                                name: "amount".to_string(),
+                                data_type: DataType::Integer,
+                            }),
+                            distinct: false,
+                            alias: Some("total".to_string()),
+                        },
+                        AggregateExpr {
+                            function: AggregateFunction::Count,
+                            argument: None,
+                            distinct: false,
+                            alias: Some("cnt".to_string()),
+                        },
+                    ],
+                })),
+                expressions: vec![
+                    ProjectionExpr {
+                        expr: PlanExpression::Column {
+                            table: None,
+                            name: "region".to_string(),
+                            data_type: DataType::Text,
+                        },
+                        alias: Some("region".to_string()),
+                    },
+                    ProjectionExpr {
+                        expr: PlanExpression::Column {
+                            table: None,
+                            name: "total".to_string(),
+                            data_type: DataType::Float,
+                        },
+                        alias: Some("total".to_string()),
+                    },
+                    ProjectionExpr {
+                        expr: PlanExpression::Column {
+                            table: None,
+                            name: "cnt".to_string(),
+                            data_type: DataType::Integer,
+                        },
+                        alias: Some("cnt".to_string()),
+                    },
+                ],
+            }),
+            estimated_cost: 1.0,
+            estimated_rows: 2,
+        };
+
+        let result = executor.execute(&plan).unwrap();
+        // Two groups, NOT one collapsed row (the bug).
+        assert_eq!(result.rows.len(), 2, "GROUP BY must yield one row per group");
+
+        // Collect region -> (total, count) for order-independent assertions.
+        let mut by_region = std::collections::HashMap::new();
+        for row in &result.rows {
+            let region = match &row.values[0] {
+                Value::String(s) => s.clone(),
+                other => panic!("expected region string, got {:?}", other),
+            };
+            let total = value_to_f64(&row.values[1]).unwrap();
+            let cnt = value_to_i64(&row.values[2]).unwrap();
+            by_region.insert(region, (total, cnt));
+        }
+        assert_eq!(by_region.get("east"), Some(&(17.0, 2)));
+        assert_eq!(by_region.get("west"), Some(&(5.0, 1)));
     }
 
     #[test]

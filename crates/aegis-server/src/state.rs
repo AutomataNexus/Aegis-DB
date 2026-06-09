@@ -660,6 +660,17 @@ pub struct KvEntry {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl KvEntry {
+    /// Whether this entry's TTL (seconds since last write) has elapsed by `now`.
+    /// Entries without a TTL never expire.
+    fn is_expired_at(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        match self.ttl {
+            Some(secs) => now > self.updated_at + chrono::Duration::seconds(secs as i64),
+            None => false,
+        }
+    }
+}
+
 impl KvStore {
     pub fn new() -> Self {
         Self::with_data_dir(None)
@@ -736,10 +747,26 @@ impl KvStore {
         entry
     }
 
-    /// Get a value by key.
+    /// Get a value by key. Expired (TTL-elapsed) keys are treated as absent and
+    /// lazily evicted on access.
     pub fn get(&self, key: &str) -> Option<KvEntry> {
-        let data = self.data.read();
-        data.get(key).cloned()
+        let now = chrono::Utc::now();
+        {
+            let data = self.data.read();
+            match data.get(key) {
+                Some(entry) if !entry.is_expired_at(now) => return Some(entry.clone()),
+                Some(_) => {} // expired — fall through to evict
+                None => return None,
+            }
+        }
+        // Evict the expired entry under a write lock.
+        let mut data = self.data.write();
+        if data.get(key).is_some_and(|e| e.is_expired_at(now)) {
+            data.remove(key);
+            drop(data);
+            self.flush_to_disk();
+        }
+        None
     }
 
     /// Delete a key.
@@ -753,24 +780,26 @@ impl KvStore {
         removed
     }
 
-    /// List all keys with optional prefix filter.
+    /// List all keys with optional prefix filter. Expired entries are omitted.
     pub fn list(&self, prefix: Option<&str>, limit: usize) -> Vec<KvEntry> {
+        let now = chrono::Utc::now();
         let data = self.data.read();
-        let iter = data.values();
-
-        if let Some(p) = prefix {
-            iter.filter(|e| e.key.starts_with(p))
-                .take(limit)
-                .cloned()
-                .collect()
-        } else {
-            iter.take(limit).cloned().collect()
-        }
+        data.values()
+            .filter(|e| !e.is_expired_at(now))
+            .filter(|e| prefix.map(|p| e.key.starts_with(p)).unwrap_or(true))
+            .take(limit)
+            .cloned()
+            .collect()
     }
 
-    /// Get total count of keys.
+    /// Get total count of non-expired keys.
     pub fn count(&self) -> usize {
-        self.data.read().len()
+        let now = chrono::Utc::now();
+        self.data
+            .read()
+            .values()
+            .filter(|e| !e.is_expired_at(now))
+            .count()
     }
 }
 
@@ -1942,6 +1971,28 @@ mod tests {
         let deleted = store.delete("key1");
         assert!(deleted.is_some());
         assert!(store.get("key1").is_none());
+    }
+
+    #[test]
+    fn test_kv_ttl_expiration() {
+        let store = KvStore::new();
+
+        // A key whose TTL has already elapsed (we backdate updated_at) must read
+        // as absent and be excluded from list/count.
+        store.set("ephemeral".to_string(), serde_json::json!("x"), Some(1));
+        {
+            let mut data = store.data.write();
+            if let Some(e) = data.get_mut("ephemeral") {
+                e.updated_at = chrono::Utc::now() - chrono::Duration::seconds(10);
+            }
+        }
+        assert!(store.get("ephemeral").is_none(), "expired key must not be returned");
+
+        store.set("permanent".to_string(), serde_json::json!("y"), None);
+        let listed = store.list(None, 100);
+        assert_eq!(listed.len(), 1, "expired key must be excluded from list");
+        assert_eq!(listed[0].key, "permanent");
+        assert_eq!(store.count(), 1, "expired key must be excluded from count");
     }
 
     #[test]
