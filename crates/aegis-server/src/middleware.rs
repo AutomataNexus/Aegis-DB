@@ -244,6 +244,77 @@ pub async fn require_auth(
     }
 }
 
+/// Require an authenticated user with the **Admin** role.
+///
+/// Self-contained: validates the session token (like [`require_auth`]) and then
+/// enforces `role == Admin`, returning 403 Forbidden otherwise. Apply this to
+/// privileged mutation routes (user/role management, node lifecycle, cluster
+/// shutdown, vault secrets, OTA updates, backups, shield/GDPR mutations) so a
+/// lower-privilege session cannot escalate.
+///
+/// The no-users bootstrap bypass is intentionally kept in parity with
+/// [`require_auth`]: when no users exist the server is in its insecure
+/// bootstrap state and this check cannot be enforced. Securing that bootstrap
+/// is a separate, deployment-specific concern.
+pub async fn require_admin(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response<Body>, impl IntoResponse> {
+    if state.auth.list_users().is_empty() {
+        tracing::warn!(
+            path = %request.uri().path(),
+            "SECURITY: No admin user configured — privileged endpoint served without role check."
+        );
+        return Ok(next.run(request).await);
+    }
+
+    let token = match request
+        .headers()
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+    {
+        Some(header) if header.starts_with("Bearer ") => header[7..].to_string(),
+        _ => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "Missing or invalid Authorization header",
+                    "message": "Provide a valid Bearer token in the Authorization header"
+                })),
+            ));
+        }
+    };
+
+    match state.auth.validate_session(&token) {
+        Some(user) if matches!(user.role, crate::auth::UserRole::Admin) => {
+            Ok(next.run(request).await)
+        }
+        Some(user) => {
+            tracing::warn!(
+                user = %user.username,
+                role = %user.role,
+                path = %request.uri().path(),
+                "Forbidden: admin role required"
+            );
+            Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Insufficient privileges",
+                    "message": "This operation requires the admin role"
+                })),
+            ))
+        }
+        None => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "Invalid or expired session token",
+                "message": "Please log in again to obtain a new token"
+            })),
+        )),
+    }
+}
+
 // =============================================================================
 // Rate Limiting Middleware
 // =============================================================================
@@ -525,6 +596,65 @@ mod tests {
             .expect("failed to execute request");
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_require_admin_forbids_viewer_allows_admin() {
+        let state = AppState::new(ServerConfig::default());
+        // An admin must exist so the bootstrap bypass does not apply.
+        state
+            .auth
+            .create_user("rootadmin", "admin@test.local", "AdminPass123!", "admin")
+            .expect("create admin");
+        state
+            .auth
+            .create_user("looker", "viewer@test.local", "ViewerPass123!", "viewer")
+            .expect("create viewer");
+
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_admin,
+            ))
+            .with_state(state.clone());
+
+        // Viewer token -> 403 Forbidden
+        let viewer_token = state
+            .auth
+            .login("looker", "ViewerPass123!")
+            .token
+            .expect("viewer token");
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header("Authorization", format!("Bearer {}", viewer_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Admin token -> 200 OK
+        let admin_token = state
+            .auth
+            .login("rootadmin", "AdminPass123!")
+            .token
+            .expect("admin token");
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header("Authorization", format!("Bearer {}", admin_token))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[test]

@@ -350,13 +350,24 @@ impl BackupManager {
 
         let checksum = format!("{:x}", hasher.finalize());
 
+        // Compression is not implemented yet (compress_backup is a no-op), so the
+        // bytes on disk are never actually compressed. Record the TRUE state in
+        // metadata rather than the request, so restore/accounting aren't misled.
+        let actually_compressed = false;
+        if compress && !actually_compressed {
+            tracing::warn!(
+                "Backup compression was requested but is not implemented; \
+                 storing uncompressed and recording compressed=false"
+            );
+        }
+
         // Create metadata
         let metadata = BackupMetadata {
             id: backup_id.clone(),
             timestamp: timestamp.to_rfc3339(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             checksum: checksum.clone(),
-            compressed: compress,
+            compressed: actually_compressed,
             files: files.clone(),
             created_by: created_by.map(String::from),
             encrypted: encrypt,
@@ -375,7 +386,7 @@ impl BackupManager {
         fs::write(&metadata_path, metadata_json)
             .map_err(|e| format!("Failed to write metadata: {}", e))?;
 
-        // Optionally compress
+        // Optionally compress (currently a no-op; see actually_compressed above).
         if compress {
             self.compress_backup(&backup_path)?;
         }
@@ -386,7 +397,7 @@ impl BackupManager {
             version: env!("CARGO_PKG_VERSION").to_string(),
             size_bytes: total_size,
             checksum,
-            compressed: compress,
+            compressed: actually_compressed,
             status: BackupStatus::Completed,
             files_count: files.len(),
             created_by: created_by.map(String::from),
