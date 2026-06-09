@@ -123,26 +123,22 @@ impl AegisVault {
                         tracing::info!("Vault auto-unsealed with existing key");
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to unseal with passphrase, generating new key: {}",
+                        // CRITICAL: never regenerate/overwrite the master key here.
+                        // The existing key blob decrypts the on-disk vault.dat; a wrong
+                        // or transient passphrase must NOT destroy it. Leave the vault
+                        // SEALED and surface the failure for operator intervention.
+                        tracing::error!(
+                            "Failed to unseal vault with the configured passphrase: {}. \
+                             Leaving the vault SEALED and preserving the existing key. \
+                             Check AEGIS_VAULT_PASSPHRASE; the master key was NOT regenerated.",
                             e
                         );
-                        seal_manager.auto_unseal(config.passphrase.as_deref())?;
-                        audit_log.record_success(VaultOperation::Unseal, None, Some("system"));
-                        // Persist the new key
-                        if let Some(ref kp) = key_path {
-                            if let Some(blob) = seal_manager.get_encrypted_key_blob() {
-                                if let Some(parent) = kp.parent() {
-                                    let _ = std::fs::create_dir_all(parent);
-                                }
-                                std::fs::write(kp, &blob)?;
-                                #[cfg(unix)]
-                                std::fs::set_permissions(
-                                    kp,
-                                    std::fs::Permissions::from_mode(0o600),
-                                )?;
-                            }
-                        }
+                        audit_log.record_failure(
+                            VaultOperation::Unseal,
+                            None,
+                            Some("system"),
+                            &e.to_string(),
+                        );
                     }
                 }
             } else {
@@ -291,20 +287,128 @@ impl AegisVault {
         &self.config
     }
 
-    /// Synchronous auto-initialization constructor.
-    /// Creates a vault with auto-unseal enabled, no disk persistence.
-    /// For use in sync contexts like AppState::new().
+    /// Synchronous auto-initialization constructor for sync contexts like
+    /// `AppState::new()`. Key handling mirrors the async [`init`](Self::init)
+    /// so the production server gets durable, passphrase-protected secrets
+    /// instead of a throwaway key:
+    ///
+    /// - If `data_dir/vault.key` exists, the persisted master key is reused.
+    ///   It is unsealed with `AEGIS_VAULT_PASSPHRASE` when set; if the
+    ///   passphrase is missing or wrong, the vault starts **sealed** and the
+    ///   existing key is left intact (never regenerated/overwritten).
+    /// - On first run (no key file) with a passphrase set, a new key is
+    ///   generated and persisted (0600) so it survives restarts.
+    /// - On first run with no passphrase, an ephemeral key is generated and
+    ///   the vault runs unsealed for this process only (dev convenience), and
+    ///   no key file is written.
     pub fn new_auto(data_dir: Option<std::path::PathBuf>) -> Self {
         let seal_manager = Arc::new(SealManager::new());
         let audit_log = Arc::new(VaultAuditLog::new(10000));
         let access_controller = Arc::new(AccessController::new());
 
-        // Auto-unseal with a generated key (no passphrase needed)
-        if let Err(e) = seal_manager.auto_unseal(None) {
-            tracing::warn!("Vault auto-unseal failed: {}. Starting sealed.", e);
-            audit_log.record_failure(VaultOperation::Unseal, None, Some("system"), &e.to_string());
+        let passphrase = std::env::var("AEGIS_VAULT_PASSPHRASE").ok();
+        let key_path = data_dir.as_ref().map(|d| d.join("vault.key"));
+
+        // Load an existing persisted key blob, if any.
+        let has_existing_key = match key_path.as_ref() {
+            Some(kp) if kp.exists() => match std::fs::read(kp) {
+                Ok(blob) => {
+                    seal_manager.set_encrypted_key_blob(blob);
+                    true
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read vault key file {:?}: {}", kp, e);
+                    false
+                }
+            },
+            _ => false,
+        };
+
+        if has_existing_key {
+            // Reuse the persisted key. Only a correct passphrase can unseal it;
+            // never regenerate it, or the on-disk vault.dat becomes unreadable.
+            match passphrase.as_deref() {
+                Some(pp) => match seal_manager.unseal(pp) {
+                    Ok(()) => {
+                        audit_log.record_success(VaultOperation::Unseal, None, Some("system"));
+                        tracing::info!("Vault unsealed with existing persisted key");
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to unseal vault with AEGIS_VAULT_PASSPHRASE: {}. \
+                             Starting SEALED; the existing key was NOT regenerated.",
+                            e
+                        );
+                        audit_log.record_failure(
+                            VaultOperation::Unseal,
+                            None,
+                            Some("system"),
+                            &e.to_string(),
+                        );
+                    }
+                },
+                None => {
+                    tracing::error!(
+                        "A persisted vault key exists but AEGIS_VAULT_PASSPHRASE is not set. \
+                         Starting SEALED. Set the passphrase to unseal."
+                    );
+                    audit_log.record_failure(
+                        VaultOperation::Unseal,
+                        None,
+                        Some("system"),
+                        "missing passphrase for existing key",
+                    );
+                }
+            }
         } else {
-            audit_log.record_success(VaultOperation::Unseal, None, Some("system"));
+            // First run: generate a key.
+            match seal_manager.auto_unseal(passphrase.as_deref()) {
+                Ok(()) => {
+                    audit_log.record_success(VaultOperation::Unseal, None, Some("system"));
+                    // Persist the key blob ONLY when a passphrase protects it, so it
+                    // can actually be unsealed after a restart. Without a passphrase
+                    // the key is encrypted under a random, unrecoverable secret, so
+                    // persisting it would be useless — keep it ephemeral instead.
+                    if passphrase.is_some() {
+                        if let (Some(kp), Some(blob)) =
+                            (key_path.as_ref(), seal_manager.get_encrypted_key_blob())
+                        {
+                            let persisted = (|| -> std::io::Result<()> {
+                                if let Some(parent) = kp.parent() {
+                                    std::fs::create_dir_all(parent)?;
+                                }
+                                std::fs::write(kp, &blob)?;
+                                #[cfg(unix)]
+                                std::fs::set_permissions(
+                                    kp,
+                                    std::fs::Permissions::from_mode(0o600),
+                                )?;
+                                Ok(())
+                            })();
+                            match persisted {
+                                Ok(()) => tracing::info!("Vault key persisted to disk"),
+                                Err(e) => {
+                                    tracing::error!("Failed to persist vault key {:?}: {}", kp, e)
+                                }
+                            }
+                        }
+                    } else {
+                        tracing::warn!(
+                            "Vault running with an ephemeral key (AEGIS_VAULT_PASSPHRASE unset); \
+                             secrets will NOT survive a restart. Set a passphrase for durability."
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Vault auto-unseal failed: {}. Starting sealed.", e);
+                    audit_log.record_failure(
+                        VaultOperation::Unseal,
+                        None,
+                        Some("system"),
+                        &e.to_string(),
+                    );
+                }
+            }
         }
 
         let store_path = data_dir
