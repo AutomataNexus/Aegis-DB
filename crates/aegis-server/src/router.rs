@@ -109,61 +109,71 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
-    // Admin routes require authentication
-    let admin_routes = Router::new()
+    // Admin read routes: any authenticated role may view dashboards/stats.
+    let admin_read_routes = Router::new()
         .route("/cluster", get(handlers::get_cluster_info))
         .route("/dashboard", get(handlers::get_dashboard_summary))
         .route("/nodes", get(handlers::get_nodes))
-        .route("/nodes/:node_id/restart", post(handlers::restart_node))
-        .route("/nodes/:node_id/drain", post(handlers::drain_node))
         .route("/nodes/:node_id/logs", get(handlers::get_node_logs))
-        .route("/nodes/:node_id", delete(handlers::remove_node))
         .route("/storage", get(handlers::get_storage_info))
         .route("/stats", get(handlers::get_query_stats))
         .route("/database", get(handlers::get_database_stats))
         .route("/alerts", get(handlers::get_alerts))
         .route("/activities", get(handlers::get_activities))
-        // Settings management
         .route("/settings", get(handlers::get_settings))
-        .route("/settings", put(handlers::update_settings))
-        // User management
         .route("/users", get(handlers::list_users))
-        .route("/users", post(handlers::create_user))
-        .route("/users/:username", put(handlers::update_user))
-        .route("/users/:username", delete(handlers::delete_user))
-        // Role management
         .route("/roles", get(handlers::list_roles))
-        .route("/roles", post(handlers::create_role))
-        .route("/roles/:name", delete(handlers::delete_role))
-        // Metrics timeseries
         .route(
             "/metrics/timeseries",
             post(handlers::get_metrics_timeseries),
         )
-        // Backup management
-        .route("/backup", post(backup::create_backup))
         .route("/backups", get(backup::list_backups))
-        .route("/restore", post(backup::restore_backup))
-        .route("/backup/:id", delete(backup::delete_backup))
-        // Section compression (NexusCompress)
-        .route("/compress", post(compress::compress_section))
-        // Apply authentication middleware to all admin routes
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,
         ));
 
-    // Cluster peer management routes (require auth)
+    // Admin write routes: destructive/privileged operations require the Admin role.
+    let admin_write_routes = Router::new()
+        .route("/nodes/:node_id/restart", post(handlers::restart_node))
+        .route("/nodes/:node_id/drain", post(handlers::drain_node))
+        .route("/nodes/:node_id", delete(handlers::remove_node))
+        .route("/settings", put(handlers::update_settings))
+        .route("/users", post(handlers::create_user))
+        .route("/users/:username", put(handlers::update_user))
+        .route("/users/:username", delete(handlers::delete_user))
+        .route("/roles", post(handlers::create_role))
+        .route("/roles/:name", delete(handlers::delete_role))
+        .route("/backup", post(backup::create_backup))
+        .route("/restore", post(backup::restore_backup))
+        .route("/backup/:id", delete(backup::delete_backup))
+        .route("/compress", post(compress::compress_section))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_admin,
+        ));
+
+    let admin_routes = admin_read_routes.merge(admin_write_routes);
+
+    // Cluster peer management routes. Inter-node join/heartbeat and read views
+    // keep require_auth; shutting the node down requires the Admin role.
     let cluster_routes = Router::new()
         .route("/info", get(handlers::get_node_info))
         .route("/join", post(handlers::cluster_join))
         .route("/heartbeat", post(handlers::cluster_heartbeat))
         .route("/peers", get(handlers::get_peers))
-        .route("/shutdown", post(handlers::cluster_shutdown))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,
-        ));
+        ))
+        .merge(
+            Router::new()
+                .route("/shutdown", post(handlers::cluster_shutdown))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    middleware::require_admin,
+                )),
+        );
 
     // Login route with rate limiting to prevent brute force attacks
     let login_routes = Router::new()
@@ -277,27 +287,28 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
-    // OTA Update routes (require auth)
+    // OTA Update routes. Reads are open to any authenticated role; creating or
+    // executing an update plan can swap the running binary, so it requires Admin.
     let update_routes = Router::new()
         .route("/version", get(handlers::get_update_version))
-        .route("/plan", post(handlers::create_update_plan))
-        .route("/execute", post(handlers::execute_update_plan))
         .route("/status/:plan_id", get(handlers::get_update_status))
         .route("/history", get(handlers::list_update_plans))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,
-        ));
+        ))
+        .merge(
+            Router::new()
+                .route("/plan", post(handlers::create_update_plan))
+                .route("/execute", post(handlers::execute_update_plan))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    middleware::require_admin,
+                )),
+        );
 
-    // GDPR/CCPA compliance routes
-    let compliance_routes = Router::new()
-        // Data deletion (GDPR right to erasure - Article 17)
-        .route(
-            "/data-subject/:identifier",
-            delete(gdpr::delete_data_subject),
-        )
-        // Data export (GDPR right to data portability - Article 20)
-        .route("/export", post(gdpr::export_data_subject))
+    // GDPR/CCPA compliance read & consent-capture routes (any authenticated role).
+    let compliance_read_routes = Router::new()
         .route("/certificates", get(gdpr::list_deletion_certificates))
         .route(
             "/certificates/:cert_id",
@@ -313,7 +324,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/consent", post(consent::record_consent))
         .route("/consent/stats", get(consent::get_consent_stats))
         .route("/consent/:subject_id", get(consent::get_consent_status))
-        .route("/consent/:subject_id", delete(consent::delete_consent_data))
         .route(
             "/consent/:subject_id/history",
             get(consent::get_consent_history),
@@ -326,71 +336,105 @@ pub fn create_router(state: AppState) -> Router {
             "/consent/:subject_id/check/:purpose",
             get(consent::check_consent_status),
         )
+        // CCPA Do Not Sell
+        .route("/do-not-sell", get(consent::get_do_not_sell_list))
+        // Breach detection and notification (HIPAA/GDPR) — read views
+        .route("/breaches", get(breach::list_breaches))
+        .route("/breaches/stats", get(breach::get_breach_stats))
+        .route("/breaches/:id", get(breach::get_breach))
+        .route("/breaches/:id/report", get(breach::get_breach_report))
+        .route("/security-events", get(breach::list_security_events))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
+    // Compliance mutations that erase/export personal data or change breach
+    // state require the Admin role.
+    let compliance_admin_routes = Router::new()
+        // Data deletion (GDPR right to erasure - Article 17)
+        .route(
+            "/data-subject/:identifier",
+            delete(gdpr::delete_data_subject),
+        )
+        // Data export (GDPR right to data portability - Article 20)
+        .route("/export", post(gdpr::export_data_subject))
+        .route("/consent/:subject_id", delete(consent::delete_consent_data))
         .route(
             "/consent/:subject_id/:purpose",
             delete(consent::withdraw_consent),
         )
-        // CCPA Do Not Sell
-        .route("/do-not-sell", get(consent::get_do_not_sell_list))
-        // Breach detection and notification (HIPAA/GDPR)
-        .route("/breaches", get(breach::list_breaches))
-        .route("/breaches/stats", get(breach::get_breach_stats))
         .route("/breaches/cleanup", post(breach::trigger_cleanup))
-        .route("/breaches/:id", get(breach::get_breach))
         .route(
             "/breaches/:id/acknowledge",
             post(breach::acknowledge_breach),
         )
         .route("/breaches/:id/resolve", post(breach::resolve_breach))
-        .route("/breaches/:id/report", get(breach::get_breach_report))
-        .route("/security-events", get(breach::list_security_events))
-        // Apply authentication middleware to all compliance routes
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            middleware::require_auth,
+            middleware::require_admin,
         ));
 
-    // Vault routes (require auth)
+    let compliance_routes = compliance_read_routes.merge(compliance_admin_routes);
+
+    // Vault routes. Status/audit/transit-key listing are readable by any
+    // authenticated role; everything that touches secret material or the seal
+    // requires the Admin role.
     let vault_routes = Router::new()
         .route("/status", get(vault_handlers::vault_status))
-        .route("/seal", post(vault_handlers::vault_seal))
-        .route("/unseal", post(vault_handlers::vault_unseal))
-        .route("/secrets", get(vault_handlers::list_secrets))
-        .route("/secrets/:key", get(vault_handlers::get_secret))
-        .route("/secrets/:key", put(vault_handlers::set_secret))
-        .route("/secrets/:key", delete(vault_handlers::delete_secret))
-        .route("/transit/encrypt", post(vault_handlers::transit_encrypt))
-        .route("/transit/decrypt", post(vault_handlers::transit_decrypt))
-        .route("/transit/keys", post(vault_handlers::create_transit_key))
         .route("/transit/keys", get(vault_handlers::list_transit_keys))
         .route("/audit", get(vault_handlers::vault_audit))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,
-        ));
+        ))
+        .merge(
+            Router::new()
+                .route("/seal", post(vault_handlers::vault_seal))
+                .route("/unseal", post(vault_handlers::vault_unseal))
+                .route("/secrets", get(vault_handlers::list_secrets))
+                .route("/secrets/:key", get(vault_handlers::get_secret))
+                .route("/secrets/:key", put(vault_handlers::set_secret))
+                .route("/secrets/:key", delete(vault_handlers::delete_secret))
+                .route("/transit/encrypt", post(vault_handlers::transit_encrypt))
+                .route("/transit/decrypt", post(vault_handlers::transit_decrypt))
+                .route("/transit/keys", post(vault_handlers::create_transit_key))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    middleware::require_admin,
+                )),
+        );
 
-    // Shield routes (require auth)
+    // Shield routes. Read views are open to any authenticated role; changing
+    // blocklists, allowlists, or policy requires Admin.
     let shield_routes = Router::new()
         .route("/status", get(shield_handlers::shield_status))
         .route("/stats", get(shield_handlers::shield_stats))
         .route("/events", get(shield_handlers::shield_events))
         .route("/blocked", get(shield_handlers::list_blocked))
-        .route("/blocked", post(shield_handlers::block_ip))
-        .route("/blocked/:ip", delete(shield_handlers::unblock_ip))
         .route("/allowlist", get(shield_handlers::get_allowlist))
-        .route("/allowlist", post(shield_handlers::add_to_allowlist))
-        .route(
-            "/allowlist/:ip",
-            delete(shield_handlers::remove_from_allowlist),
-        )
         .route("/policy", get(shield_handlers::get_policy))
-        .route("/policy", put(shield_handlers::update_policy))
         .route("/ip/:ip", get(shield_handlers::get_ip_reputation))
         .route("/feed", get(shield_handlers::shield_feed))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,
-        ));
+        ))
+        .merge(
+            Router::new()
+                .route("/blocked", post(shield_handlers::block_ip))
+                .route("/blocked/:ip", delete(shield_handlers::unblock_ip))
+                .route("/allowlist", post(shield_handlers::add_to_allowlist))
+                .route(
+                    "/allowlist/:ip",
+                    delete(shield_handlers::remove_from_allowlist),
+                )
+                .route("/policy", put(shield_handlers::update_policy))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    middleware::require_admin,
+                )),
+        );
 
     Router::new()
         .route("/health", get(handlers::health_check))
