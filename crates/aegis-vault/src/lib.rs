@@ -123,26 +123,22 @@ impl AegisVault {
                         tracing::info!("Vault auto-unsealed with existing key");
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to unseal with passphrase, generating new key: {}",
+                        // CRITICAL: never regenerate/overwrite the master key here.
+                        // The existing key blob decrypts the on-disk vault.dat; a wrong
+                        // or transient passphrase must NOT destroy it. Leave the vault
+                        // SEALED and surface the failure for operator intervention.
+                        tracing::error!(
+                            "Failed to unseal vault with the configured passphrase: {}. \
+                             Leaving the vault SEALED and preserving the existing key. \
+                             Check AEGIS_VAULT_PASSPHRASE; the master key was NOT regenerated.",
                             e
                         );
-                        seal_manager.auto_unseal(config.passphrase.as_deref())?;
-                        audit_log.record_success(VaultOperation::Unseal, None, Some("system"));
-                        // Persist the new key
-                        if let Some(ref kp) = key_path {
-                            if let Some(blob) = seal_manager.get_encrypted_key_blob() {
-                                if let Some(parent) = kp.parent() {
-                                    let _ = std::fs::create_dir_all(parent);
-                                }
-                                std::fs::write(kp, &blob)?;
-                                #[cfg(unix)]
-                                std::fs::set_permissions(
-                                    kp,
-                                    std::fs::Permissions::from_mode(0o600),
-                                )?;
-                            }
-                        }
+                        audit_log.record_failure(
+                            VaultOperation::Unseal,
+                            None,
+                            Some("system"),
+                            &e.to_string(),
+                        );
                     }
                 }
             } else {
