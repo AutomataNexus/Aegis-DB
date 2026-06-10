@@ -28,6 +28,7 @@ pub mod secret;
 pub mod store;
 pub mod transit;
 
+pub use access::AccessPolicy;
 pub use config::VaultConfig;
 pub use error::VaultError;
 pub use provider::AegisVaultProvider;
@@ -79,7 +80,12 @@ impl AegisVault {
             tracing::info!("Audit log file enabled: {:?}", path);
         }
 
-        let access_controller = Arc::new(AccessController::new());
+        let access_controller = if config.access_default_deny {
+            tracing::info!("Vault access control: deny-by-default (policies required)");
+            Arc::new(AccessController::new_deny_by_default())
+        } else {
+            Arc::new(AccessController::new())
+        };
 
         // Determine store path
         let store_path = config
@@ -287,6 +293,26 @@ impl AegisVault {
         &self.config
     }
 
+    /// Add or replace a named access policy.
+    ///
+    /// Policies are the grant mechanism when the vault runs with
+    /// `access_default_deny: true` (every operation is denied unless a policy
+    /// allows it). In the default allow-all mode policies have no restricting
+    /// effect; flip `access_default_deny` to enforce them.
+    pub fn add_access_policy(&self, policy: AccessPolicy) {
+        self.store.access_controller().add_policy(policy);
+    }
+
+    /// Remove an access policy by name. Returns true if it existed.
+    pub fn remove_access_policy(&self, name: &str) -> bool {
+        self.store.access_controller().remove_policy(name)
+    }
+
+    /// List the names of all configured access policies.
+    pub fn list_access_policies(&self) -> Vec<String> {
+        self.store.access_controller().list_policies()
+    }
+
     /// Synchronous auto-initialization constructor for sync contexts like
     /// `AppState::new()`. Key handling mirrors the async [`init`](Self::init)
     /// so the production server gets durable, passphrase-protected secrets
@@ -301,10 +327,22 @@ impl AegisVault {
     /// - On first run with no passphrase, an ephemeral key is generated and
     ///   the vault runs unsealed for this process only (dev convenience), and
     ///   no key file is written.
+    ///
+    /// Access control: allow-all by default; set AEGIS_VAULT_DEFAULT_DENY=true
+    /// to start deny-by-default (the embedding application must then seed
+    /// policies via [`add_access_policy`](Self::add_access_policy)).
     pub fn new_auto(data_dir: Option<std::path::PathBuf>) -> Self {
         let seal_manager = Arc::new(SealManager::new());
         let audit_log = Arc::new(VaultAuditLog::new(10000));
-        let access_controller = Arc::new(AccessController::new());
+        let default_deny = std::env::var("AEGIS_VAULT_DEFAULT_DENY")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+        let access_controller = if default_deny {
+            tracing::info!("Vault access control: deny-by-default (policies required)");
+            Arc::new(AccessController::new_deny_by_default())
+        } else {
+            Arc::new(AccessController::new())
+        };
 
         let passphrase = std::env::var("AEGIS_VAULT_PASSPHRASE").ok();
         let key_path = data_dir.as_ref().map(|d| d.join("vault.key"));
@@ -435,6 +473,7 @@ impl AegisVault {
         let config = VaultConfig {
             data_dir,
             auto_unseal: true,
+            access_default_deny: default_deny,
             ..VaultConfig::default()
         };
 
@@ -614,5 +653,68 @@ mod tests {
 
         // Current should be v3
         assert_eq!(vault.get("rotating", "test").unwrap(), "v3");
+    }
+
+    #[tokio::test]
+    async fn test_access_default_deny_blocks_until_policy_granted() {
+        let config = VaultConfig {
+            access_default_deny: true,
+            ..VaultConfig::for_testing()
+        };
+        let vault = AegisVault::init(config).await.unwrap();
+
+        // No policies: every operation is denied.
+        assert!(matches!(
+            vault.set("db/password", "x", "app"),
+            Err(VaultError::AccessDenied(_))
+        ));
+        assert!(matches!(
+            vault.list("", "app"),
+            Err(VaultError::AccessDenied(_))
+        ));
+
+        // Grant the "app" component read+write on db/ only.
+        vault.add_access_policy(AccessPolicy {
+            name: "app-db".into(),
+            allowed_components: ["app"].into_iter().map(String::from).collect(),
+            allowed_prefixes: vec!["db/".into()],
+            read: true,
+            write: true,
+            delete: false,
+        });
+        assert_eq!(vault.list_access_policies(), vec!["app-db"]);
+
+        vault.set("db/password", "hunter2", "app").unwrap();
+        assert_eq!(vault.get("db/password", "app").unwrap(), "hunter2");
+
+        // Outside the granted prefix, other components, and delete: denied.
+        assert!(matches!(
+            vault.set("api/key", "x", "app"),
+            Err(VaultError::AccessDenied(_))
+        ));
+        assert!(matches!(
+            vault.get("db/password", "intruder"),
+            Err(VaultError::AccessDenied(_))
+        ));
+        assert!(matches!(
+            vault.delete("db/password", "app"),
+            Err(VaultError::AccessDenied(_))
+        ));
+
+        // Removing the policy returns the vault to deny-everything.
+        assert!(vault.remove_access_policy("app-db"));
+        assert!(matches!(
+            vault.get("db/password", "app"),
+            Err(VaultError::AccessDenied(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_default_allow_unchanged_by_default() {
+        let vault = AegisVault::init(VaultConfig::for_testing()).await.unwrap();
+        assert!(!vault.config().access_default_deny);
+        // Any component may read/write without policies (backwards compat).
+        vault.set("open/key", "v", "anyone").unwrap();
+        assert_eq!(vault.get("open/key", "someone_else").unwrap(), "v");
     }
 }

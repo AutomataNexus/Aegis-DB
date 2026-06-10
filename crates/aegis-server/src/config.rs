@@ -41,6 +41,14 @@ pub struct ServerConfig {
     pub login_rate_limit_per_minute: u32,
     /// Whether API endpoints require authentication (default: true when admin user configured)
     pub auth_required: bool,
+    /// Legacy fail-open bootstrap. When true and NO users exist, protected
+    /// endpoints are served without authentication (pre-fail-closed behavior).
+    /// Default false: with no users configured, protected endpoints return
+    /// 503 until admin credentials are provisioned (vault keys or
+    /// AEGIS_ADMIN_USERNAME/AEGIS_ADMIN_PASSWORD) and the server restarts.
+    /// Set AEGIS_OPEN_BOOTSTRAP=true to restore the legacy behavior.
+    #[serde(default)]
+    pub open_bootstrap: bool,
 }
 
 impl Default for ServerConfig {
@@ -63,6 +71,9 @@ impl Default for ServerConfig {
             rate_limit_per_minute: 100,
             login_rate_limit_per_minute: 30,
             auth_required: true,
+            open_bootstrap: std::env::var("AEGIS_OPEN_BOOTSTRAP")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false),
         }
     }
 }

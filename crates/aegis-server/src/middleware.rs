@@ -190,6 +190,44 @@ pub async fn shield_check(
 // Authentication Middleware
 // =============================================================================
 
+/// Handle a request arriving while NO users exist (un-bootstrapped server).
+///
+/// Fail CLOSED by default: protected endpoints return 503 with provisioning
+/// instructions until admin credentials are configured (vault keys or
+/// AEGIS_ADMIN_USERNAME/AEGIS_ADMIN_PASSWORD) and the server restarts.
+/// `open_bootstrap` (AEGIS_OPEN_BOOTSTRAP=true) restores the legacy fail-open
+/// behavior for deployments that relied on it; every such request is logged.
+fn no_user_bootstrap_response(
+    state: &AppState,
+    path: &str,
+) -> Option<(StatusCode, Json<serde_json::Value>)> {
+    if state.config.open_bootstrap {
+        tracing::warn!(
+            path = %path,
+            "SECURITY: No admin user configured and AEGIS_OPEN_BOOTSTRAP is set — \
+             endpoint served WITHOUT authentication. Set AEGIS_ADMIN_USERNAME/\
+             AEGIS_ADMIN_PASSWORD (or vault admin credentials) and restart."
+        );
+        None
+    } else {
+        tracing::warn!(
+            path = %path,
+            "Rejected request: no admin user configured (fail-closed bootstrap). \
+             Set AEGIS_ADMIN_USERNAME/AEGIS_ADMIN_PASSWORD (or store admin \
+             credentials in the vault) and restart to enable access."
+        );
+        Some((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Server not bootstrapped",
+                "message": "No admin user is configured. Provision admin credentials \
+                            (AEGIS_ADMIN_USERNAME/AEGIS_ADMIN_PASSWORD environment \
+                            variables or vault admin keys) and restart the server."
+            })),
+        ))
+    }
+}
+
 /// Require authentication for protected routes.
 /// Returns 401 Unauthorized if no valid session token is provided.
 pub async fn require_auth(
@@ -197,16 +235,12 @@ pub async fn require_auth(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
-    // If no users exist, auth cannot be enforced — allow open access for bootstrap.
-    // Log a warning on every request so operators notice the insecure state.
+    // Un-bootstrapped server: fail closed (or fail open if explicitly opted in).
     if state.auth.list_users().is_empty() {
-        tracing::warn!(
-            path = %request.uri().path(),
-            "SECURITY: No admin user configured — all endpoints are unauthenticated. \
-             Create an admin user via POST /api/v1/auth/login or set \
-             AEGIS_ADMIN_USERNAME/AEGIS_ADMIN_PASSWORD to secure the server."
-        );
-        return Ok(next.run(request).await);
+        return match no_user_bootstrap_response(&state, request.uri().path()) {
+            Some(rejection) => Err(rejection),
+            None => Ok(next.run(request).await),
+        };
     }
 
     // Extract token from Authorization header
@@ -252,21 +286,18 @@ pub async fn require_auth(
 /// shutdown, vault secrets, OTA updates, backups, shield/GDPR mutations) so a
 /// lower-privilege session cannot escalate.
 ///
-/// The no-users bootstrap bypass is intentionally kept in parity with
-/// [`require_auth`]: when no users exist the server is in its insecure
-/// bootstrap state and this check cannot be enforced. Securing that bootstrap
-/// is a separate, deployment-specific concern.
+/// The no-users bootstrap handling is kept in parity with [`require_auth`]:
+/// fail closed by default, legacy fail-open only with AEGIS_OPEN_BOOTSTRAP.
 pub async fn require_admin(
     State(state): State<AppState>,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
     if state.auth.list_users().is_empty() {
-        tracing::warn!(
-            path = %request.uri().path(),
-            "SECURITY: No admin user configured — privileged endpoint served without role check."
-        );
-        return Ok(next.run(request).await);
+        return match no_user_bootstrap_response(&state, request.uri().path()) {
+            Some(rejection) => Err(rejection),
+            None => Ok(next.run(request).await),
+        };
     }
 
     let token = match request
@@ -595,6 +626,69 @@ mod tests {
             .await
             .expect("failed to execute request");
 
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_no_users_fails_closed_by_default() {
+        // Force open_bootstrap off so the test is deterministic even if the
+        // AEGIS_OPEN_BOOTSTRAP env var is set in this process.
+        let config = ServerConfig {
+            open_bootstrap: false,
+            ..ServerConfig::default()
+        };
+        let state = AppState::new(config);
+        assert!(state.auth.list_users().is_empty());
+
+        let auth_app = Router::new()
+            .route("/", get(handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_auth,
+            ))
+            .with_state(state.clone());
+        let admin_app = Router::new()
+            .route("/", get(handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_admin,
+            ))
+            .with_state(state.clone());
+
+        for (name, app) in [("require_auth", auth_app), ("require_admin", admin_app)] {
+            let response = app
+                .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{name}: un-bootstrapped server must fail closed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_users_open_bootstrap_optin_allows() {
+        let config = ServerConfig {
+            open_bootstrap: true,
+            ..ServerConfig::default()
+        };
+        let state = AppState::new(config);
+        assert!(state.auth.list_users().is_empty());
+
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_auth,
+            ))
+            .with_state(state);
+
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 

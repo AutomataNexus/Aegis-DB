@@ -155,10 +155,15 @@ fn shared_state() -> Arc<AppState> {
     state
 }
 
-/// Create app state without users — auth middleware is bypassed (open access mode).
-/// Use for data operation tests that don't need authentication.
+/// Create app state without users, with the legacy open-bootstrap mode opted
+/// in (AEGIS_OPEN_BOOTSTRAP equivalent) so the auth middleware is bypassed.
+/// Use for data operation tests that don't need authentication. Note: with no
+/// users and open_bootstrap=false the server now fails CLOSED (503).
 fn shared_state_open() -> Arc<AppState> {
-    Arc::new(AppState::new(ServerConfig::default()))
+    Arc::new(AppState::new(ServerConfig {
+        open_bootstrap: true,
+        ..ServerConfig::default()
+    }))
 }
 
 /// Helper to login and get an auth token for a test user.
@@ -287,6 +292,26 @@ async fn test_login_admin_user_e2e() {
     assert!(json["user"].is_object());
     assert_eq!(json["user"]["username"], "testadmin");
     assert_eq!(json["user"]["role"], "admin");
+}
+
+#[tokio::test]
+async fn test_unbootstrapped_server_fails_closed_e2e() {
+    // No users + default config: protected endpoints must return 503
+    // (fail-closed bootstrap), not serve data unauthenticated.
+    let state = Arc::new(AppState::new(ServerConfig {
+        open_bootstrap: false,
+        ..ServerConfig::default()
+    }));
+    assert!(state.auth.list_users().is_empty());
+    let mut app = app_with_state(state);
+
+    let (status, json) = get_json(&mut app, "/api/v1/kv/keys").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(json["error"].is_string());
+
+    // /health stays reachable for probes even when un-bootstrapped.
+    let (status, _) = get_json(&mut app, "/health").await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
