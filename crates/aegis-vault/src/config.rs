@@ -15,6 +15,11 @@ pub struct VaultConfig {
     pub rotation_check_interval_secs: u64,
     /// Maximum number of audit log entries to keep in memory (default: 10000).
     pub audit_log_max_entries: usize,
+    /// When true, the access controller denies every operation unless an
+    /// explicit [`AccessPolicy`](crate::access::AccessPolicy) grants it
+    /// (add policies via `AegisVault::add_access_policy`). Default false
+    /// (allow-all, backwards compatible). Recommended for production.
+    pub access_default_deny: bool,
 }
 
 impl Default for VaultConfig {
@@ -26,6 +31,7 @@ impl Default for VaultConfig {
             max_versions: 10,
             rotation_check_interval_secs: 3600,
             audit_log_max_entries: 10_000,
+            access_default_deny: false,
         }
     }
 }
@@ -40,6 +46,7 @@ impl VaultConfig {
             max_versions: 10,
             rotation_check_interval_secs: 3600,
             audit_log_max_entries: 1000,
+            access_default_deny: false,
         }
     }
 

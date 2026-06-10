@@ -226,9 +226,15 @@ async fn main() {
     if state.auth.list_users().is_empty() {
         tracing::warn!("==========================================================");
         tracing::warn!("SECURITY WARNING: No admin user configured!");
-        tracing::warn!("All API endpoints are accessible without authentication.");
+        if state.config.open_bootstrap {
+            tracing::warn!("AEGIS_OPEN_BOOTSTRAP is set: all API endpoints are");
+            tracing::warn!("accessible WITHOUT authentication (legacy fail-open).");
+        } else {
+            tracing::warn!("Protected API endpoints are LOCKED (fail-closed) and");
+            tracing::warn!("return 503 until admin credentials are provisioned.");
+        }
         tracing::warn!("Store credentials in the vault or set AEGIS_ADMIN_USERNAME");
-        tracing::warn!("and AEGIS_ADMIN_PASSWORD environment variables.");
+        tracing::warn!("and AEGIS_ADMIN_PASSWORD environment variables, then restart.");
         tracing::warn!("==========================================================");
     }
 

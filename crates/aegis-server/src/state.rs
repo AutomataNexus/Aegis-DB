@@ -283,9 +283,31 @@ impl AppState {
             consent_manager: Arc::new(ConsentManager::with_data_dir(data_dir.clone())),
             breach_detector,
             update_orchestrator,
-            vault: Arc::new(AegisVault::new_auto(
-                data_dir.as_ref().map(|d| d.join("vault")),
-            )),
+            vault: {
+                let vault = AegisVault::new_auto(data_dir.as_ref().map(|d| d.join("vault")));
+                // In deny-by-default mode (AEGIS_VAULT_DEFAULT_DENY) the server's
+                // own components must be granted explicitly or every internal
+                // secret operation fails. External/self-reported components
+                // remain denied unless an operator adds policies for them.
+                if vault.config().access_default_deny {
+                    vault.add_access_policy(aegis_vault::AccessPolicy {
+                        name: "server-internal".into(),
+                        allowed_components: ["api", "secrets_manager"]
+                            .into_iter()
+                            .map(String::from)
+                            .collect(),
+                        allowed_prefixes: Vec::new(),
+                        read: true,
+                        write: true,
+                        delete: true,
+                    });
+                    tracing::info!(
+                        "Vault deny-by-default active: seeded 'server-internal' policy \
+                         for components [api, secrets_manager]"
+                    );
+                }
+                Arc::new(vault)
+            },
             shield: Arc::new(ShieldEngine::new(aegis_shield::ShieldConfig::default())),
             data_dir,
         }
