@@ -80,6 +80,37 @@ pub async fn execute_query(
     let start = Instant::now();
     let is_replicated = headers.get("x-aegis-replicated").is_some();
 
+    // Defense-in-depth: run user SQL through the Shield's injection detector so
+    // it actually inspects query bodies (the request middleware never sees them)
+    // and records reputation/events. DETECT-AND-LOG only for now — enforcement is
+    // intentionally off to avoid false-positives blocking legitimate SQL during a
+    // rolling deploy. To enforce, return 403 on the Block arm below.
+    if !is_replicated {
+        let ctx = aegis_shield::RequestContext {
+            source_ip: client_ip_from_headers(&headers),
+            path: "/api/v1/query".to_string(),
+            method: "POST".to_string(),
+            user_agent: headers
+                .get("user-agent")
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.to_string()),
+            auth_user: None,
+            body_size: request.sql.len(),
+            headers: std::collections::HashMap::new(),
+        };
+        if let aegis_shield::ShieldVerdict::Block {
+            reason,
+            threat_level,
+        } = state.shield.analyze_query(&request.sql, &ctx)
+        {
+            tracing::warn!(
+                level = ?threat_level,
+                "Shield flagged query (detect-only, not blocked): {}",
+                reason
+            );
+        }
+    }
+
     let result = if is_replicated {
         // Replicated query — execute locally, don't re-replicate
         state
@@ -557,8 +588,29 @@ pub async fn get_alerts(State(_state): State<AppState>) -> Json<AlertsResponse> 
 // =============================================================================
 
 /// Login endpoint.
+/// Best-effort client IP from proxy headers, falling back to localhost.
+/// Mirrors the middleware's extraction; only the first `X-Forwarded-For` hop
+/// and `X-Real-IP` are considered.
+fn client_ip_from_headers(headers: &axum::http::HeaderMap) -> String {
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
+        if let Some(first) = xff.split(',').next() {
+            let ip = first.trim();
+            if !ip.is_empty() {
+                return ip.to_string();
+            }
+        }
+    }
+    if let Some(real) = headers.get("x-real-ip").and_then(|h| h.to_str().ok()) {
+        if !real.trim().is_empty() {
+            return real.trim().to_string();
+        }
+    }
+    "127.0.0.1".to_string()
+}
+
 pub async fn login(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let response = state.auth.login(&request.username, &request.password);
@@ -568,6 +620,10 @@ pub async fn login(
             &format!("Failed login attempt for user: {}", request.username),
             Some(&request.username),
         );
+        // Feed the Shield's brute-force detector so repeated failures from an IP
+        // trigger its auto-ban (the rate limiter alone can't do reputation/bans).
+        let client_ip = client_ip_from_headers(&headers);
+        state.shield.record_failed_auth(&client_ip, &request.username);
         (StatusCode::UNAUTHORIZED, Json(response))
     } else if response.requires_mfa == Some(true) {
         state.activity.log_auth(
