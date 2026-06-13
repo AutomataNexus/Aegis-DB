@@ -4332,7 +4332,11 @@ mod tests {
 
         let result = executor.execute(&plan).unwrap();
         // Two groups, NOT one collapsed row (the bug).
-        assert_eq!(result.rows.len(), 2, "GROUP BY must yield one row per group");
+        assert_eq!(
+            result.rows.len(),
+            2,
+            "GROUP BY must yield one row per group"
+        );
 
         // Collect region -> (total, count) for order-independent assertions.
         let mut by_region = std::collections::HashMap::new();
