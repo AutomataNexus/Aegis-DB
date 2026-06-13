@@ -1,7 +1,7 @@
 """
 Aegis Database Python SDK Setup
 
-@version 1.0.0
+@version 1.1.0
 @author AutomataNexus Development Team
 """
 
@@ -12,7 +12,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="aegis-db",
-    version="1.0.0",
+    version="1.1.0",
     author="AutomataNexus Development Team",
     author_email="dev@aegisdb.io",
     description="Official Python client for Aegis Database",

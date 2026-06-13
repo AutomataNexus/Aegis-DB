@@ -22,7 +22,7 @@ pub mod planner;
 
 pub use analyzer::Analyzer;
 pub use ast::*;
-pub use executor::Executor;
+pub use executor::{Executor, TransferOutcome};
 pub use index::{
     BTreeIndex, HashIndex, IndexError, IndexKey, IndexType, IndexValue, TableIndexManager,
 };

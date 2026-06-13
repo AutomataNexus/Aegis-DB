@@ -216,4 +216,4 @@ cargo run -p aegis-server -- --tls
 
 ## Tests
 
-634 tests (workspace total) covering configuration, state management, HTTP endpoints, authentication, rate limiting, bulk import, VACUUM, PHI classification, and query safety limits.
+808 tests (workspace total) covering configuration, state management, HTTP endpoints, authentication, rate limiting, bulk import, VACUUM, PHI classification, and query safety limits.

@@ -1407,6 +1407,15 @@ impl QueryEngine {
         }
     }
 
+    /// Return an [`Executor`] bound to the shared context for `database`
+    /// (or `"default"`). Gives direct, no-HTTP, no-SQL access to the engine —
+    /// used by the engine-level benchmark suite and hot closure-based paths
+    /// such as `execute_update_indexed_fn`.
+    pub fn get_executor(&self, database: Option<&str>) -> Executor {
+        let context = self.get_or_create_context(database.unwrap_or("default"));
+        Executor::with_shared_context(context)
+    }
+
     /// Execute a SQL query against the specified database.
     /// Supports multi-statement input with transaction control:
     /// `BEGIN; INSERT ...; INSERT ...; COMMIT;` executes atomically.

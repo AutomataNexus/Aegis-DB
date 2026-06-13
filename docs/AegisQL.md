@@ -11,7 +11,7 @@ description: "AegisQL query language documentation and reference"
 Query language documentation for SQL, Document, TimeSeries, and Graph operations
 {: .fs-6 .fw-300 }
 
-**Version:** 0.2.6
+**Version:** 0.3.1
 {: .label .label-green }
 
 ---
@@ -1416,6 +1416,8 @@ VALUES, WHEN, WHERE, WITH
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.3.1 | Jun 2026 | Real GROUP BY (one row per group), explicit RIGHT/FULL OUTER JOIN rejection, KV TTL enforcement on get/list/count |
+| 0.3.0 | Jun 2026 | Section compression (`POST /api/v1/admin/compress`, NexusCompress NCZL frames) for cold time-series sections and document collections |
 | 0.2.6 | Feb 2026 | VACUUM statement, B-tree/Hash index types, graph queries |
 | 0.2.1 | Jan 2026 | Multi-database support |
 | 1.0.0 | Jan 2026 | Initial release |

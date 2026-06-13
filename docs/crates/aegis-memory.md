@@ -78,4 +78,4 @@ Arena allocation provides significant performance benefits over individual heap 
 
 ## Tests
 
-634 tests (workspace total) covering allocation, alignment, and reset functionality.
+808 tests (workspace total) covering allocation, alignment, and reset functionality.

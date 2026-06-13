@@ -76,7 +76,7 @@ fn percentile(sorted: &[u64], pct: f64) -> u64 {
 
 async fn query(client: &reqwest::Client, url: &str, sql: &str) -> Result<(), reqwest::Error> {
     client
-        .post(&format!("{}/api/v1/query", url))
+        .post(format!("{}/api/v1/query", url))
         .json(&json!({ "sql": sql }))
         .send()
         .await?;
@@ -90,7 +90,7 @@ async fn kv_set(
     value: &str,
 ) -> Result<(), reqwest::Error> {
     client
-        .post(&format!("{}/api/v1/kv/{}", url, key))
+        .post(format!("{}/api/v1/kv/{}", url, key))
         .json(&json!({ "value": value }))
         .send()
         .await?;
@@ -99,7 +99,7 @@ async fn kv_set(
 
 async fn kv_get(client: &reqwest::Client, url: &str, key: &str) -> Result<(), reqwest::Error> {
     client
-        .get(&format!("{}/api/v1/kv/{}", url, key))
+        .get(format!("{}/api/v1/kv/{}", url, key))
         .send()
         .await?;
     Ok(())
@@ -168,7 +168,12 @@ async fn bench_insert(url: &str, concurrency: usize, duration: u64) -> BenchResu
     let base = url.to_string();
 
     // Setup table
-    let _ = query(&client, &base, "CREATE TABLE http_insert (id INT, name VARCHAR(100), value INT)").await;
+    let _ = query(
+        &client,
+        &base,
+        "CREATE TABLE http_insert (id INT, name VARCHAR(100), value INT)",
+    )
+    .await;
 
     let counter = Arc::new(AtomicU64::new(0));
 
@@ -182,7 +187,10 @@ async fn bench_insert(url: &str, concurrency: usize, duration: u64) -> BenchResu
             let ctr = ctr.clone();
             async move {
                 let id = ctr.fetch_add(1, Ordering::Relaxed);
-                let sql = format!("INSERT INTO http_insert VALUES ({}, 'name_{}', {})", id, id, id);
+                let sql = format!(
+                    "INSERT INTO http_insert VALUES ({}, 'name_{}', {})",
+                    id, id, id
+                );
                 let _ = query(&client, &base, &sql).await;
             }
         }
@@ -195,12 +203,22 @@ async fn bench_read(url: &str, concurrency: usize, duration: u64) -> BenchResult
     let base = url.to_string();
 
     // Setup table with data
-    let _ = query(&client, &base, "CREATE TABLE http_read (id INT, name VARCHAR(100), value INT)").await;
+    let _ = query(
+        &client,
+        &base,
+        "CREATE TABLE http_read (id INT, name VARCHAR(100), value INT)",
+    )
+    .await;
     for i in 0..1000 {
         let _ = query(
             &client,
             &base,
-            &format!("INSERT INTO http_read VALUES ({}, 'row_{}', {})", i, i, i * 10),
+            &format!(
+                "INSERT INTO http_read VALUES ({}, 'row_{}', {})",
+                i,
+                i,
+                i * 10
+            ),
         )
         .await;
     }
@@ -227,7 +245,12 @@ async fn bench_fund_transfer(url: &str, concurrency: usize, duration: u64) -> Be
     let base = url.to_string();
 
     // Setup accounts
-    let _ = query(&client, &base, "CREATE TABLE http_accounts (id INT, balance INT)").await;
+    let _ = query(
+        &client,
+        &base,
+        "CREATE TABLE http_accounts (id INT, balance INT)",
+    )
+    .await;
     eprintln!("  Populating 10,000 accounts (HTTP)...");
     for i in 0..10_000 {
         let _ = query(
@@ -239,60 +262,54 @@ async fn bench_fund_transfer(url: &str, concurrency: usize, duration: u64) -> Be
     }
     eprintln!("  Done populating.");
 
-    run_benchmark(
-        "Fund Transfer (HTTP)",
-        concurrency,
-        duration,
-        move || {
+    run_benchmark("Fund Transfer (HTTP)", concurrency, duration, move || {
+        let client = client.clone();
+        let base = base.clone();
+        move |task_id: usize| {
             let client = client.clone();
             let base = base.clone();
-            move |task_id: usize| {
-                let client = client.clone();
-                let base = base.clone();
-                async move {
-                    let mut rng =
-                        StdRng::seed_from_u64(task_id as u64 * 1000 + rand::random::<u64>());
-                    let sender = rng.gen_range(0..10_000);
-                    let mut receiver = rng.gen_range(0..10_000);
-                    while receiver == sender {
-                        receiver = rng.gen_range(0..10_000);
-                    }
-
-                    // Read + compute + write (engine doesn't support SET col = col - expr)
-                    let _ = query(
-                        &client,
-                        &base,
-                        &format!("SELECT * FROM http_accounts WHERE id = {}", sender),
-                    )
-                    .await;
-                    let _ = query(
-                        &client,
-                        &base,
-                        &format!("SELECT * FROM http_accounts WHERE id = {}", receiver),
-                    )
-                    .await;
-                    let _ = query(
-                        &client,
-                        &base,
-                        &format!(
-                            "UPDATE http_accounts SET balance = 9999 WHERE id = {}",
-                            sender
-                        ),
-                    )
-                    .await;
-                    let _ = query(
-                        &client,
-                        &base,
-                        &format!(
-                            "UPDATE http_accounts SET balance = 10001 WHERE id = {}",
-                            receiver
-                        ),
-                    )
-                    .await;
+            async move {
+                let mut rng = StdRng::seed_from_u64(task_id as u64 * 1000 + rand::random::<u64>());
+                let sender = rng.gen_range(0..10_000);
+                let mut receiver = rng.gen_range(0..10_000);
+                while receiver == sender {
+                    receiver = rng.gen_range(0..10_000);
                 }
+
+                // Read + compute + write (engine doesn't support SET col = col - expr)
+                let _ = query(
+                    &client,
+                    &base,
+                    &format!("SELECT * FROM http_accounts WHERE id = {}", sender),
+                )
+                .await;
+                let _ = query(
+                    &client,
+                    &base,
+                    &format!("SELECT * FROM http_accounts WHERE id = {}", receiver),
+                )
+                .await;
+                let _ = query(
+                    &client,
+                    &base,
+                    &format!(
+                        "UPDATE http_accounts SET balance = 9999 WHERE id = {}",
+                        sender
+                    ),
+                )
+                .await;
+                let _ = query(
+                    &client,
+                    &base,
+                    &format!(
+                        "UPDATE http_accounts SET balance = 10001 WHERE id = {}",
+                        receiver
+                    ),
+                )
+                .await;
             }
-        },
-    )
+        }
+    })
     .await
 }
 
@@ -326,7 +343,12 @@ async fn bench_mixed(url: &str, concurrency: usize, duration: u64) -> BenchResul
     let base = url.to_string();
 
     // Setup
-    let _ = query(&client, &base, "CREATE TABLE http_mixed (id INT, value INT)").await;
+    let _ = query(
+        &client,
+        &base,
+        "CREATE TABLE http_mixed (id INT, value INT)",
+    )
+    .await;
     for i in 0..1000 {
         let _ = query(
             &client,
@@ -374,9 +396,15 @@ async fn bench_mixed(url: &str, concurrency: usize, duration: u64) -> BenchResul
 
 fn print_results(results: &[BenchResult]) {
     println!();
-    println!("╔══════════════════════════════╦════════════╦══════════╦══════════╦══════════╦══════════╗");
-    println!("║ Benchmark                    ║   Ops/sec  ║  Avg(μs) ║ P50(μs)  ║ P95(μs)  ║ P99(μs)  ║");
-    println!("╠══════════════════════════════╬════════════╬══════════╬══════════╬══════════╬══════════╣");
+    println!(
+        "╔══════════════════════════════╦════════════╦══════════╦══════════╦══════════╦══════════╗"
+    );
+    println!(
+        "║ Benchmark                    ║   Ops/sec  ║  Avg(μs) ║ P50(μs)  ║ P95(μs)  ║ P99(μs)  ║"
+    );
+    println!(
+        "╠══════════════════════════════╬════════════╬══════════╬══════════╬══════════╬══════════╣"
+    );
 
     for r in results {
         println!(
@@ -390,7 +418,9 @@ fn print_results(results: &[BenchResult]) {
         );
     }
 
-    println!("╚══════════════════════════════╩════════════╩══════════╩══════════╩══════════╩══════════╝");
+    println!(
+        "╚══════════════════════════════╩════════════╩══════════╩══════════╩══════════╩══════════╝"
+    );
     println!();
 
     // SpacetimeDB comparison
@@ -420,12 +450,15 @@ async fn main() {
 
     // Verify server is reachable
     let client = reqwest::Client::new();
-    match client.get(&format!("{}/health", args.url)).send().await {
+    match client.get(format!("{}/health", args.url)).send().await {
         Ok(resp) if resp.status().is_success() => {
             println!("Server is healthy. Starting benchmarks...");
         }
         Ok(resp) => {
-            eprintln!("Server returned status: {}. Continuing anyway.", resp.status());
+            eprintln!(
+                "Server returned status: {}. Continuing anyway.",
+                resp.status()
+            );
         }
         Err(e) => {
             eprintln!("ERROR: Cannot reach server at {}: {}", args.url, e);
@@ -450,7 +483,10 @@ async fn main() {
             "kv" => bench_kv(&args.url, args.concurrency, args.duration).await,
             "mixed" => bench_mixed(&args.url, args.concurrency, args.duration).await,
             _ => {
-                eprintln!("Unknown benchmark: {}. Options: insert, read, transfer, kv, mixed, all", bench);
+                eprintln!(
+                    "Unknown benchmark: {}. Options: insert, read, transfer, kv, mixed, all",
+                    bench
+                );
                 continue;
             }
         };

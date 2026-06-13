@@ -68,3 +68,9 @@ openssl-sys = { version = "0.9.111", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+criterion = { version = "0.5", features = ["async_tokio"] }
+zipf = "7"
+
+[[bench]]
+name = "benchmark_suite"
+harness = false

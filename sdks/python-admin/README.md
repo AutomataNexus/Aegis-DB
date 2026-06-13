@@ -47,6 +47,12 @@ async def main():
 asyncio.run(main())
 ```
 
+> **Requires an admin (v0.3.1+).** Every privileged route in this SDK is
+> enforced by `require_admin` server-side — calling them as a non-admin returns
+> **403**. On a freshly bootstrapped server with no users, authenticated routes
+> return **503** until an admin is provisioned (`AEGIS_ADMIN_USERNAME` /
+> `AEGIS_ADMIN_PASSWORD`). See the [Security Guide](../../docs/SECURITY.md).
+
 ## Authentication
 
 ```python

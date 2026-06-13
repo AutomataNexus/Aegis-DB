@@ -1362,7 +1362,7 @@ pub use types::{Document, DocumentId};
 
 ## Testing
 
-The workspace currently has **634 tests** across 13 crates.
+The workspace currently has **808 tests** across 16 crates.
 
 ### Unit Tests
 
@@ -2187,13 +2187,17 @@ pub fn UserMenu() -> impl IntoView {
 
 ## Performance Optimization
 
-### Benchmark Results (v0.2.6)
+### Benchmark Results (v0.3.1)
+
+Engine-level (Criterion, in-process). Full results in [`benchmarks/RESULTS.md`](https://github.com/AutomataNexus/Aegis-DB/blob/main/benchmarks/RESULTS.md).
 
 | Workload | Throughput |
 |----------|-----------|
-| Fund transfers (transactional) | 758K TPS |
-| High contention writes | 2.5M TPS |
-| KV reads | 12.3M reads/sec |
+| Fund transfers (0% contention) | 971K TPS |
+| Fund transfers (high contention) | 2.5M TPS |
+| KV reads (64B) | 10.8M reads/sec |
+| KV writes (64B) | 4.1M writes/sec |
+| Single-row inserts | 204K rows/sec |
 
 ### Profiling
 
@@ -2353,7 +2357,7 @@ fn debug_validate(&self) {
 
 ```bash
 # Update version in all Cargo.toml files
-./scripts/bump-version.sh 0.2.6
+./scripts/bump-version.sh 0.3.1
 ```
 
 ### Release Checklist
@@ -2373,17 +2377,17 @@ fn debug_validate(&self) {
 
 3. **Create Release:**
    ```bash
-   git tag -a v0.2.6 -m "Release v0.2.6"
-   git push origin v0.2.6
+   git tag -a v0.3.1 -m "Release v0.3.1"
+   git push origin v0.3.1
    ```
 
 4. **Build Artifacts:**
    ```bash
    ./scripts/release.sh
    # Creates:
-   # - aegis-db-0.2.6-linux-x86_64.tar.gz
-   # - aegis-db-0.2.6-macos-x86_64.tar.gz
-   # - aegis-db-0.2.6-windows-x86_64.zip
+   # - aegis-db-0.3.1-linux-x86_64.tar.gz
+   # - aegis-db-0.3.1-macos-x86_64.tar.gz
+   # - aegis-db-0.3.1-windows-x86_64.zip
    ```
 
 5. **Publish to crates.io (if applicable):**

@@ -139,4 +139,4 @@ let batch = processor.process_batch(events);
 
 ## Tests
 
-634 tests (workspace total) covering all modules.
+808 tests (workspace total) covering all modules.

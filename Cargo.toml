@@ -16,6 +16,7 @@ members = [
     "crates/aegis-updates",
     "crates/aegis-vault",
     "crates/aegis-shield",
+    "benchmarks",
 ]
 # WASM crates built separately with Trunk
 exclude = [

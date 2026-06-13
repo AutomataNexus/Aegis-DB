@@ -10,6 +10,9 @@ ExecStart=/opt/Aegis-DB/target/release/aegis-server --port 9090 --node-name Dash
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
+# v0.3.1 is fail-closed: provision an admin (AEGIS_ADMIN_USERNAME/PASSWORD) or set
+# AEGIS_OPEN_BOOTSTRAP=true here, else authenticated routes return 503 until a user exists.
+EnvironmentFile=-/etc/aegis/aegis.env
 
 [Install]
 WantedBy=multi-user.target

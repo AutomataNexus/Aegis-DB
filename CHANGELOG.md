@@ -4,6 +4,56 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) and the format of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.1] - 2026-06-13
+
+### Security
+- **Vault data-loss fix.** A wrong or transient passphrase on an existing vault
+  no longer regenerates and overwrites the master key (which orphaned every
+  stored secret). The vault now starts **sealed**, preserves the existing key,
+  and records an audit failure; recovery is a normal unseal.
+- **Durable vault key.** `new_auto` loads the persisted key and honors
+  `AEGIS_VAULT_PASSPHRASE` instead of generating an ephemeral key each restart.
+- **Fail-closed bootstrap.** With no users configured, authenticated routes
+  return `503` until an admin is provisioned (`AEGIS_ADMIN_USERNAME` /
+  `AEGIS_ADMIN_PASSWORD`); `/health` and `/login` stay open. Legacy fail-open is
+  opt-in via `AEGIS_OPEN_BOOTSTRAP=true` and logs a warning per request.
+- **RBAC enforcement.** `require_admin` is enforced on all privileged mutation
+  routes (user/role mgmt, node lifecycle, cluster shutdown, vault secrets/seal/
+  transit, OTA, backup/restore, shield mutations, GDPR erase/export); non-admins
+  receive `403`. Reads remain open to any authenticated role.
+- **Vault deny-by-default.** Opt-in `VaultConfig.access_default_deny` /
+  `AEGIS_VAULT_DEFAULT_DENY=true` requires an explicit `AccessPolicy` grant for
+  every vault op; `add/remove/list_access_policies` API added.
+- **Brute-force + injection detection.** Failed logins feed the Shield
+  brute-force detector (`record_failed_auth`); user SQL is screened by the
+  Shield injection detector (detect-and-log).
+
+### Fixed
+- **GROUP BY** now produces one row per group (was collapsing all rows to one).
+- **RIGHT/FULL OUTER JOIN** is explicitly rejected instead of silently degrading
+  to INNER and dropping rows.
+- **KV TTL** is enforced on `get`/`list`/`count` (was stored but never applied).
+- **Backup** records `compressed=false` honestly (compression is a no-op stub).
+
+### Added
+- Direct-execution engine fast paths: `QueryEngine::get_executor`,
+  `Executor::execute_update_indexed_fn` (closure-based indexed UPDATE), and
+  `Executor::execute_transfer_indexed` (atomic indexed transfer — read both
+  balances, verify funds, debit + credit under a single held write lock).
+- Engine Criterion benchmark harness wired up; the `benchmarks` crate is now a
+  workspace member, so both benchmark harnesses build from a clean checkout.
+- Crate documentation pages for `aegis-vault`, `aegis-shield`,
+  `aegis-monitoring`, `aegis-cli`, and `aegis-dashboard`.
+
+### Changed
+- Workspace bumped to **0.3.1**; `aegis-common` and `aegis-db-vault` published to
+  crates.io at 0.3.1. **0.2.3–0.3.0 yanked** due to the vault data-loss bug.
+- Benchmarks re-measured on 0.3.1 (see `benchmarks/RESULTS.md`): atomic fund
+  transfer 971K TPS at 0% contention, 2.54M TPS under high contention.
+- Documentation refreshed to 0.3.1 (808 tests, 16 crates).
+- JavaScript, JavaScript-admin, Python, and Python-admin SDKs and the Grafana
+  data-source plugin bumped to **1.1.0**.
+
 ## [0.3.0] - 2026-06-04
 
 ### Added

@@ -192,4 +192,4 @@ let result = executor.execute(&plan)?;
 
 ## Tests
 
-634 tests (workspace total) covering parsing, analysis, planning, execution, plan caching, query limits, data classification, VACUUM, and index support.
+808 tests (workspace total) covering parsing, analysis, planning, execution, plan caching, query limits, data classification, VACUUM, and index support.

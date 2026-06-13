@@ -1186,6 +1186,17 @@ pub struct Executor {
     context: Arc<RwLock<ExecutionContext>>,
 }
 
+/// Result of [`Executor::execute_transfer_indexed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferOutcome {
+    /// Funds verified and moved atomically.
+    Committed,
+    /// Sender did not have enough balance; nothing was changed.
+    InsufficientFunds,
+    /// One of the accounts could not be found (no visible indexed row).
+    AccountMissing,
+}
+
 impl Executor {
     pub fn new(context: ExecutionContext) -> Self {
         Self {
@@ -1213,6 +1224,178 @@ impl Executor {
         // Substitute placeholders with actual parameter values
         let bound_plan = substitute_parameters(&plan.root, params)?;
         self.execute_internal(&bound_plan)
+    }
+
+    /// Fast-path indexed UPDATE used by the engine-level benchmark suite and
+    /// any hot single-row mutation path (e.g. fund transfers).
+    ///
+    /// Resolves the index covering `index_column`, looks up the row(s) whose
+    /// `index_column` equals `key_value` (O(1) hash / O(log n) B-tree — no full
+    /// scan, no SQL parse, no plan construction), then applies `f` to the value
+    /// at `value_col_idx` in place. `value_col_idx` must be a **non-indexed**
+    /// column, so no index maintenance is required. Returns rows updated.
+    ///
+    /// This is the closure-based direct-execution path that replaced the
+    /// removed `execute_update_indexed_fn`/`get_executor` pair; re-introduced
+    /// for the engine-level benchmarks against the current storage internals.
+    pub fn execute_update_indexed_fn<F>(
+        &self,
+        table_name: &str,
+        index_column: &str,
+        key_value: &Value,
+        value_col_idx: usize,
+        f: F,
+    ) -> ExecutorResult<u64>
+    where
+        F: Fn(&Value) -> Value,
+    {
+        let context = self
+            .context
+            .read()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        // Resolve the index covering `index_column` and look up matching row ids.
+        let manager = context.get_index_manager(table_name).ok_or_else(|| {
+            ExecutorError::InvalidOperation(format!("table '{}' has no indexes", table_name))
+        })?;
+        let (index_name, _) = manager
+            .find_index_for_columns(std::slice::from_ref(&index_column.to_string()))
+            .ok_or_else(|| {
+                ExecutorError::InvalidOperation(format!(
+                    "no index on column '{}' of table '{}'",
+                    index_column, table_name
+                ))
+            })?;
+        let key = IndexKey::single(IndexKey::from_value(key_value));
+        let row_ids = manager.lookup_eq(&index_name, &key).unwrap_or_default();
+
+        // Apply the closure in place to the target column of each matched row.
+        let table = context
+            .get_table(table_name)
+            .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
+        let mut table_data = table
+            .write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        let mut updated = 0u64;
+        for row_id in row_ids {
+            if !context.is_row_visible(&table_data, row_id) {
+                continue;
+            }
+            if let Some(slot) = table_data
+                .rows
+                .get_mut(row_id)
+                .and_then(|row| row.values.get_mut(value_col_idx))
+            {
+                let new_val = f(slot);
+                *slot = new_val;
+                updated += 1;
+            }
+        }
+        Ok(updated)
+    }
+
+    /// Atomically transfer `amount` between two rows located by an indexed
+    /// equality column, doing the full real work of a transactional transfer:
+    ///
+    ///   1. look up the sender row by index
+    ///   2. look up the receiver row by index
+    ///   3. read both balances
+    ///   4. verify the sender has sufficient funds
+    ///   5. debit the sender and credit the receiver
+    ///
+    /// The entire read-verify-debit-credit sequence runs while holding the
+    /// table's write lock, so it is **atomic and isolated** — no other writer
+    /// can observe or interleave a partial transfer. `balance_col_idx` must be a
+    /// non-indexed integer column (no index maintenance required). Unlike a
+    /// `BEGIN…COMMIT` transaction this does not snapshot the whole context, so
+    /// it stays O(1) regardless of table size.
+    ///
+    /// This is the honest analog of an in-process SpacetimeDB transfer reducer:
+    /// compiled logic, in-memory, atomic, with the sufficient-funds check — not
+    /// a pair of blind writes.
+    pub fn execute_transfer_indexed(
+        &self,
+        table_name: &str,
+        index_column: &str,
+        from_key: &Value,
+        to_key: &Value,
+        balance_col_idx: usize,
+        amount: i64,
+    ) -> ExecutorResult<TransferOutcome> {
+        let context = self
+            .context
+            .read()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        // Resolve the index and look up both endpoints.
+        let manager = context.get_index_manager(table_name).ok_or_else(|| {
+            ExecutorError::InvalidOperation(format!("table '{}' has no indexes", table_name))
+        })?;
+        let (index_name, _) = manager
+            .find_index_for_columns(std::slice::from_ref(&index_column.to_string()))
+            .ok_or_else(|| {
+                ExecutorError::InvalidOperation(format!(
+                    "no index on column '{}' of table '{}'",
+                    index_column, table_name
+                ))
+            })?;
+        let from_ids = manager
+            .lookup_eq(
+                &index_name,
+                &IndexKey::single(IndexKey::from_value(from_key)),
+            )
+            .unwrap_or_default();
+        let to_ids = manager
+            .lookup_eq(&index_name, &IndexKey::single(IndexKey::from_value(to_key)))
+            .unwrap_or_default();
+
+        let table = context
+            .get_table(table_name)
+            .ok_or_else(|| ExecutorError::TableNotFound(table_name.to_string()))?;
+        // Single write lock held across read + verify + both writes = atomic + isolated.
+        let mut table_data = table
+            .write()
+            .map_err(|_| ExecutorError::Internal("Lock poisoned".to_string()))?;
+
+        let from_id = from_ids
+            .into_iter()
+            .find(|&id| context.is_row_visible(&table_data, id));
+        let to_id = to_ids
+            .into_iter()
+            .find(|&id| context.is_row_visible(&table_data, id));
+        let (from_id, to_id) = match (from_id, to_id) {
+            (Some(f), Some(t)) => (f, t),
+            _ => return Ok(TransferOutcome::AccountMissing),
+        };
+
+        let read_balance = |data: &TableData, id: usize| -> ExecutorResult<i64> {
+            match data
+                .rows
+                .get(id)
+                .and_then(|r| r.values.get(balance_col_idx))
+            {
+                Some(Value::Integer(n)) => Ok(*n),
+                _ => Err(ExecutorError::InvalidOperation(
+                    "balance column is not an integer".to_string(),
+                )),
+            }
+        };
+
+        // 3. read both balances
+        let sender_balance = read_balance(&table_data, from_id)?;
+        let receiver_balance = read_balance(&table_data, to_id)?;
+
+        // 4. verify sufficient funds
+        if sender_balance < amount {
+            return Ok(TransferOutcome::InsufficientFunds);
+        }
+
+        // 5. debit + credit (atomic under the held write lock)
+        table_data.rows[from_id].values[balance_col_idx] = Value::Integer(sender_balance - amount);
+        table_data.rows[to_id].values[balance_col_idx] = Value::Integer(receiver_balance + amount);
+
+        Ok(TransferOutcome::Committed)
     }
 
     fn execute_internal(&self, root: &PlanNode) -> ExecutorResult<QueryResult> {
@@ -3988,6 +4171,135 @@ mod tests {
         });
 
         context
+    }
+
+    #[test]
+    fn test_execute_update_indexed_fn_fast_path() {
+        use std::sync::{Arc, RwLock};
+
+        let mut context = create_test_context();
+        // Build an index on `id` so the fast path can resolve the lookup column.
+        context
+            .create_index(
+                "idx_users_id".to_string(),
+                "users".to_string(),
+                vec!["id".to_string()],
+                false,
+                false,
+            )
+            .expect("create index");
+
+        let shared = Arc::new(RwLock::new(context));
+        let executor = Executor::with_shared_context(shared.clone());
+
+        // age is column index 2 (non-indexed) — bump Bob's (id=2) age by 10.
+        let updated = executor
+            .execute_update_indexed_fn("users", "id", &Value::Integer(2), 2, |v| match v {
+                Value::Integer(n) => Value::Integer(n + 10),
+                other => other.clone(),
+            })
+            .expect("indexed update");
+        assert_eq!(updated, 1, "exactly one row matches id=2");
+
+        {
+            let ctx = shared.read().unwrap();
+            let table = ctx.get_table("users").unwrap();
+            let data = table.read().unwrap();
+            let bob = data
+                .rows
+                .iter()
+                .find(|r| r.values[0] == Value::Integer(2))
+                .unwrap();
+            assert_eq!(
+                bob.values[2],
+                Value::Integer(35),
+                "25 + 10 applied in place"
+            );
+            let alice = data
+                .rows
+                .iter()
+                .find(|r| r.values[0] == Value::Integer(1))
+                .unwrap();
+            assert_eq!(alice.values[2], Value::Integer(30), "other rows untouched");
+        }
+
+        // A key with no matching row updates nothing.
+        let none = executor
+            .execute_update_indexed_fn("users", "id", &Value::Integer(999), 2, |v| v.clone())
+            .expect("indexed update on missing key");
+        assert_eq!(none, 0);
+    }
+
+    #[test]
+    fn test_execute_transfer_indexed_atomic() {
+        use std::sync::{Arc, RwLock};
+
+        let mut context = create_test_context();
+        context
+            .create_index(
+                "idx_users_id".to_string(),
+                "users".to_string(),
+                vec!["id".to_string()],
+                false,
+                false,
+            )
+            .expect("create index");
+        let shared = Arc::new(RwLock::new(context));
+        let executor = Executor::with_shared_context(shared.clone());
+
+        // Use the `age` column (index 2) as the balance. Alice(1)=30, Bob(2)=25, Charlie(3)=35.
+        // Transfer 5 from Alice -> Charlie.
+        let outcome = executor
+            .execute_transfer_indexed("users", "id", &Value::Integer(1), &Value::Integer(3), 2, 5)
+            .expect("transfer");
+        assert_eq!(outcome, TransferOutcome::Committed);
+
+        let balance = |id: i64| -> i64 {
+            let ctx = shared.read().unwrap();
+            let table = ctx.get_table("users").unwrap();
+            let data = table.read().unwrap();
+            let row = data
+                .rows
+                .iter()
+                .find(|r| r.values[0] == Value::Integer(id))
+                .unwrap();
+            match row.values[2] {
+                Value::Integer(n) => n,
+                _ => panic!("not int"),
+            }
+        };
+        assert_eq!(balance(1), 25, "sender debited");
+        assert_eq!(balance(3), 40, "receiver credited");
+        // Conservation: total balance unchanged (30+25+35 == 25+25+40).
+        assert_eq!(balance(1) + balance(2) + balance(3), 90);
+
+        // Insufficient funds: Bob(2)=25 cannot send 1000 — nothing changes.
+        let outcome = executor
+            .execute_transfer_indexed(
+                "users",
+                "id",
+                &Value::Integer(2),
+                &Value::Integer(1),
+                2,
+                1000,
+            )
+            .expect("transfer");
+        assert_eq!(outcome, TransferOutcome::InsufficientFunds);
+        assert_eq!(balance(2), 25, "sender untouched on insufficient funds");
+        assert_eq!(balance(1), 25, "receiver untouched on insufficient funds");
+
+        // Missing account.
+        let outcome = executor
+            .execute_transfer_indexed(
+                "users",
+                "id",
+                &Value::Integer(999),
+                &Value::Integer(1),
+                2,
+                1,
+            )
+            .expect("transfer");
+        assert_eq!(outcome, TransferOutcome::AccountMissing);
     }
 
     #[test]
