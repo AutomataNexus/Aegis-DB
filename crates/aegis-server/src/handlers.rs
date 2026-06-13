@@ -623,7 +623,9 @@ pub async fn login(
         // Feed the Shield's brute-force detector so repeated failures from an IP
         // trigger its auto-ban (the rate limiter alone can't do reputation/bans).
         let client_ip = client_ip_from_headers(&headers);
-        state.shield.record_failed_auth(&client_ip, &request.username);
+        state
+            .shield
+            .record_failed_auth(&client_ip, &request.username);
         (StatusCode::UNAUTHORIZED, Json(response))
     } else if response.requires_mfa == Some(true) {
         state.activity.log_auth(

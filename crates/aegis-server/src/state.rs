@@ -2008,7 +2008,10 @@ mod tests {
                 e.updated_at = chrono::Utc::now() - chrono::Duration::seconds(10);
             }
         }
-        assert!(store.get("ephemeral").is_none(), "expired key must not be returned");
+        assert!(
+            store.get("ephemeral").is_none(),
+            "expired key must not be returned"
+        );
 
         store.set("permanent".to_string(), serde_json::json!("y"), None);
         let listed = store.list(None, 100);
