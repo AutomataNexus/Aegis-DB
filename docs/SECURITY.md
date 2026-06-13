@@ -42,7 +42,7 @@ Security features, best practices, and configuration for production deployments
 
 ## Overview
 
-AegisDB v0.2.6 includes production-ready security features:
+AegisDB v0.3.1 includes production-ready security features:
 
 | Feature | Implementation | Status |
 |---------|---------------|--------|
@@ -52,7 +52,11 @@ AegisDB v0.2.6 includes production-ready security features:
 | Secrets Management | HashiCorp Vault | ✅ Production Ready |
 | Authentication | Local, LDAP, OAuth2 | ✅ Production Ready |
 | MFA/2FA | TOTP (RFC 6238) | ✅ Production Ready |
-| RBAC | 25+ Permissions | ✅ Production Ready |
+| RBAC | 25+ Permissions, `require_admin` enforced on privileged routes | ✅ Production Ready |
+| Fail-Closed Bootstrap | 503 until an admin is provisioned (no unauthenticated open state) | ✅ Production Ready |
+| Vault Deny-by-Default | Optional: every vault op requires an explicit access policy | ✅ Production Ready |
+| Brute-Force Detection | Failed logins feed the Shield auto-ban detector | ✅ Production Ready |
+| SQL Injection Detection | User SQL screened by the Shield injection detector | ✅ Production Ready |
 | Audit Logging | Comprehensive Activity Log | ✅ Production Ready |
 | Data Classification | 6-level PHI/PII classification | ✅ Production Ready |
 | Query Safety Limits | Row limits, query timeouts | ✅ Production Ready |
@@ -60,13 +64,13 @@ AegisDB v0.2.6 includes production-ready security features:
 | Consent Management | GDPR/CCPA consent tracking | ✅ Production Ready |
 | Compression | LZ4, Zstd, Snappy | ✅ Production Ready |
 
-**Test Coverage:** 634 tests passing across the workspace.
+**Test Coverage:** 808 tests passing across the workspace.
 
 ---
 
 ## Data Classification
 
-AegisDB v0.2.6 supports 6-level data classification for columns and fields, enabling fine-grained access control and compliance enforcement for PHI, PII, and other sensitive data categories.
+AegisDB v0.3.1 supports 6-level data classification for columns and fields, enabling fine-grained access control and compliance enforcement for PHI, PII, and other sensitive data categories.
 
 ### Classification Levels
 
@@ -121,7 +125,7 @@ mask_phi_in_logs = true
 
 ## Query Safety Limits
 
-AegisDB v0.2.6 enforces query safety limits to prevent accidental resource exhaustion and protect against runaway queries.
+AegisDB v0.3.1 enforces query safety limits to prevent accidental resource exhaustion and protect against runaway queries.
 
 ### Default Limits
 
@@ -296,6 +300,73 @@ POST /api/v1/auth/mfa/verify
   "code": "123456"
 }
 ```
+
+---
+
+## Access Control Hardening (v0.3.1)
+
+Three changes in 0.3.1 close the gaps an unconfigured or under-privileged
+deployment used to leave open.
+
+### Fail-Closed Bootstrap
+
+With **no users configured**, the server no longer serves every endpoint
+unauthenticated. `require_auth` / `require_admin` return **503** with
+provisioning instructions until an admin exists. `/health` and
+`/api/v1/auth/login` stay reachable so you can bootstrap and load-balance.
+
+Provision the first admin via environment variables, then the 503 clears:
+
+```bash
+export AEGIS_ADMIN_USERNAME=admin
+export AEGIS_ADMIN_PASSWORD=your_secure_password
+```
+
+The legacy fail-open behavior (serve reads to anonymous callers when no
+users exist) is opt-in for deployments that still rely on it. Every
+open-bootstrap request is logged as a security warning:
+
+```bash
+export AEGIS_OPEN_BOOTSTRAP=true   # ServerConfig.open_bootstrap
+```
+
+The startup banner reflects whether the server is locked or legacy-open.
+
+### RBAC Enforcement on Privileged Routes
+
+`require_admin` is now enforced on every privileged mutation route: user and
+role management, node lifecycle, cluster shutdown, vault secrets / seal /
+transit, OTA plan / execute, backup / restore, Shield mutations, and GDPR
+erase / export. Reads remain open to any authenticated role. A non-admin
+calling a privileged route receives **403**.
+
+### Vault Deny-by-Default
+
+Opt-in mode where every vault operation requires an explicit `AccessPolicy`
+grant instead of being allowed by default:
+
+```bash
+export AEGIS_VAULT_DEFAULT_DENY=true   # VaultConfig.access_default_deny
+```
+
+Manage grants at runtime with `add_access_policy` / `remove_access_policy` /
+`list_access_policies`. The default remains allow-all for backwards
+compatibility.
+
+### Brute-Force and Injection Detection
+
+Failed logins are reported to the Shield brute-force detector (`record_failed_auth`),
+which drives reputation-based auto-bans the rate limiter alone cannot. User
+SQL on the query path is screened by the Shield injection detector
+(detect-and-log).
+
+> **Vault data-loss fix (0.3.1):** a wrong or transient passphrase on an
+> existing vault no longer regenerates and overwrites the master key — which
+> previously orphaned every stored secret on a single typo. The vault now
+> starts **sealed**, preserves the existing key, and records an audit failure;
+> recovery is a normal unseal with the correct passphrase. Vault keys are also
+> persisted (`AEGIS_VAULT_PASSPHRASE`) rather than regenerated per restart.
+> Published crate `aegis-db-vault` is 0.3.1; 0.2.3–0.3.0 are **yanked** for this bug.
 
 ---
 
@@ -1146,6 +1217,6 @@ If you discover a security vulnerability in AegisDB, please report it responsibl
 
 ---
 
-**Document Version:** 2.0.0 (Aegis-DB v0.2.6)
+**Document Version:** 2.0.0 (Aegis-DB v0.3.1)
 **Last Updated:** February 2026
 **Maintainer:** AutomataNexus Security Team

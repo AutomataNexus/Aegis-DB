@@ -90,14 +90,14 @@ AegisDB is a unified, multi-paradigm database platform built in Rust. It combine
 - **Multi-Paradigm Support**: SQL, Time Series, Document Store, Graph, and Streaming in one platform
 - **Multi-Database Support**: Multiple isolated databases per server instance with automatic creation on first use
 - **Distributed Architecture**: Raft consensus, sharding, and multi-region replication
-- **High Performance**: 758K TPS transfers, 12.3M KV reads/sec, 223K SQL inserts/sec with vectorized execution
+- **High Performance**: 971K–2.5M TPS atomic transfers, 10.8M KV reads/sec, 204K SQL inserts/sec with vectorized execution
 - **Enterprise Security**: RBAC, audit logging, TLS, OAuth2/LDAP authentication, PHI data classification
 - **Compliance**: Built-in GDPR, CCPA, and HIPAA compliance APIs with consent management and breach detection
 - **Bulk Data Import**: CSV/JSON import for SQL tables, documents, and key-value pairs
 - **Query Safety**: Configurable result row limits and query timeouts to prevent runaway queries
 - **Log Rotation**: Automatic daily rotating log files when persistence is enabled
 - **Modern Stack**: Rust backend, Leptos/WASM dashboard, comprehensive REST API
-- **634 tests** across all crates ensuring reliability
+- **808 tests** across all crates ensuring reliability
 
 ### Use Cases
 
@@ -2297,7 +2297,7 @@ A: AegisDB can serve as a replacement or complement for:
 - Kafka (streaming)
 
 **Q: Is AegisDB production-ready?**
-A: Yes, AegisDB v0.2.6 includes production security features: TLS/HTTPS support, Argon2id password hashing, rate limiting, HashiCorp Vault integration, secure token generation, PHI data classification, consent management, breach detection, and HIPAA/GDPR/CCPA compliance APIs. It's suitable for production deployments with proper configuration.
+A: Yes, AegisDB v0.3.1 includes production security features: TLS/HTTPS support, Argon2id password hashing, rate limiting, HashiCorp Vault integration, secure token generation, PHI data classification, consent management, breach detection, and HIPAA/GDPR/CCPA compliance APIs. It's suitable for production deployments with proper configuration.
 
 **Q: What's the license?**
 A: Apache 2.0 for the core platform. Enterprise features may require a commercial license.
@@ -2305,10 +2305,10 @@ A: Apache 2.0 for the core platform. Enterprise features may require a commercia
 ### Performance
 
 **Q: How many operations per second can AegisDB handle?**
-A: Benchmarks show:
-- Key-Value: ~12.3M reads/sec (memory backend)
-- SQL inserts: ~223K inserts/sec
-- Transfers: ~758K TPS
+A: Engine-level benchmarks (v0.3.1) show:
+- Key-Value: ~10.8M reads/sec, ~4.1M writes/sec (memory backend)
+- SQL inserts: ~204K inserts/sec
+- Atomic transfers: ~971K TPS (0% contention), ~2.5M TPS (high contention)
 
 **Q: How does compression affect performance?**
 A: LZ4 adds ~5% CPU overhead with 2-4x compression. Zstd adds ~15% overhead with 4-10x compression. Snappy offers fast compression similar to LZ4 with slightly different trade-offs. Gorilla compression for time series achieves ~12x with minimal overhead.

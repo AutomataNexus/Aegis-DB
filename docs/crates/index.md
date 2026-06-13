@@ -9,7 +9,7 @@ description: "Rust crate architecture and documentation"
 # Crate Documentation
 {: .no_toc }
 
-Aegis-DB v0.2.6 is built as a Rust workspace with 13 specialized crates and 634 tests.
+Aegis-DB v0.3.1 is built as a Rust workspace with 16 specialized crates and 808 tests.
 
 ---
 
@@ -47,10 +47,13 @@ Aegis-DB v0.2.6 is built as a Rust workspace with 13 specialized crates and 634 
 | [aegis-streaming](aegis-streaming.md) | Real-time streaming engine | tokio |
 | [aegis-replication](aegis-replication.md) | Raft, 2PC, CRDTs, sharding | raft-rs |
 | [aegis-monitoring](aegis-monitoring.md) | Metrics and health monitoring | prometheus |
+| [aegis-vault](aegis-vault.md) | Integrated encrypted secrets manager (`aegis-db-vault`) | aes-gcm, pbkdf2 |
+| [aegis-shield](aegis-shield.md) | Security shield: injection/anomaly detection, auto-blocking | — |
 | [aegis-client](aegis-client.md) | Client SDK | reqwest, tokio |
 | [aegis-updates](aegis-updates.md) | OTA rolling update system | reqwest, sha2, tokio |
 | [aegis-server](aegis-server.md) | REST API server | axum, tower |
-| [aegis-cli](aegis-cli.md) | Command-line interface | clap |
+| [aegis-cli](aegis-cli.md) | Command-line interface (`aegisdb-cli`) | clap |
+| [aegis-dashboard](aegis-dashboard.md) | Leptos/WASM web dashboard | leptos, trunk |
 
 ## Dependency Graph
 

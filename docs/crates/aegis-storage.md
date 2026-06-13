@@ -115,4 +115,4 @@ tx_manager.commit(tx.id)?;
 
 ## Tests
 
-634 tests (workspace total) covering storage backends, buffer pool, WAL, transactions, and Snappy/LZ4/Zstd compression.
+808 tests (workspace total) covering storage backends, buffer pool, WAL, transactions, and Snappy/LZ4/Zstd compression.

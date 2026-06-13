@@ -19,6 +19,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-benchmarks"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "zipf",
+]
+
+[[package]]
 name = "aegis-client"
 version = "0.3.1"
 dependencies = [
@@ -151,6 +164,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "criterion",
  "data-encoding",
  "getrandom 0.2.17",
  "hex",
@@ -176,6 +190,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zipf",
 ]
 
 [[package]]
@@ -4193,6 +4208,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "zipf"
+version = "7.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d4e079d30939088cfc89b5318a5d3557d4a92890c917aa40475ea763bd473d5"
+dependencies = [
+ "rand 0.8.5",
 ]
 
 [[package]]

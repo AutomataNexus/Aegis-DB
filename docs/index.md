@@ -21,7 +21,7 @@ Multi-paradigm database built for regulated industries
 
 Aegis-DB is a unified, multi-paradigm database platform built in Rust. It combines relational (SQL), time series, document, graph, and real-time streaming capabilities into a single system with enterprise-grade security and compliance features.
 
-**Version 0.2.6** -- 13 crates, 634 tests
+**Version 0.3.1** -- 16 crates, 808 tests
 {: .label .label-green }
 
 ### Key Features

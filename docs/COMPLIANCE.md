@@ -39,7 +39,7 @@ Comprehensive guidance for deploying Aegis-DB in regulated environments
 
 ## Overview
 
-Aegis-DB v0.2.6 provides built-in compliance features to help organizations meet regulatory requirements. **634 tests** validate compliance functionality across the workspace.
+Aegis-DB v0.3.1 provides built-in compliance features to help organizations meet regulatory requirements. **808 tests** validate compliance functionality across the workspace.
 
 | Feature | Description | Regulations |
 |---------|-------------|-------------|
@@ -120,7 +120,7 @@ Service Organization Control 2 covers security, availability, processing integri
 
 ## PHI Column-Level Classification
 
-Aegis-DB v0.2.6 introduces column-level data classification to identify and protect sensitive data, including Protected Health Information (PHI) and Personally Identifiable Information (PII).
+Aegis-DB v0.3.1 introduces column-level data classification to identify and protect sensitive data, including Protected Health Information (PHI) and Personally Identifiable Information (PII).
 
 ### Classification Levels
 
@@ -1056,6 +1056,6 @@ curl -X DELETE "http://localhost:9090/api/v1/compliance/consent/user@example.com
 
 ---
 
-**Document Version:** 2.0.0 (Aegis-DB v0.2.6)
+**Document Version:** 2.0.0 (Aegis-DB v0.3.1)
 **Last Updated:** February 2026
 **Maintainer:** AutomataNexus Compliance Team

@@ -38,12 +38,12 @@ cargo install aegisdb-cli
 ### From Binary Release
 
 ```bash
-# Download latest release (v0.2.6)
-curl -LO https://github.com/AutomataNexus/Aegis-DB/releases/latest/download/aegis-db-0.2.6-linux-x86_64.tar.gz
+# Download latest release (v0.3.1)
+curl -LO https://github.com/AutomataNexus/Aegis-DB/releases/latest/download/aegis-db-0.3.1-linux-x86_64.tar.gz
 
 # Extract
-tar -xzf aegis-db-0.2.6-linux-x86_64.tar.gz
-cd aegis-db-0.2.6-linux-x86_64
+tar -xzf aegis-db-0.3.1-linux-x86_64.tar.gz
+cd aegis-db-0.3.1-linux-x86_64
 
 # Run server (default port 9090)
 ./aegis-server
@@ -68,6 +68,28 @@ cargo build --release --workspace
 ```bash
 cd crates/aegis-dashboard
 trunk build --release
+```
+
+## First Run: Provision an Admin
+
+As of **v0.3.1** the server is **fail-closed**: with no users configured it
+returns **503** on authenticated routes (only `/health` and
+`/api/v1/auth/login` stay open) until you provision an admin. Set the admin
+credentials before starting, and they are persisted on first boot:
+
+```bash
+export AEGIS_ADMIN_USERNAME=admin
+export AEGIS_ADMIN_PASSWORD=your_secure_password
+./aegis-server
+```
+
+If you need the legacy behavior where reads are served to anonymous callers
+while no users exist (e.g. an internal proxy that talks to Aegis-DB
+unauthenticated), opt in explicitly — every such request is logged as a
+security warning:
+
+```bash
+export AEGIS_OPEN_BOOTSTRAP=true
 ```
 
 ## Configuration
@@ -119,7 +141,7 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "version": "0.2.6",
+  "version": "0.3.1",
   "uptime": 123
 }
 ```

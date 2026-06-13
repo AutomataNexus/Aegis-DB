@@ -33,10 +33,17 @@ fn setup_accounts_table(engine: &QueryEngine, count: usize) {
         .execute("CREATE TABLE accounts (id INT, balance INT)", None)
         .expect("create accounts table");
 
-    // Batch insert accounts — each with balance of 10000
+    // Seed each account with a very large balance so that no account can be
+    // drained over the millions of warmup+measurement iterations a single
+    // bench setup sees. This keeps EVERY transfer a real committed transfer
+    // (read + verify + debit + credit) rather than letting hot accounts hit
+    // zero and short-circuit on the sufficient-funds check.
     for i in 0..count {
         engine
-            .execute(&format!("INSERT INTO accounts VALUES ({}, 10000)", i), None)
+            .execute(
+                &format!("INSERT INTO accounts VALUES ({}, 1000000000000)", i),
+                None,
+            )
             .expect("insert account");
     }
 
@@ -181,12 +188,16 @@ fn sql_read_benchmark(c: &mut Criterion) {
 //   - 107,850 TPS at 0% contention
 //   - 103,590 TPS at 80% contention
 //
-// This benchmark replicates that workload:
-//   1. Read sender balance
-//   2. Read receiver balance
-//   3. Verify sufficient funds
-//   4. Debit sender
-//   5. Credit receiver
+// SpacetimeDB's number is a compiled in-process reducer doing a full
+// transactional transfer. To compare honestly we do the SAME real work via
+// `execute_transfer_indexed`, which under a single held write lock:
+//   1. Reads the sender balance
+//   2. Reads the receiver balance
+//   3. Verifies sufficient funds
+//   4. Debits the sender
+//   5. Credits the receiver
+// — atomically and in isolation (no other writer can interleave a partial
+// transfer). This is NOT a pair of blind writes; the read+verify cost is paid.
 
 fn fund_transfer_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("fund_transfer");
@@ -210,32 +221,20 @@ fn fund_transfer_benchmark(c: &mut Criterion) {
                 receiver = rng.gen_range(0..account_count);
             }
 
-            let sender_val = Value::Integer(sender as i64);
-            let receiver_val = Value::Integer(receiver as i64);
-
-            // Debit sender: balance = balance - 1
-            executor
-                .execute_update_indexed_fn("accounts", "id", &sender_val, balance_col_idx, |v| {
-                    if let Value::Integer(n) = v {
-                        Value::Integer(n - 1)
-                    } else {
-                        v.clone()
-                    }
-                })
+            // Atomic transactional transfer: read both balances, verify funds,
+            // debit + credit — all under one write lock.
+            let outcome = executor
+                .execute_transfer_indexed(
+                    "accounts",
+                    "id",
+                    &Value::Integer(sender as i64),
+                    &Value::Integer(receiver as i64),
+                    balance_col_idx,
+                    1,
+                )
                 .unwrap();
 
-            // Credit receiver: balance = balance + 1
-            executor
-                .execute_update_indexed_fn("accounts", "id", &receiver_val, balance_col_idx, |v| {
-                    if let Value::Integer(n) = v {
-                        Value::Integer(n + 1)
-                    } else {
-                        v.clone()
-                    }
-                })
-                .unwrap();
-
-            black_box(());
+            black_box(outcome);
         });
     });
 
@@ -255,32 +254,18 @@ fn fund_transfer_benchmark(c: &mut Criterion) {
                 receiver = rng.gen_range(0..account_count);
             }
 
-            let sender_val = Value::Integer(sender as i64);
-            let receiver_val = Value::Integer(receiver as i64);
-
-            // Debit sender: balance = balance - 1
-            executor
-                .execute_update_indexed_fn("accounts", "id", &sender_val, balance_col_idx, |v| {
-                    if let Value::Integer(n) = v {
-                        Value::Integer(n - 1)
-                    } else {
-                        v.clone()
-                    }
-                })
+            let outcome = executor
+                .execute_transfer_indexed(
+                    "accounts",
+                    "id",
+                    &Value::Integer(sender as i64),
+                    &Value::Integer(receiver as i64),
+                    balance_col_idx,
+                    1,
+                )
                 .unwrap();
 
-            // Credit receiver: balance = balance + 1
-            executor
-                .execute_update_indexed_fn("accounts", "id", &receiver_val, balance_col_idx, |v| {
-                    if let Value::Integer(n) = v {
-                        Value::Integer(n + 1)
-                    } else {
-                        v.clone()
-                    }
-                })
-                .unwrap();
-
-            black_box(());
+            black_box(outcome);
         });
     });
 
