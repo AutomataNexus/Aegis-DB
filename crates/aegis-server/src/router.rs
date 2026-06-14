@@ -351,6 +351,32 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    // Geospatial routes (require auth)
+    let geo_routes = Router::new()
+        .route(
+            "/collections",
+            get(handlers::list_geo_collections).post(handlers::create_geo_collection),
+        )
+        .route(
+            "/collections/:name",
+            get(handlers::get_geo_collection).delete(handlers::drop_geo_collection),
+        )
+        .route(
+            "/collections/:name/features",
+            post(handlers::geo_upsert_feature),
+        )
+        .route(
+            "/collections/:name/features/:id",
+            get(handlers::geo_get_feature).delete(handlers::geo_delete_feature),
+        )
+        .route("/collections/:name/radius", post(handlers::geo_radius))
+        .route("/collections/:name/bbox", post(handlers::geo_bbox))
+        .route("/collections/:name/nearest", post(handlers::geo_nearest))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
     // Query builder routes (require auth)
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query))
@@ -521,6 +547,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/graph", graph_routes)
         .nest("/api/v1/vector", vector_routes)
         .nest("/api/v1/fts", fts_routes)
+        .nest("/api/v1/geo", geo_routes)
         .nest("/api/v1/query-builder", query_routes)
         .nest("/api/v1/updates", update_routes)
         .nest("/api/v1/compliance", compliance_routes)

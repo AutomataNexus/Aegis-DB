@@ -872,3 +872,116 @@ class AegisClient:
             f"/api/v1/fts/indexes/{index}/search",
             {"query": query, "k": k, "filter": filter or {}},
         )
+
+    # =========================================================================
+    # Geospatial (grid index + Haversine)
+    # =========================================================================
+
+    async def create_geo_collection(self, name: str) -> Dict[str, Any]:
+        """Create a geo collection."""
+        return await self._request("POST", "/api/v1/geo/collections", {"name": name})
+
+    async def list_geo_collections(self) -> List[str]:
+        """List geo collections."""
+        data = await self._request("GET", "/api/v1/geo/collections")
+        return data.get("collections", [])
+
+    async def geo_collection_stats(self, name: str) -> Dict[str, Any]:
+        """Geo collection stats."""
+        return await self._request("GET", f"/api/v1/geo/collections/{name}")
+
+    async def drop_geo_collection(self, name: str) -> bool:
+        """Drop a geo collection."""
+        try:
+            await self._request("DELETE", f"/api/v1/geo/collections/{name}")
+            return True
+        except QueryError:
+            return False
+
+    async def geo_upsert_feature(
+        self,
+        collection: str,
+        id: str,
+        lat: float,
+        lon: float,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Upsert a feature ``(id, lat, lon)`` with optional metadata."""
+        await self._request(
+            "POST",
+            f"/api/v1/geo/collections/{collection}/features",
+            {"id": id, "lat": lat, "lon": lon, "metadata": metadata or {}},
+        )
+
+    async def geo_get_feature(
+        self, collection: str, id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get a feature by id, or ``None`` if absent."""
+        try:
+            return await self._request(
+                "GET", f"/api/v1/geo/collections/{collection}/features/{id}"
+            )
+        except QueryError:
+            return None
+
+    async def geo_delete_feature(self, collection: str, id: str) -> bool:
+        """Delete a feature by id."""
+        try:
+            await self._request(
+                "DELETE", f"/api/v1/geo/collections/{collection}/features/{id}"
+            )
+            return True
+        except QueryError:
+            return False
+
+    async def geo_radius(
+        self,
+        collection: str,
+        lat: float,
+        lon: float,
+        radius_m: float,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Features within ``radius_m`` metres of ``(lat, lon)``, nearest first."""
+        return await self._request(
+            "POST",
+            f"/api/v1/geo/collections/{collection}/radius",
+            {"lat": lat, "lon": lon, "radius_m": radius_m, "filter": filter or {}},
+        )
+
+    async def geo_bbox(
+        self,
+        collection: str,
+        min_lat: float,
+        min_lon: float,
+        max_lat: float,
+        max_lon: float,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Features inside a bounding box."""
+        return await self._request(
+            "POST",
+            f"/api/v1/geo/collections/{collection}/bbox",
+            {
+                "min_lat": min_lat,
+                "min_lon": min_lon,
+                "max_lat": max_lat,
+                "max_lon": max_lon,
+                "filter": filter or {},
+            },
+        )
+
+    async def geo_nearest(
+        self,
+        collection: str,
+        lat: float,
+        lon: float,
+        k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """The ``k`` nearest features to ``(lat, lon)``."""
+        return await self._request(
+            "POST",
+            f"/api/v1/geo/collections/{collection}/nearest",
+            {"lat": lat, "lon": lon, "k": k, "filter": filter or {}},
+        )

@@ -11,14 +11,14 @@
 <p align="center">
   <a href="https://crates.io/crates/aegis-server"><img src="https://img.shields.io/crates/v/aegis-server.svg" alt="crates.io"></a>
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/tests-808%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-815%20passing-brightgreen.svg" alt="Tests">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.85%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/paradigms-8-blueviolet.svg" alt="6 Data Paradigms">
+  <img src="https://img.shields.io/badge/paradigms-9-blueviolet.svg" alt="9 Data Paradigms">
   <img src="https://img.shields.io/badge/LOC-69K%2B-informational.svg" alt="Lines of Code">
 </p>
 
 <p align="center">
-  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming &bull; Vector &bull; Full-Text<br>
+  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming &bull; Vector &bull; Full-Text &bull; Geospatial<br>
   All in a single binary. No external dependencies.
 </p>
 
@@ -80,6 +80,7 @@ Aegis-DB replaces all of them with a single binary:
 | Event streaming | Kafka | `POST /api/v1/streaming/publish` |
 | Vector / KNN | Pinecone / pgvector | `POST /api/v1/vector/collections/:name/search` |
 | Full-text search | Elasticsearch | `POST /api/v1/fts/indexes/:name/search` (BM25) |
+| Geospatial | PostGIS | `POST /api/v1/geo/collections/:name/nearest` (Haversine) |
 
 One binary. One port. One backup. One set of credentials.
 
@@ -158,6 +159,10 @@ curl -X POST localhost:9090/api/v1/vector/collections/docs/search \
 # Full-Text Search (BM25)
 curl -X POST localhost:9090/api/v1/fts/indexes/articles/search \
   -d '{"query": "rust database", "k": 10}'
+
+# Geospatial (nearest-k, Haversine)
+curl -X POST localhost:9090/api/v1/geo/collections/cities/nearest \
+  -d '{"lat": 40.7128, "lon": -74.0060, "k": 5}'
 ```
 
 ### Multi-Database Isolation
@@ -467,6 +472,9 @@ aegis-server (REST API - Axum)
 | `/api/v1/fts/indexes` · `/:name` | GET/POST · GET/DELETE | Full-text indexes (list/create/stats/drop) |
 | `/api/v1/fts/indexes/:name/documents` | POST | Index a document `{id, text, metadata}` |
 | `/api/v1/fts/indexes/:name/search` | POST | BM25 search `{query, k, filter}` |
+| `/api/v1/geo/collections` · `/:name` | GET/POST · GET/DELETE | Geo collections (list/create/stats/drop) |
+| `/api/v1/geo/collections/:name/features` · `/:id` | POST · GET/DELETE | Upsert / get / delete a feature |
+| `/api/v1/geo/collections/:name/radius` · `/bbox` · `/nearest` | POST | Radius / bbox / nearest-k (Haversine) |
 | `/api/v1/auth/login` | POST | Authenticate |
 | `/api/v1/admin/*` | GET | Admin/monitoring endpoints |
 | `/api/v1/import/sql` | POST | Bulk import CSV/JSON data |

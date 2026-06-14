@@ -890,6 +890,120 @@ export class AegisClient {
   }
 
   // ==========================================================================
+  // Geospatial (grid index + Haversine)
+  // ==========================================================================
+
+  /** Create a geo collection. */
+  async createGeoCollection(name: string): Promise<unknown> {
+    return await this.request('POST', '/api/v1/geo/collections', { name });
+  }
+
+  /** List geo collections. */
+  async listGeoCollections(): Promise<string[]> {
+    const res = await this.request<{ collections: string[] }>('GET', '/api/v1/geo/collections');
+    return res.collections ?? [];
+  }
+
+  /** Geo collection stats. */
+  async geoCollectionStats(name: string): Promise<unknown> {
+    return await this.request('GET', `/api/v1/geo/collections/${name}`);
+  }
+
+  /** Drop a geo collection. */
+  async dropGeoCollection(name: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/geo/collections/${name}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Upsert a feature (id, lat, lon) with optional metadata. */
+  async geoUpsertFeature(
+    collection: string,
+    id: string,
+    lat: number,
+    lon: number,
+    metadata: Record<string, unknown> = {}
+  ): Promise<void> {
+    await this.request('POST', `/api/v1/geo/collections/${collection}/features`, {
+      id,
+      lat,
+      lon,
+      metadata,
+    });
+  }
+
+  /** Get a feature by id, or `undefined` if absent. */
+  async geoGetFeature(collection: string, id: string): Promise<unknown | undefined> {
+    try {
+      return await this.request('GET', `/api/v1/geo/collections/${collection}/features/${id}`);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Delete a feature by id. */
+  async geoDeleteFeature(collection: string, id: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/geo/collections/${collection}/features/${id}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Features within `radiusM` metres of (lat, lon), nearest first. */
+  async geoRadius(
+    collection: string,
+    lat: number,
+    lon: number,
+    radiusM: number,
+    options: { filter?: Record<string, unknown> } = {}
+  ): Promise<{ hits: { id: string; lat: number; lon: number; distance_m: number; metadata: unknown }[] }> {
+    return await this.request('POST', `/api/v1/geo/collections/${collection}/radius`, {
+      lat,
+      lon,
+      radius_m: radiusM,
+      filter: options.filter ?? {},
+    });
+  }
+
+  /** Features inside a bounding box. */
+  async geoBbox(
+    collection: string,
+    minLat: number,
+    minLon: number,
+    maxLat: number,
+    maxLon: number,
+    options: { filter?: Record<string, unknown> } = {}
+  ): Promise<{ hits: { id: string; lat: number; lon: number; distance_m: number; metadata: unknown }[] }> {
+    return await this.request('POST', `/api/v1/geo/collections/${collection}/bbox`, {
+      min_lat: minLat,
+      min_lon: minLon,
+      max_lat: maxLat,
+      max_lon: maxLon,
+      filter: options.filter ?? {},
+    });
+  }
+
+  /** The `k` nearest features to (lat, lon). */
+  async geoNearest(
+    collection: string,
+    lat: number,
+    lon: number,
+    options: { k?: number; filter?: Record<string, unknown> } = {}
+  ): Promise<{ hits: { id: string; lat: number; lon: number; distance_m: number; metadata: unknown }[] }> {
+    return await this.request('POST', `/api/v1/geo/collections/${collection}/nearest`, {
+      lat,
+      lon,
+      k: options.k ?? 10,
+      filter: options.filter ?? {},
+    });
+  }
+
+  // ==========================================================================
   // Health and Metrics
   // ==========================================================================
 

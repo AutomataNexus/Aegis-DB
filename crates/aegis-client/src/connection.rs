@@ -1154,6 +1154,170 @@ impl Connection {
         )
         .await
     }
+
+    // ---- Geospatial (grid index + Haversine) ----------------------------
+
+    /// Create a geo collection.
+    pub async fn create_geo_collection(
+        &self,
+        name: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/geo/collections",
+            Some(serde_json::json!({ "name": name })),
+        )
+        .await
+    }
+
+    /// List geo collections.
+    pub async fn list_geo_collections(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/geo/collections", None)
+            .await
+    }
+
+    /// Geo collection stats.
+    pub async fn geo_collection_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/geo/collections/{}", name),
+            None,
+        )
+        .await
+    }
+
+    /// Drop a geo collection.
+    pub async fn drop_geo_collection(&self, name: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/geo/collections/{}", name),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Upsert a feature `(id, lat, lon)` with optional metadata.
+    pub async fn geo_upsert_feature(
+        &self,
+        collection: &str,
+        id: &str,
+        lat: f64,
+        lon: f64,
+        metadata: serde_json::Value,
+    ) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/geo/collections/{}/features", collection),
+            Some(serde_json::json!({ "id": id, "lat": lat, "lon": lon, "metadata": metadata })),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Get a feature by id, or `None` if absent.
+    pub async fn geo_get_feature(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let url = format!(
+            "{}/api/v1/geo/collections/{}/features/{}",
+            self.base_url, collection, id
+        );
+        let response = self
+            .add_auth(self.http_client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "geo_get_feature failed: {}",
+                response.status()
+            )));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        Ok(Some(value))
+    }
+
+    /// Delete a feature by id.
+    pub async fn geo_delete_feature(&self, collection: &str, id: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/geo/collections/{}/features/{}", collection, id),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Features within `radius_m` metres of `(lat, lon)`, nearest first.
+    /// `filter` is an exact-match metadata object (`Value::Null` for none).
+    pub async fn geo_radius(
+        &self,
+        collection: &str,
+        lat: f64,
+        lon: f64,
+        radius_m: f64,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/geo/collections/{}/radius", collection),
+            Some(serde_json::json!({ "lat": lat, "lon": lon, "radius_m": radius_m, "filter": filter })),
+        )
+        .await
+    }
+
+    /// Features inside a bounding box. `filter` is an exact-match metadata
+    /// object (`Value::Null` for none).
+    pub async fn geo_bbox(
+        &self,
+        collection: &str,
+        min_lat: f64,
+        min_lon: f64,
+        max_lat: f64,
+        max_lon: f64,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/geo/collections/{}/bbox", collection),
+            Some(serde_json::json!({
+                "min_lat": min_lat, "min_lon": min_lon,
+                "max_lat": max_lat, "max_lon": max_lon, "filter": filter
+            })),
+        )
+        .await
+    }
+
+    /// The `k` nearest features to `(lat, lon)`. `filter` is an exact-match
+    /// metadata object (`Value::Null` for none).
+    pub async fn geo_nearest(
+        &self,
+        collection: &str,
+        lat: f64,
+        lon: f64,
+        k: usize,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/geo/collections/{}/nearest", collection),
+            Some(serde_json::json!({ "lat": lat, "lon": lon, "k": k, "filter": filter })),
+        )
+        .await
+    }
 }
 
 // =============================================================================

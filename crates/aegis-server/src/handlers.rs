@@ -3549,6 +3549,235 @@ fn fts_err(e: aegis_fulltext::FtsError) -> (StatusCode, Json<serde_json::Value>)
 }
 
 // =============================================================================
+// Geospatial Handlers (grid index + Haversine)
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateGeoCollectionRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GeoFeatureRequest {
+    pub id: String,
+    pub lat: f64,
+    pub lon: f64,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GeoRadiusRequest {
+    pub lat: f64,
+    pub lon: f64,
+    pub radius_m: f64,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GeoBboxRequest {
+    pub min_lat: f64,
+    pub min_lon: f64,
+    pub max_lat: f64,
+    pub max_lon: f64,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GeoNearestRequest {
+    pub lat: f64,
+    pub lon: f64,
+    #[serde(default = "default_k")]
+    pub k: usize,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+}
+
+/// List geo collections.
+pub async fn list_geo_collections(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({ "collections": state.geo_engine.list_collections() }))
+}
+
+/// Create a geo collection.
+pub async fn create_geo_collection(
+    State(state): State<AppState>,
+    Json(req): Json<CreateGeoCollectionRequest>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log_write(&format!("Create geo collection: {}", req.name), None);
+    match state.geo_engine.create_collection(req.name.clone()) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({"success": true, "name": req.name})),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"success": false, "error": e.to_string()})),
+        ),
+    }
+}
+
+/// Geo collection stats.
+pub async fn get_geo_collection(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.geo_engine.collection_stats(&name) {
+        Some(stats) => (StatusCode::OK, Json(serde_json::json!(stats))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "collection not found"})),
+        ),
+    }
+}
+
+/// Drop a geo collection.
+pub async fn drop_geo_collection(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    state.activity.log(
+        ActivityType::Delete,
+        &format!("Drop geo collection: {}", name),
+    );
+    match state.geo_engine.drop_collection(&name) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => geo_err(e),
+    }
+}
+
+/// Upsert a feature: `{ id, lat, lon, metadata? }`.
+pub async fn geo_upsert_feature(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<GeoFeatureRequest>,
+) -> impl IntoResponse {
+    match state
+        .geo_engine
+        .upsert(&name, req.id.clone(), req.lat, req.lon, req.metadata)
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "id": req.id})),
+        ),
+        Err(e) => geo_err(e),
+    }
+}
+
+/// Get a feature by id.
+pub async fn geo_get_feature(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.geo_engine.get(&name, &id) {
+        Ok(Some(f)) => (StatusCode::OK, Json(serde_json::json!(f))),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "feature not found"})),
+        ),
+        Err(e) => geo_err(e),
+    }
+}
+
+/// Delete a feature by id.
+pub async fn geo_delete_feature(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.geo_engine.delete(&name, &id) {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": "feature not found"})),
+        ),
+        Err(e) => geo_err(e),
+    }
+}
+
+/// Radius query: `{ lat, lon, radius_m, filter? }` → hits nearest first.
+pub async fn geo_radius(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<GeoRadiusRequest>,
+) -> impl IntoResponse {
+    match state
+        .geo_engine
+        .within_radius(&name, req.lat, req.lon, req.radius_m, &req.filter)
+    {
+        Ok(hits) => {
+            let count = hits.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "hits": hits, "count": count })),
+            )
+        }
+        Err(e) => geo_err(e),
+    }
+}
+
+/// Bounding-box query: `{ min_lat, min_lon, max_lat, max_lon, filter? }`.
+pub async fn geo_bbox(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<GeoBboxRequest>,
+) -> impl IntoResponse {
+    match state.geo_engine.within_bbox(
+        &name,
+        req.min_lat,
+        req.min_lon,
+        req.max_lat,
+        req.max_lon,
+        &req.filter,
+    ) {
+        Ok(hits) => {
+            let count = hits.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "hits": hits, "count": count })),
+            )
+        }
+        Err(e) => geo_err(e),
+    }
+}
+
+/// Nearest-k query: `{ lat, lon, k, filter? }` → k nearest hits.
+pub async fn geo_nearest(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<GeoNearestRequest>,
+) -> impl IntoResponse {
+    match state
+        .geo_engine
+        .nearest(&name, req.lat, req.lon, req.k, &req.filter)
+    {
+        Ok(hits) => {
+            let count = hits.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "hits": hits, "count": count })),
+            )
+        }
+        Err(e) => geo_err(e),
+    }
+}
+
+fn geo_err(e: aegis_geo::GeoError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match &e {
+        aegis_geo::GeoError::CollectionNotFound(_) | aegis_geo::GeoError::FeatureNotFound(_) => {
+            StatusCode::NOT_FOUND
+        }
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        Json(serde_json::json!({"success": false, "error": e.to_string()})),
+    )
+}
+
+// =============================================================================
 // OTA Update Handlers
 // =============================================================================
 

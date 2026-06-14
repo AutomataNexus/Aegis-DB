@@ -7,6 +7,14 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Geospatial paradigm** (`aegis-geo`, the 9th engine) — named collections of
+  `{id, lat, lon, metadata}` features on a uniform grid spatial index, with
+  radius / bounding-box / nearest-k queries over great-circle (**Haversine**)
+  distance. Exact nearest-k (expanding-radius), exact-match metadata filtering,
+  and snapshot persistence (grid rebuilt on load). REST under `/api/v1/geo/*`
+  (collections, feature upsert/get/delete, radius/bbox/nearest); wrapped in the
+  Rust/JS/Python SDKs. Validated by Haversine-accuracy and nearest-k-vs-brute-force
+  tests.
 - **Full-text search paradigm** (`aegis-fulltext`, the 8th engine) — named
   indexes of `{id, text, metadata}` documents with an inverted index and Okapi
   **BM25** ranking (the model behind Elasticsearch/Lucene). Tokenizer with

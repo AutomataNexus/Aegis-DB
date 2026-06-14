@@ -18,6 +18,7 @@ use crate::handlers::{MetricsDataPoint, ServerSettings};
 use crate::middleware::RateLimiter;
 use aegis_document::{Document, DocumentEngine};
 use aegis_fulltext::FullTextEngine;
+use aegis_geo::GeoEngine;
 use aegis_query::executor::{ExecutionContext, ExecutionContextSnapshot};
 use aegis_query::planner::{PlanNode, PlannerSchema};
 use aegis_query::{Executor, Parser, Planner, Statement};
@@ -57,6 +58,7 @@ pub struct AppState {
     pub graph_store: Arc<GraphStore>,
     pub vector_engine: Arc<VectorEngine>,
     pub fulltext_engine: Arc<FullTextEngine>,
+    pub geo_engine: Arc<GeoEngine>,
     pub rbac: Arc<RbacManager>,
     pub rate_limiter: Arc<RateLimiter>,
     pub login_rate_limiter: Arc<RateLimiter>,
@@ -211,6 +213,27 @@ impl AppState {
             }
         }
 
+        // Geospatial engine (grid index + Haversine). Same snapshot-on-shutdown
+        // / rebuild-on-load persistence as the vector and full-text engines.
+        let geo_engine = Arc::new(GeoEngine::new());
+        if let Some(ref dir) = data_dir {
+            let gpath = dir.join("geo.ncb");
+            if gpath.exists() {
+                if let Ok(bytes) = crate::compress::read_blob_file(&gpath) {
+                    match serde_json::from_slice::<aegis_geo::EngineSnapshot>(&bytes) {
+                        Ok(snap) => {
+                            geo_engine.load_snapshot(snap);
+                            tracing::info!(
+                                "Loaded geo collections: {:?}",
+                                geo_engine.list_collections()
+                            );
+                        }
+                        Err(e) => tracing::error!("Failed to decode {:?}: {}", gpath, e),
+                    }
+                }
+            }
+        }
+
         // Initialize metrics history with some data points
         let metrics_history = Arc::new(RwLock::new(VecDeque::new()));
 
@@ -324,6 +347,7 @@ impl AppState {
             graph_store,
             vector_engine,
             fulltext_engine,
+            geo_engine,
             rbac: Arc::new(RbacManager::with_data_dir(data_dir.clone())),
             rate_limiter,
             login_rate_limiter,
@@ -400,6 +424,16 @@ impl AppState {
         }
     }
 
+    /// Persist all geo collections to disk (snapshot blob frame, rebuilt on
+    /// load). Called on graceful shutdown.
+    pub fn flush_geo(&self) {
+        let Some(ref dir) = self.data_dir else { return };
+        let gpath = dir.join("geo.ncb");
+        if let Err(e) = crate::compress::write_blob_json(&gpath, &self.geo_engine.snapshot()) {
+            tracing::error!("Failed to persist geo collections to {:?}: {}", gpath, e);
+        }
+    }
+
     /// Flush a single document collection to disk (if data_dir is configured).
     pub fn flush_collection(&self, collection_name: &str) {
         let Some(ref dir) = self.data_dir else { return };
@@ -466,9 +500,10 @@ impl AppState {
         let json = serde_json::to_vec(&entries)?;
         std::fs::write(&kv_path, crate::compress::encode_blob(&json))?;
 
-        // Vector + full-text snapshots (indexes rebuilt on load).
+        // Vector + full-text + geo snapshots (indexes rebuilt on load).
         self.flush_vectors();
         self.flush_fulltext();
+        self.flush_geo();
 
         let docs_dir = dir.join("documents");
         std::fs::create_dir_all(&docs_dir)?;

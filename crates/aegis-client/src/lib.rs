@@ -580,6 +580,114 @@ impl AegisClient {
             .fts_search(index, query, k, filter)
             .await
     }
+
+    // ---- Geospatial (grid index + Haversine) --------------------------------
+
+    /// Create a geo collection.
+    pub async fn create_geo_collection(
+        &self,
+        name: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.create_geo_collection(name).await
+    }
+
+    /// List geo collections.
+    pub async fn list_geo_collections(&self) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.list_geo_collections().await
+    }
+
+    /// Geo collection stats.
+    pub async fn geo_collection_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.geo_collection_stats(name).await
+    }
+
+    /// Drop a geo collection.
+    pub async fn drop_geo_collection(&self, name: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.drop_geo_collection(name).await
+    }
+
+    /// Upsert a feature `(id, lat, lon)` with optional metadata.
+    pub async fn geo_upsert_feature(
+        &self,
+        collection: &str,
+        id: &str,
+        lat: f64,
+        lon: f64,
+        metadata: serde_json::Value,
+    ) -> Result<(), ClientError> {
+        self.pool
+            .get()
+            .await?
+            .geo_upsert_feature(collection, id, lat, lon, metadata)
+            .await
+    }
+
+    /// Get a feature by id.
+    pub async fn geo_get_feature(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        self.pool.get().await?.geo_get_feature(collection, id).await
+    }
+
+    /// Delete a feature by id.
+    pub async fn geo_delete_feature(&self, collection: &str, id: &str) -> Result<(), ClientError> {
+        self.pool
+            .get()
+            .await?
+            .geo_delete_feature(collection, id)
+            .await
+    }
+
+    /// Features within `radius_m` metres of `(lat, lon)`, nearest first.
+    pub async fn geo_radius(
+        &self,
+        collection: &str,
+        lat: f64,
+        lon: f64,
+        radius_m: f64,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .geo_radius(collection, lat, lon, radius_m, filter)
+            .await
+    }
+
+    /// Features inside a bounding box.
+    pub async fn geo_bbox(
+        &self,
+        collection: &str,
+        min_lat: f64,
+        min_lon: f64,
+        max_lat: f64,
+        max_lon: f64,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .geo_bbox(collection, min_lat, min_lon, max_lat, max_lon, filter)
+            .await
+    }
+
+    /// The `k` nearest features to `(lat, lon)`.
+    pub async fn geo_nearest(
+        &self,
+        collection: &str,
+        lat: f64,
+        lon: f64,
+        k: usize,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .geo_nearest(collection, lat, lon, k, filter)
+            .await
+    }
 }
 
 #[cfg(test)]
