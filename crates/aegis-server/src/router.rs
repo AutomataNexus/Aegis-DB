@@ -197,6 +197,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/keys", post(handlers::set_key))
         .route("/keys/:key", get(handlers::get_key))
         .route("/keys/:key", delete(handlers::delete_key))
+        .route("/batch/get", post(handlers::batch_get_keys))
+        .route("/batch/set", post(handlers::batch_set_keys))
+        .route("/batch/delete", post(handlers::batch_delete_keys))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,
@@ -206,6 +209,14 @@ pub fn create_router(state: AppState) -> Router {
     let doc_routes = Router::new()
         .route("/collections", get(handlers::list_collections))
         .route("/collections", post(handlers::create_collection))
+        .route(
+            "/collections/:name/batch-insert",
+            post(handlers::bulk_insert_documents),
+        )
+        .route(
+            "/collections/:name/batch-delete",
+            post(handlers::bulk_delete_documents),
+        )
         .route(
             "/collections/:name",
             get(handlers::get_collection_documents),

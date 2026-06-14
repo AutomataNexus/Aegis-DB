@@ -509,6 +509,43 @@ impl Connection {
             .await
     }
 
+    /// Get many keys at once (missing keys are omitted from the result).
+    pub async fn kv_batch_get(&self, keys: &[&str]) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/kv/batch/get",
+            Some(serde_json::json!({ "keys": keys })),
+        )
+        .await
+    }
+
+    /// Set many keys at once. Each entry is `(key, value, ttl_seconds)`.
+    pub async fn kv_batch_set(
+        &self,
+        entries: Vec<(String, serde_json::Value, Option<u64>)>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let arr: Vec<serde_json::Value> = entries
+            .into_iter()
+            .map(|(key, value, ttl)| serde_json::json!({ "key": key, "value": value, "ttl": ttl }))
+            .collect();
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/kv/batch/set",
+            Some(serde_json::json!({ "entries": arr })),
+        )
+        .await
+    }
+
+    /// Delete many keys at once. Returns `{ deleted: N }`.
+    pub async fn kv_batch_delete(&self, keys: &[&str]) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/kv/batch/delete",
+            Some(serde_json::json!({ "keys": keys })),
+        )
+        .await
+    }
+
     // ---- Documents ----------------------------------------------------------
 
     /// List document collections.
@@ -641,6 +678,34 @@ impl Connection {
             reqwest::Method::POST,
             &format!("/api/v1/documents/collections/{}/query", collection),
             Some(body),
+        )
+        .await
+    }
+
+    /// Insert many documents into a collection in one call.
+    pub async fn bulk_insert_documents(
+        &self,
+        collection: &str,
+        documents: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/documents/collections/{}/batch-insert", collection),
+            Some(serde_json::json!({ "documents": documents })),
+        )
+        .await
+    }
+
+    /// Delete many documents by id in one call. Returns `{ deleted: N }`.
+    pub async fn bulk_delete_documents(
+        &self,
+        collection: &str,
+        ids: &[&str],
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/documents/collections/{}/batch-delete", collection),
+            Some(serde_json::json!({ "ids": ids })),
         )
         .await
     }

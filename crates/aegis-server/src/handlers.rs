@@ -845,6 +845,65 @@ pub async fn delete_key(
     }
 }
 
+/// Keys-only batch request body.
+#[derive(Debug, Deserialize)]
+pub struct BatchKeysRequest {
+    pub keys: Vec<String>,
+}
+
+/// Batch set request body.
+#[derive(Debug, Deserialize)]
+pub struct BatchSetRequest {
+    pub entries: Vec<SetKeyRequest>,
+}
+
+/// Get many keys at once. Missing keys are omitted from the result.
+pub async fn batch_get_keys(
+    State(state): State<AppState>,
+    Json(request): Json<BatchKeysRequest>,
+) -> impl IntoResponse {
+    let entries: Vec<KvEntry> = request
+        .keys
+        .iter()
+        .filter_map(|k| state.kv_store.get(k))
+        .collect();
+    let count = entries.len();
+    Json(serde_json::json!({ "entries": entries, "count": count }))
+}
+
+/// Set many keys at once (each with an optional TTL).
+pub async fn batch_set_keys(
+    State(state): State<AppState>,
+    Json(request): Json<BatchSetRequest>,
+) -> impl IntoResponse {
+    let count = request.entries.len();
+    for entry in request.entries {
+        state.kv_store.set(entry.key, entry.value, entry.ttl);
+    }
+    state
+        .activity
+        .log_write(&format!("Batch set {} keys", count), None);
+    Json(serde_json::json!({ "success": true, "count": count }))
+}
+
+/// Delete many keys at once. Returns the number actually deleted.
+pub async fn batch_delete_keys(
+    State(state): State<AppState>,
+    Json(request): Json<BatchKeysRequest>,
+) -> impl IntoResponse {
+    let mut deleted = 0usize;
+    for key in &request.keys {
+        if state.kv_store.delete(key).is_some() {
+            deleted += 1;
+        }
+    }
+    state.activity.log(
+        ActivityType::Delete,
+        &format!("Batch delete {} keys", deleted),
+    );
+    Json(serde_json::json!({ "success": true, "deleted": deleted }))
+}
+
 // =============================================================================
 // Document Store Endpoints (REAL IMPLEMENTATION)
 // =============================================================================
@@ -1000,6 +1059,72 @@ pub async fn delete_document(
             Json(serde_json::json!({"success": false, "error": e.to_string()})),
         ),
     }
+}
+
+/// Bulk insert request body.
+#[derive(Debug, Deserialize)]
+pub struct BulkInsertRequest {
+    pub documents: Vec<serde_json::Value>,
+}
+
+/// Bulk delete request body.
+#[derive(Debug, Deserialize)]
+pub struct BulkDeleteRequest {
+    pub ids: Vec<String>,
+}
+
+/// Insert many documents into a collection in one call.
+pub async fn bulk_insert_documents(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+    Json(request): Json<BulkInsertRequest>,
+) -> impl IntoResponse {
+    state.activity.log_write(
+        &format!(
+            "Bulk insert {} documents into: {}",
+            request.documents.len(),
+            collection
+        ),
+        None,
+    );
+
+    let docs: Vec<_> = request.documents.into_iter().map(json_to_doc).collect();
+    match state.document_engine.insert_many(&collection, docs) {
+        Ok(ids) => {
+            state.flush_collection(&collection);
+            let ids: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+            let count = ids.len();
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({"success": true, "ids": ids, "count": count})),
+            )
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"success": false, "error": e.to_string()})),
+        ),
+    }
+}
+
+/// Delete many documents by id in one call. Returns the number deleted.
+pub async fn bulk_delete_documents(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+    Json(request): Json<BulkDeleteRequest>,
+) -> impl IntoResponse {
+    let mut deleted = 0usize;
+    for id in &request.ids {
+        let doc_id = DocumentId::new(id);
+        if state.document_engine.delete(&collection, &doc_id).is_ok() {
+            deleted += 1;
+        }
+    }
+    state.flush_collection(&collection);
+    state.activity.log(
+        ActivityType::Delete,
+        &format!("Bulk delete {} documents from: {}", deleted, collection),
+    );
+    Json(serde_json::json!({ "success": true, "deleted": deleted }))
 }
 
 /// Update document request.

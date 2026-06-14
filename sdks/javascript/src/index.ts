@@ -390,6 +390,34 @@ export class AegisClient {
     return await this.request<KeyValueEntry[]>('GET', '/api/v1/kv/keys');
   }
 
+  /** Get many keys at once (missing keys are omitted). */
+  async kvBatchGet(keys: string[]): Promise<KeyValueEntry[]> {
+    const res = await this.request<{ entries: KeyValueEntry[] }>(
+      'POST',
+      '/api/v1/kv/batch/get',
+      { keys }
+    );
+    return res.entries ?? [];
+  }
+
+  /** Set many keys at once. Returns the number written. */
+  async kvBatchSet(
+    entries: { key: string; value: unknown; ttl?: number }[]
+  ): Promise<number> {
+    const res = await this.request<{ count: number }>('POST', '/api/v1/kv/batch/set', {
+      entries,
+    });
+    return res.count ?? 0;
+  }
+
+  /** Delete many keys at once. Returns the number deleted. */
+  async kvBatchDelete(keys: string[]): Promise<number> {
+    const res = await this.request<{ deleted: number }>('POST', '/api/v1/kv/batch/delete', {
+      keys,
+    });
+    return res.deleted ?? 0;
+  }
+
   // ==========================================================================
   // Document Store
   // ==========================================================================
@@ -400,6 +428,26 @@ export class AegisClient {
 
   async getCollection(name: string): Promise<{ id: string; data: unknown }[]> {
     return await this.request('GET', `/api/v1/documents/collections/${name}`);
+  }
+
+  /** Insert many documents into a collection in one call. Returns the new ids. */
+  async bulkInsert(collection: string, documents: unknown[]): Promise<string[]> {
+    const res = await this.request<{ ids: string[] }>(
+      'POST',
+      `/api/v1/documents/collections/${collection}/batch-insert`,
+      { documents }
+    );
+    return res.ids ?? [];
+  }
+
+  /** Delete many documents by id in one call. Returns the number deleted. */
+  async bulkDelete(collection: string, ids: string[]): Promise<number> {
+    const res = await this.request<{ deleted: number }>(
+      'POST',
+      `/api/v1/documents/collections/${collection}/batch-delete`,
+      { ids }
+    );
+    return res.deleted ?? 0;
   }
 
   // ==========================================================================

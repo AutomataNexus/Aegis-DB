@@ -136,6 +136,24 @@ impl AegisClient {
         self.pool.get().await?.kv_list().await
     }
 
+    /// Get many keys at once.
+    pub async fn kv_batch_get(&self, keys: &[&str]) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.kv_batch_get(keys).await
+    }
+
+    /// Set many keys at once. Each entry is `(key, value, ttl_seconds)`.
+    pub async fn kv_batch_set(
+        &self,
+        entries: Vec<(String, serde_json::Value, Option<u64>)>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.kv_batch_set(entries).await
+    }
+
+    /// Delete many keys at once.
+    pub async fn kv_batch_delete(&self, keys: &[&str]) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.kv_batch_delete(keys).await
+    }
+
     // ---- Documents ----------------------------------------------------------
 
     /// List document collections.
@@ -216,6 +234,32 @@ impl AegisClient {
             .get()
             .await?
             .query_documents(collection, filter, limit, skip)
+            .await
+    }
+
+    /// Insert many documents into a collection in one call.
+    pub async fn bulk_insert_documents(
+        &self,
+        collection: &str,
+        documents: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .bulk_insert_documents(collection, documents)
+            .await
+    }
+
+    /// Delete many documents by id in one call.
+    pub async fn bulk_delete_documents(
+        &self,
+        collection: &str,
+        ids: &[&str],
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .bulk_delete_documents(collection, ids)
             .await
     }
 
