@@ -166,6 +166,7 @@ dependencies = [
  "clap",
  "criterion",
  "data-encoding",
+ "futures-util",
  "getrandom 0.2.17",
  "hex",
  "hmac",
@@ -1985,8 +1986,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "nexuscompress-codecs",
  "nexuscompress-core",
@@ -2002,8 +2003,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-codecs"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "brotli",
  "bytemuck",
@@ -2015,8 +2016,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-core"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -2029,8 +2030,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-graph"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "bincode",
  "indexmap",
@@ -2043,8 +2044,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-record"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2055,8 +2056,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-schema"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2065,8 +2066,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-stream"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2078,8 +2079,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-tensor"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2090,8 +2091,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-text"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2102,8 +2103,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-timeseries"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2114,8 +2115,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-trainer"
-version = "0.3.1"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=58989fc0d62548b45fcfac22d227b56879aee2d3#58989fc0d62548b45fcfac22d227b56879aee2d3"
+version = "0.4.0"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.0#79df9bff9de531b57d8e1a5057b491184e6a5b4b"
 dependencies = [
  "arc-swap",
  "bincode",

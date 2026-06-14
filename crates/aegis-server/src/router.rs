@@ -277,6 +277,7 @@ pub fn create_router(state: AppState) -> Router {
             "/channels/:channel/history",
             get(handlers::get_channel_history),
         )
+        .route("/channels/:channel/sse", get(handlers::stream_channel_sse))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,

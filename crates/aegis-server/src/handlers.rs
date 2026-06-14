@@ -2225,6 +2225,55 @@ pub async fn get_channel_history(
     }
 }
 
+/// Subscribe to a streaming channel as a Server-Sent Events stream.
+///
+/// `GET /api/v1/streaming/channels/:channel/sse` opens a long-lived
+/// `text/event-stream`; every event published to the channel is pushed to the
+/// client in real time (one SSE `data:` frame per event). The channel is created
+/// if it does not exist. Lagged events (slow consumer) are skipped; the stream
+/// ends when the channel is closed.
+pub async fn stream_channel_sse(
+    State(state): State<AppState>,
+    Path(channel): Path<String>,
+) -> axum::response::Sse<
+    impl futures_util::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+> {
+    use aegis_streaming::channel::ChannelError;
+
+    // Ensure the channel exists (idempotent), then subscribe.
+    let _ = state.streaming_engine.create_channel(channel.clone());
+    let channel_id = ChannelId::new(&channel);
+    let receiver = state
+        .streaming_engine
+        .subscribe(
+            &channel_id,
+            aegis_streaming::subscriber::SubscriberId::generate(),
+        )
+        .ok();
+
+    let stream = futures_util::stream::unfold(receiver, |state| async move {
+        // `None` (subscribe failed, or stream ended) terminates the SSE stream.
+        let mut rx = state?;
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let data = serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_string());
+                    let sse = axum::response::sse::Event::default()
+                        .event("message")
+                        .data(data);
+                    return Some((Ok(sse), Some(rx)));
+                }
+                // Slow consumer fell behind — skip dropped events and continue.
+                Err(ChannelError::Lagged(_)) => continue,
+                // Channel closed or any other error — end the stream.
+                Err(_) => return None,
+            }
+        }
+    });
+
+    axum::response::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+}
+
 // =============================================================================
 // Graph Database Endpoints
 // =============================================================================

@@ -704,8 +704,8 @@ impl KvStore {
         if let Some(ref dir) = data_dir {
             let kv_path = dir.join("kv_store.json");
             if kv_path.exists() {
-                if let Ok(data) = std::fs::read_to_string(&kv_path) {
-                    if let Ok(loaded) = serde_json::from_str::<Vec<KvEntry>>(&data) {
+                if let Ok(data) = crate::compress::read_blob_file(&kv_path) {
+                    if let Ok(loaded) = serde_json::from_slice::<Vec<KvEntry>>(&data) {
                         for entry in loaded {
                             entries.insert(entry.key.clone(), entry);
                         }
@@ -727,9 +727,9 @@ impl KvStore {
             let kv_path = dir.join("kv_store.json");
             let data = self.data.read();
             let entries: Vec<&KvEntry> = data.values().collect();
-            match serde_json::to_string(&entries) {
+            match serde_json::to_vec(&entries) {
                 Ok(json) => {
-                    if let Err(e) = std::fs::write(&kv_path, json) {
+                    if let Err(e) = std::fs::write(&kv_path, crate::compress::encode_blob(&json)) {
                         tracing::error!("Failed to flush KV store to {:?}: {}", kv_path, e);
                     }
                 }
@@ -878,8 +878,8 @@ impl GraphStore {
         if let Some(ref dir) = data_dir {
             let graph_path = dir.join("graph_store.json");
             if graph_path.exists() {
-                if let Ok(data) = std::fs::read_to_string(&graph_path) {
-                    if let Ok(snapshot) = serde_json::from_str::<GraphSnapshot>(&data) {
+                if let Ok(data) = crate::compress::read_blob_file(&graph_path) {
+                    if let Ok(snapshot) = serde_json::from_slice::<GraphSnapshot>(&data) {
                         tracing::info!(
                             "Loaded {} graph nodes and {} edges from disk",
                             snapshot.nodes.len(),
@@ -916,9 +916,10 @@ impl GraphStore {
                 node_counter: self.node_counter.load(Ordering::SeqCst),
                 edge_counter: self.edge_counter.load(Ordering::SeqCst),
             };
-            match serde_json::to_string(&snapshot) {
+            match serde_json::to_vec(&snapshot) {
                 Ok(json) => {
-                    if let Err(e) = std::fs::write(&graph_path, json) {
+                    if let Err(e) = std::fs::write(&graph_path, crate::compress::encode_blob(&json))
+                    {
                         tracing::error!("Failed to flush graph store to {:?}: {}", graph_path, e);
                     }
                 }
@@ -1160,7 +1161,13 @@ impl QueryEngine {
                 let path = entry.path();
                 if path.extension().map(|e| e == "json").unwrap_or(false) {
                     if let Some(db_name) = path.file_stem().and_then(|s| s.to_str()) {
-                        match ExecutionContext::load_from_file(&path) {
+                        match crate::compress::read_blob_file(&path).and_then(|bytes| {
+                            serde_json::from_slice::<
+                                aegis_query::executor::ExecutionContextSnapshot,
+                            >(&bytes)
+                            .map(ExecutionContext::from_snapshot)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                        }) {
                             Ok(ctx) => {
                                 tracing::info!("Loaded database '{}' from {:?}", db_name, path);
                                 contexts.insert(
@@ -1402,7 +1409,9 @@ impl QueryEngine {
             let contexts = self.contexts.read().unwrap();
             if let Some(ctx) = contexts.get(db_name) {
                 if let Ok(ctx_guard) = ctx.read() {
-                    if let Err(e) = ctx_guard.save_to_file(&path) {
+                    if let Err(e) =
+                        crate::compress::write_blob_json(&path, &ctx_guard.to_snapshot())
+                    {
                         tracing::error!(
                             "Failed to persist database '{}' to {:?}: {}",
                             db_name,
@@ -1824,7 +1833,9 @@ impl QueryEngine {
             for (db_name, ctx) in contexts.iter() {
                 let path = base_path.join(format!("{}.json", db_name));
                 if let Ok(ctx_guard) = ctx.read() {
-                    if let Err(e) = ctx_guard.save_to_file(&path) {
+                    if let Err(e) =
+                        crate::compress::write_blob_json(&path, &ctx_guard.to_snapshot())
+                    {
                         tracing::error!(
                             "Failed to persist database '{}' to {:?}: {}",
                             db_name,
