@@ -13,12 +13,12 @@
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/tests-808%20passing-brightgreen.svg" alt="Tests">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.85%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/paradigms-6-blueviolet.svg" alt="6 Data Paradigms">
+  <img src="https://img.shields.io/badge/paradigms-7-blueviolet.svg" alt="6 Data Paradigms">
   <img src="https://img.shields.io/badge/LOC-69K%2B-informational.svg" alt="Lines of Code">
 </p>
 
 <p align="center">
-  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming<br>
+  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming &bull; Vector<br>
   All in a single binary. No external dependencies.
 </p>
 
@@ -78,6 +78,7 @@ Aegis-DB replaces all of them with a single binary:
 | Time series | InfluxDB | `POST /api/v1/timeseries/write` |
 | Graph queries | Neo4j | `POST /api/v1/graph/nodes` |
 | Event streaming | Kafka | `POST /api/v1/streaming/publish` |
+| Vector / KNN | Pinecone / pgvector | `POST /api/v1/vector/collections/:name/search` |
 
 One binary. One port. One backup. One set of credentials.
 
@@ -122,7 +123,7 @@ Full results: [benchmarks/RESULTS.md](benchmarks/RESULTS.md)
 
 ## Features
 
-### Six Data Models, One API
+### Seven Data Models, One API
 
 ```bash
 # SQL
@@ -148,6 +149,10 @@ curl -X POST localhost:9090/api/v1/graph/nodes \
 # Streaming
 curl -X POST localhost:9090/api/v1/streaming/publish \
   -d '{"channel": "orders", "event": {"order_id": 123}}'
+
+# Vector / KNN (HNSW)
+curl -X POST localhost:9090/api/v1/vector/collections/docs/search \
+  -d '{"vector": [0.12, -0.04, ...], "k": 10, "filter": {"source": "wiki"}}'
 ```
 
 ### Multi-Database Isolation
@@ -427,7 +432,7 @@ aegis-server (REST API - Axum)
         └── aegis-common (shared types, errors)
 ```
 
-16 crates, ~65,000 lines of Rust code, 808 tests.
+17 crates, ~67,000 lines of Rust code, 815 tests.
 
 ---
 
@@ -451,6 +456,9 @@ aegis-server (REST API - Axum)
 | `/api/v1/graph/edges` · `/edges/:id` | POST/PUT/DELETE | Create / update / delete graph edges |
 | `/api/v1/streaming/publish` | POST | Publish events |
 | `/api/v1/streaming/channels/:channel/sse` | GET | Live SSE event stream |
+| `/api/v1/vector/collections` · `/:name` | GET/POST · GET/DELETE | Vector collections (list/create/stats/drop) |
+| `/api/v1/vector/collections/:name/upsert` · `/batch` | POST | Upsert one / many vectors |
+| `/api/v1/vector/collections/:name/search` | POST | KNN search (HNSW) `{vector, k, filter}` |
 | `/api/v1/auth/login` | POST | Authenticate |
 | `/api/v1/admin/*` | GET | Admin/monitoring endpoints |
 | `/api/v1/import/sql` | POST | Bulk import CSV/JSON data |

@@ -422,6 +422,98 @@ impl AegisClient {
     pub async fn deallocate(&self, statement_id: &str) -> Result<(), ClientError> {
         self.pool.get().await?.deallocate(statement_id).await
     }
+
+    // ---- Vector / KNN -------------------------------------------------------
+
+    /// Create a vector collection (`metric`: cosine / l2 / dot).
+    pub async fn create_vector_collection(
+        &self,
+        name: &str,
+        dim: usize,
+        metric: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .create_vector_collection(name, dim, metric)
+            .await
+    }
+
+    /// List vector collections.
+    pub async fn list_vector_collections(&self) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.list_vector_collections().await
+    }
+
+    /// Stats for a vector collection.
+    pub async fn vector_collection_stats(
+        &self,
+        name: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.vector_collection_stats(name).await
+    }
+
+    /// Drop a vector collection.
+    pub async fn drop_vector_collection(&self, name: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.drop_vector_collection(name).await
+    }
+
+    /// Upsert a single vector with optional metadata.
+    pub async fn vector_upsert(
+        &self,
+        collection: &str,
+        id: &str,
+        vector: &[f32],
+        metadata: serde_json::Value,
+    ) -> Result<(), ClientError> {
+        self.pool
+            .get()
+            .await?
+            .vector_upsert(collection, id, vector, metadata)
+            .await
+    }
+
+    /// Batch-upsert vectors (`[{ id, vector, metadata? }]`).
+    pub async fn vector_upsert_batch(
+        &self,
+        collection: &str,
+        vectors: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .vector_upsert_batch(collection, vectors)
+            .await
+    }
+
+    /// Get a stored vector by id.
+    pub async fn get_vector(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        self.pool.get().await?.get_vector(collection, id).await
+    }
+
+    /// Delete a vector by id.
+    pub async fn delete_vector(&self, collection: &str, id: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.delete_vector(collection, id).await
+    }
+
+    /// KNN search over a vector collection.
+    pub async fn vector_search(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+        ef: Option<usize>,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .vector_search(collection, query, k, ef, filter)
+            .await
+    }
 }
 
 #[cfg(test)]

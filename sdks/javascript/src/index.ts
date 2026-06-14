@@ -719,6 +719,105 @@ export class AegisClient {
   }
 
   // ==========================================================================
+  // Vector / KNN
+  // ==========================================================================
+
+  /** Create a vector collection (`metric`: 'cosine' | 'l2' | 'dot'). */
+  async createVectorCollection(
+    name: string,
+    dim: number,
+    metric: 'cosine' | 'l2' | 'dot' = 'cosine'
+  ): Promise<unknown> {
+    return await this.request('POST', '/api/v1/vector/collections', { name, dim, metric });
+  }
+
+  /** List vector collections. */
+  async listVectorCollections(): Promise<string[]> {
+    const res = await this.request<{ collections: string[] }>(
+      'GET',
+      '/api/v1/vector/collections'
+    );
+    return res.collections ?? [];
+  }
+
+  /** Stats for a vector collection (dim, metric, count). */
+  async vectorCollectionStats(name: string): Promise<unknown> {
+    return await this.request('GET', `/api/v1/vector/collections/${name}`);
+  }
+
+  /** Drop a vector collection. */
+  async dropVectorCollection(name: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/vector/collections/${name}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Upsert a single vector with optional metadata. */
+  async vectorUpsert(
+    collection: string,
+    id: string,
+    vector: number[],
+    metadata: Record<string, unknown> = {}
+  ): Promise<void> {
+    await this.request('POST', `/api/v1/vector/collections/${collection}/upsert`, {
+      id,
+      vector,
+      metadata,
+    });
+  }
+
+  /** Batch-upsert vectors (`[{ id, vector, metadata? }]`). Returns the count. */
+  async vectorUpsertBatch(
+    collection: string,
+    vectors: { id: string; vector: number[]; metadata?: Record<string, unknown> }[]
+  ): Promise<number> {
+    const res = await this.request<{ count: number }>(
+      'POST',
+      `/api/v1/vector/collections/${collection}/batch`,
+      { vectors }
+    );
+    return res.count ?? 0;
+  }
+
+  /** Get a stored vector by id, or `undefined` if absent. */
+  async getVector(collection: string, id: string): Promise<unknown | undefined> {
+    try {
+      return await this.request(
+        'GET',
+        `/api/v1/vector/collections/${collection}/vectors/${id}`
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Delete a vector by id. */
+  async deleteVector(collection: string, id: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/vector/collections/${collection}/vectors/${id}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** KNN search; returns ranked hits with score + metadata. */
+  async vectorSearch(
+    collection: string,
+    query: number[],
+    options: { k?: number; ef?: number; filter?: Record<string, unknown> } = {}
+  ): Promise<{ hits: { id: string; score: number; distance: number; metadata: unknown }[] }> {
+    return await this.request(
+      'POST',
+      `/api/v1/vector/collections/${collection}/search`,
+      { vector: query, k: options.k ?? 10, ef: options.ef, filter: options.filter ?? {} }
+    );
+  }
+
+  // ==========================================================================
   // Health and Metrics
   // ==========================================================================
 

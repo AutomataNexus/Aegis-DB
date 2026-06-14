@@ -9,7 +9,7 @@ description: "Rust crate architecture and documentation"
 # Crate Documentation
 {: .no_toc }
 
-Aegis-DB v0.3.1 is built as a Rust workspace with 16 specialized crates and 808 tests.
+Aegis-DB v0.3.1 is built as a Rust workspace with 17 specialized crates and 815 tests.
 
 ---
 
@@ -49,6 +49,7 @@ Aegis-DB v0.3.1 is built as a Rust workspace with 16 specialized crates and 808 
 | [aegis-monitoring](aegis-monitoring.md) | Metrics and health monitoring | prometheus |
 | [aegis-vault](aegis-vault.md) | Integrated encrypted secrets manager (`aegis-db-vault`) | aes-gcm, pbkdf2 |
 | [aegis-shield](aegis-shield.md) | Security shield: injection/anomaly detection, auto-blocking | — |
+| [aegis-vector](aegis-vector.md) | Vector / KNN engine (from-scratch HNSW index) | rand |
 | [aegis-client](aegis-client.md) | Client SDK | reqwest, tokio |
 | [aegis-updates](aegis-updates.md) | OTA rolling update system | reqwest, sha2, tokio |
 | [aegis-server](aegis-server.md) | REST API server | axum, tower |

@@ -891,6 +891,150 @@ impl Connection {
         .await?;
         Ok(())
     }
+
+    // ---- Vector / KNN -------------------------------------------------------
+
+    /// Create a vector collection with a fixed `dim` and `metric`
+    /// (`"cosine"`, `"l2"`, or `"dot"`).
+    pub async fn create_vector_collection(
+        &self,
+        name: &str,
+        dim: usize,
+        metric: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/vector/collections",
+            Some(serde_json::json!({ "name": name, "dim": dim, "metric": metric })),
+        )
+        .await
+    }
+
+    /// List vector collections.
+    pub async fn list_vector_collections(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/vector/collections", None)
+            .await
+    }
+
+    /// Stats for a vector collection (dim, metric, count).
+    pub async fn vector_collection_stats(
+        &self,
+        name: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/vector/collections/{}", name),
+            None,
+        )
+        .await
+    }
+
+    /// Drop a vector collection.
+    pub async fn drop_vector_collection(&self, name: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/vector/collections/{}", name),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Upsert a single vector with optional JSON metadata.
+    pub async fn vector_upsert(
+        &self,
+        collection: &str,
+        id: &str,
+        vector: &[f32],
+        metadata: serde_json::Value,
+    ) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/vector/collections/{}/upsert", collection),
+            Some(serde_json::json!({ "id": id, "vector": vector, "metadata": metadata })),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Batch-upsert many vectors. Each item is `{ id, vector, metadata? }`.
+    pub async fn vector_upsert_batch(
+        &self,
+        collection: &str,
+        vectors: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/vector/collections/{}/batch", collection),
+            Some(serde_json::json!({ "vectors": vectors })),
+        )
+        .await
+    }
+
+    /// Get a stored vector by id, or `None` if absent.
+    pub async fn get_vector(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let url = format!(
+            "{}/api/v1/vector/collections/{}/vectors/{}",
+            self.base_url, collection, id
+        );
+        let response = self
+            .add_auth(self.http_client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "get_vector failed: {}",
+                response.status()
+            )));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        Ok(Some(value))
+    }
+
+    /// Delete a vector by id.
+    pub async fn delete_vector(&self, collection: &str, id: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/vector/collections/{}/vectors/{}", collection, id),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// KNN search: returns the response `{ hits: [{ id, score, distance,
+    /// metadata }], count }`. `filter` is an exact-match metadata object (use
+    /// `Value::Null` for none).
+    pub async fn vector_search(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+        ef: Option<usize>,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/vector/collections/{}/search", collection),
+            Some(serde_json::json!({ "vector": query, "k": k, "ef": ef, "filter": filter })),
+        )
+        .await
+    }
 }
 
 // =============================================================================

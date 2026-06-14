@@ -710,3 +710,93 @@ class AegisClient:
                         yield json.loads(data)
                     except (ValueError, TypeError):
                         yield data
+
+    # =========================================================================
+    # Vector / KNN Methods
+    # =========================================================================
+
+    async def create_vector_collection(
+        self, name: str, dim: int, metric: str = "cosine"
+    ) -> Dict[str, Any]:
+        """Create a vector collection (``metric``: cosine / l2 / dot)."""
+        return await self._request(
+            "POST",
+            "/api/v1/vector/collections",
+            {"name": name, "dim": dim, "metric": metric},
+        )
+
+    async def list_vector_collections(self) -> List[str]:
+        """List vector collections."""
+        data = await self._request("GET", "/api/v1/vector/collections")
+        return data.get("collections", [])
+
+    async def vector_collection_stats(self, name: str) -> Dict[str, Any]:
+        """Stats for a vector collection (dim, metric, count)."""
+        return await self._request("GET", f"/api/v1/vector/collections/{name}")
+
+    async def drop_vector_collection(self, name: str) -> bool:
+        """Drop a vector collection."""
+        try:
+            await self._request("DELETE", f"/api/v1/vector/collections/{name}")
+            return True
+        except QueryError:
+            return False
+
+    async def vector_upsert(
+        self,
+        collection: str,
+        id: str,
+        vector: List[float],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Upsert a single vector with optional metadata."""
+        await self._request(
+            "POST",
+            f"/api/v1/vector/collections/{collection}/upsert",
+            {"id": id, "vector": vector, "metadata": metadata or {}},
+        )
+
+    async def vector_upsert_batch(
+        self, collection: str, vectors: List[Dict[str, Any]]
+    ) -> int:
+        """Batch-upsert vectors (each ``{"id", "vector", "metadata"?}``). Returns count."""
+        data = await self._request(
+            "POST",
+            f"/api/v1/vector/collections/{collection}/batch",
+            {"vectors": vectors},
+        )
+        return data.get("count", 0)
+
+    async def get_vector(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
+        """Get a stored vector by id, or ``None`` if absent."""
+        try:
+            return await self._request(
+                "GET", f"/api/v1/vector/collections/{collection}/vectors/{id}"
+            )
+        except QueryError:
+            return None
+
+    async def delete_vector(self, collection: str, id: str) -> bool:
+        """Delete a vector by id."""
+        try:
+            await self._request(
+                "DELETE", f"/api/v1/vector/collections/{collection}/vectors/{id}"
+            )
+            return True
+        except QueryError:
+            return False
+
+    async def vector_search(
+        self,
+        collection: str,
+        query: List[float],
+        k: int = 10,
+        ef: Optional[int] = None,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """KNN search; returns ``{"hits": [...], "count": n}`` ranked by score."""
+        return await self._request(
+            "POST",
+            f"/api/v1/vector/collections/{collection}/search",
+            {"vector": query, "k": k, "ef": ef, "filter": filter or {}},
+        )

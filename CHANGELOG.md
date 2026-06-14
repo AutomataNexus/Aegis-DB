@@ -7,7 +7,13 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
-- (none yet)
+- **Vector / KNN paradigm** (`aegis-vector`, the 7th engine) — dense-embedding
+  collections with approximate nearest-neighbor search backed by a from-scratch
+  **HNSW** index (cosine / squared-L2 / inner-product metrics), per-record JSON
+  metadata with exact-match filtering, soft deletes, and snapshot persistence
+  (rebuilt into HNSW on load). REST under `/api/v1/vector/*` (collections,
+  upsert, batch, get/delete, search); wrapped in the Rust/JS/Python SDKs.
+  HNSW validated by a recall@10 > 0.90 test against exact brute force.
 
 ## [0.4.4]
 
