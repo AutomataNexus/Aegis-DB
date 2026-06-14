@@ -9,6 +9,13 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ### Added
 - (none yet)
 
+## [0.4.2]
+
+### Security
+- Updated vulnerable dependencies: `openssl` 0.10.76 → 0.10.80 (multiple advisories
+  incl. AES key-wrap OOB), `rustls-webpki` → 0.103.13 (CRL panic DoS), `rand`
+  → 0.8.6 / 0.9.3, and the `vitest` dev-dependency → 3.2.6 (UI server RCE).
+
 ## [0.4.1]
 
 ### Added
