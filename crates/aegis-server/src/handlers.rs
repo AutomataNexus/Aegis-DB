@@ -2669,6 +2669,21 @@ pub struct CreateEdgeRequest {
     pub relationship: String,
 }
 
+/// Update a graph node (any omitted field is left unchanged).
+#[derive(Debug, Deserialize)]
+pub struct UpdateNodeRequest {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub properties: Option<serde_json::Value>,
+}
+
+/// Update a graph edge's relationship.
+#[derive(Debug, Deserialize)]
+pub struct UpdateEdgeRequest {
+    pub relationship: String,
+}
+
 /// Create a new graph node.
 pub async fn create_graph_node(
     State(state): State<AppState>,
@@ -2727,6 +2742,75 @@ pub async fn delete_graph_node(
 
     match state.graph_store.delete_node(&node_id) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": e})),
+        ),
+    }
+}
+
+/// Delete a graph edge.
+pub async fn delete_graph_edge(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+) -> impl IntoResponse {
+    state.activity.log(
+        ActivityType::Delete,
+        &format!("Delete graph edge: {}", edge_id),
+    );
+
+    match state.graph_store.delete_edge(&edge_id) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": e})),
+        ),
+    }
+}
+
+/// Update a graph node's label and/or properties.
+pub async fn update_graph_node(
+    State(state): State<AppState>,
+    Path(node_id): Path<String>,
+    Json(request): Json<UpdateNodeRequest>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log_write(&format!("Update graph node: {}", node_id), None);
+
+    match state
+        .graph_store
+        .update_node(&node_id, request.label, request.properties)
+    {
+        Ok(node) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "node": node})),
+        ),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": e})),
+        ),
+    }
+}
+
+/// Update a graph edge's relationship.
+pub async fn update_graph_edge(
+    State(state): State<AppState>,
+    Path(edge_id): Path<String>,
+    Json(request): Json<UpdateEdgeRequest>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log_write(&format!("Update graph edge: {}", edge_id), None);
+
+    match state
+        .graph_store
+        .update_edge(&edge_id, request.relationship)
+    {
+        Ok(edge) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "edge": edge})),
+        ),
         Err(e) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"success": false, "error": e})),

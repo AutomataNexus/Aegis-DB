@@ -1006,6 +1006,44 @@ impl GraphStore {
         Ok(())
     }
 
+    /// Update a node's label and/or properties. Fields left as `None` are kept.
+    pub fn update_node(
+        &self,
+        id: &str,
+        label: Option<String>,
+        properties: Option<serde_json::Value>,
+    ) -> Result<GraphNode, String> {
+        let updated = {
+            let mut nodes = self.nodes.write();
+            let node = nodes
+                .get_mut(id)
+                .ok_or_else(|| format!("Node '{}' not found", id))?;
+            if let Some(l) = label {
+                node.label = l;
+            }
+            if let Some(p) = properties {
+                node.properties = p;
+            }
+            node.clone()
+        };
+        self.flush_to_disk();
+        Ok(updated)
+    }
+
+    /// Update an edge's relationship type.
+    pub fn update_edge(&self, id: &str, relationship: String) -> Result<GraphEdge, String> {
+        let updated = {
+            let mut edges = self.edges.write();
+            let edge = edges
+                .get_mut(id)
+                .ok_or_else(|| format!("Edge '{}' not found", id))?;
+            edge.relationship = relationship;
+            edge.clone()
+        };
+        self.flush_to_disk();
+        Ok(updated)
+    }
+
     /// List all nodes.
     pub fn list_nodes(&self) -> Vec<GraphNode> {
         self.nodes.read().values().cloned().collect()
@@ -1960,6 +1998,34 @@ fn doc_value_to_json(value: &aegis_document::Value) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_graph_update_and_delete_edge() {
+        let g = GraphStore::new();
+        let a = g.create_node("Person", serde_json::json!({"name": "A"}));
+        let b = g.create_node("Person", serde_json::json!({"name": "B"}));
+        let edge = g.create_edge(&a.id, &b.id, "KNOWS").unwrap();
+
+        // Update node: change properties, keep label.
+        let updated = g
+            .update_node(&a.id, None, Some(serde_json::json!({"name": "A2"})))
+            .unwrap();
+        assert_eq!(updated.label, "Person");
+        assert_eq!(updated.properties["name"], "A2");
+
+        // Update edge relationship.
+        let updated_edge = g.update_edge(&edge.id, "FOLLOWS".to_string()).unwrap();
+        assert_eq!(updated_edge.relationship, "FOLLOWS");
+
+        // Delete the edge (previously unroutable).
+        assert!(g.delete_edge(&edge.id).is_ok());
+        assert!(g.list_edges().is_empty());
+
+        // Updating / deleting a missing id errors.
+        assert!(g.update_node("nope:0", None, None).is_err());
+        assert!(g.update_edge("nope", "X".to_string()).is_err());
+        assert!(g.delete_edge("nope").is_err());
+    }
 
     #[test]
     fn test_metrics_calculations() {

@@ -272,8 +272,15 @@ pub fn create_router(state: AppState) -> Router {
     let graph_routes = Router::new()
         .route("/data", get(handlers::get_graph_data))
         .route("/nodes", post(handlers::create_graph_node))
-        .route("/nodes/:node_id", delete(handlers::delete_graph_node))
+        .route(
+            "/nodes/:node_id",
+            put(handlers::update_graph_node).delete(handlers::delete_graph_node),
+        )
         .route("/edges", post(handlers::create_graph_edge))
+        .route(
+            "/edges/:edge_id",
+            put(handlers::update_graph_edge).delete(handlers::delete_graph_edge),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::require_auth,
