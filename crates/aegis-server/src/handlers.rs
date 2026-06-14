@@ -1374,6 +1374,27 @@ pub async fn create_collection(
     }
 }
 
+/// Drop a collection and all its documents.
+pub async fn delete_collection(
+    State(state): State<AppState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log_write(&format!("Drop collection: {name}"), None);
+
+    match state.document_engine.drop_collection(&name) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "collection": name})),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"success": false, "error": e.to_string()})),
+        ),
+    }
+}
+
 /// Insert document request.
 #[derive(Debug, Deserialize)]
 pub struct InsertDocumentRequest {
