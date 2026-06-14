@@ -90,11 +90,11 @@ Run with: `cargo run --release -p aegis-benchmarks -- --concurrency 50 --duratio
 
 | Benchmark | Ops/sec | Avg (μs) | P50 (μs) | P95 (μs) | P99 (μs) |
 |-----------|---------|----------|----------|----------|----------|
-| SQL Insert | **73,844** | 676 | 619 | 1,177 | 1,794 |
-| SQL Read | **74,521** | 670 | 613 | 1,160 | 1,851 |
-| Fund Transfer | **17,149** | 2,915 | 2,614 | 3,912 | 5,040 |
-| KV Get | **132,646** | 376 | 356 | 645 | 798 |
-| Mixed 80/20 | **68,026** | 734 | 672 | 1,269 | 2,011 |
+| SQL Insert | **72,441** | 689 | 628 | 1,222 | 1,880 |
+| SQL Read | **71,587** | 697 | 632 | 1,240 | 1,993 |
+| Fund Transfer | **18,008** | 2,776 | 2,643 | 3,996 | 5,101 |
+| KV Get | **76,523** | 652 | 588 | 1,213 | 1,806 |
+| Mixed 80/20 | **64,466** | 775 | 702 | 1,393 | 2,171 |
 
 ---
 
@@ -126,10 +126,10 @@ Source: [SpacetimeDB Keynote-2 Benchmark](https://spacetimedb.com/blog/series/be
 ### Key Observations
 
 - **Fund transfer dominates SpacetimeDB**: 971K TPS zero contention (9.0x), 2.5M TPS high contention (24.5x) — measuring the *full* transactional transfer (read both balances, verify funds, atomic debit/credit), not blind writes. The single-lock-hold amortizes lock acquisition and index resolution across both legs, and there is no SQL parse or plan construction. Caveat: Aegis's number is in-memory with no commit-log append, whereas SpacetimeDB appends to an in-memory committed log — so this is a transfer-logic/throughput comparison, not a durability one.
-- **KV is blazing fast**: 10.8M reads/sec, 4.1M writes/sec, and 27.6M deletes/sec at the engine level; 133K reads/sec over HTTP.
-- **SQL inserts are strong**: ~204K single-row inserts/sec engine-level; ~74K/sec over HTTP.
+- **KV is blazing fast**: 10.8M reads/sec, 4.1M writes/sec, and 27.6M deletes/sec at the engine level; ~77K reads/sec over HTTP.
+- **SQL inserts are strong**: ~204K single-row inserts/sec engine-level; ~72K/sec over HTTP.
 - **Concurrent throughput scales well**: the in-process async mixed workload reaches ~3.3M ops/sec at concurrency 100 (1k-row table).
-- **HTTP overhead is reasonable**: ~676μs avg for inserts, ~376μs avg for KV gets — the Axum stack adds modest latency.
+- **HTTP overhead is reasonable**: ~689μs avg for inserts, ~652μs avg for KV gets — the Axum stack adds modest latency. (HTTP throughput is dominated by per-request network + JSON cost, so KV-get and SQL numbers converge.)
 - SpacetimeDB runs application logic _inside_ the database as WASM, eliminating all network overhead. Aegis-DB's direct execution API is the closest comparison (both in-process, no SQL parsing).
 
 ### Optimization Status (Completed)

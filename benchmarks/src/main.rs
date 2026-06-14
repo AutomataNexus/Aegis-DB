@@ -79,7 +79,10 @@ async fn query(client: &reqwest::Client, url: &str, sql: &str) -> Result<(), req
         .post(format!("{}/api/v1/query", url))
         .json(&json!({ "sql": sql }))
         .send()
-        .await?;
+        .await?
+        // Fail on non-2xx so a wrong path / bad request can't be silently
+        // counted as a successful op and inflate throughput.
+        .error_for_status()?;
     Ok(())
 }
 
@@ -90,18 +93,20 @@ async fn kv_set(
     value: &str,
 ) -> Result<(), reqwest::Error> {
     client
-        .post(format!("{}/api/v1/kv/{}", url, key))
-        .json(&json!({ "value": value }))
+        .post(format!("{}/api/v1/kv/keys", url))
+        .json(&json!({ "key": key, "value": value }))
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
     Ok(())
 }
 
 async fn kv_get(client: &reqwest::Client, url: &str, key: &str) -> Result<(), reqwest::Error> {
     client
-        .get(format!("{}/api/v1/kv/{}", url, key))
+        .get(format!("{}/api/v1/kv/keys/{}", url, key))
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
     Ok(())
 }
 
