@@ -276,37 +276,77 @@ export class AegisClient {
   // Query Methods
   // ==========================================================================
 
-  async query(sql: string, params?: Record<string, unknown>): Promise<QueryResult> {
+  async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
     const response = await this.request<{
-      columns: string[];
-      rows: unknown[][];
-      rows_affected: number;
+      success: boolean;
+      data?: { columns: string[]; rows: unknown[][]; rows_affected: number };
+      error?: string;
       execution_time_ms: number;
     }>('POST', '/api/v1/query', {
-      query: sql,
+      sql,
       database: this.config.database,
-      params: params || {},
+      params,
     });
 
-    const rows: Row[] = response.rows.map((row) => {
+    const columns = response.data?.columns ?? [];
+    const rawRows = response.data?.rows ?? [];
+    const rows: Row[] = rawRows.map((row) => {
       const obj: Row = {};
-      response.columns.forEach((col, i) => {
+      columns.forEach((col, i) => {
         obj[col] = row[i];
       });
       return obj;
     });
 
     return {
-      columns: response.columns,
+      columns,
       rows,
-      rowsAffected: response.rows_affected,
+      rowsAffected: response.data?.rows_affected ?? 0,
       executionTimeMs: response.execution_time_ms,
     };
   }
 
-  async execute(sql: string, params?: Record<string, unknown>): Promise<number> {
+  async execute(sql: string, params: unknown[] = []): Promise<number> {
     const result = await this.query(sql, params);
     return result.rowsAffected;
+  }
+
+  /** Prepare a statement; returns its id for repeated execution. */
+  async prepare(sql: string): Promise<string> {
+    const res = await this.request<{ statement_id: string }>('POST', '/api/v1/prepare', {
+      sql,
+      database: this.config.database,
+    });
+    return res.statement_id;
+  }
+
+  /** Execute a prepared statement with bound positional parameters. */
+  async executePrepared(statementId: string, params: unknown[] = []): Promise<QueryResult> {
+    const response = await this.request<{
+      success: boolean;
+      data?: { columns: string[]; rows: unknown[][]; rows_affected: number };
+      execution_time_ms: number;
+    }>('POST', '/api/v1/prepared/execute', { statement_id: statementId, params });
+    const columns = response.data?.columns ?? [];
+    const rawRows = response.data?.rows ?? [];
+    const rows: Row[] = rawRows.map((row) => {
+      const obj: Row = {};
+      columns.forEach((col, i) => {
+        obj[col] = row[i];
+      });
+      return obj;
+    });
+    return {
+      columns,
+      rows,
+      rowsAffected: response.data?.rows_affected ?? 0,
+      executionTimeMs: response.execution_time_ms,
+    };
+  }
+
+  /** Deallocate a prepared statement. */
+  async deallocate(statementId: string): Promise<void> {
+    await this.request('DELETE', `/api/v1/prepared/${statementId}`);
   }
 
   queryBuilder(table: string): QueryBuilder {
@@ -365,8 +405,10 @@ export class AegisClient {
 
   async kvGet(key: string): Promise<unknown | undefined> {
     try {
-      const entries = await this.request<KeyValueEntry[]>('GET', '/api/v1/kv/keys');
-      const entry = entries.find((e) => e.key === key);
+      const entry = await this.request<{ value: unknown } | null>(
+        'GET',
+        `/api/v1/kv/keys/${key}`
+      );
       return entry?.value;
     } catch {
       return undefined;
@@ -642,22 +684,22 @@ export class QueryBuilder {
   private table: string;
   private selectCols: string[] = ['*'];
   private whereClauses: string[] = [];
-  private whereParams: Record<string, unknown> = {};
+  // Positional ($1, $2, ...) parameter values in order, matching the server.
+  private whereParamValues: unknown[] = [];
   private orderByCols: string[] = [];
   private groupByCols: string[] = [];
   private limitVal?: number;
   private offsetVal?: number;
   private joins: string[] = [];
-  private paramCounter = 0;
 
   constructor(client: AegisClient, table: string) {
     this.client = client;
     this.table = table;
   }
 
-  private nextParam(): string {
-    this.paramCounter++;
-    return `p${this.paramCounter}`;
+  private nextPlaceholder(value: unknown): string {
+    this.whereParamValues.push(value);
+    return `$${this.whereParamValues.length}`;
   }
 
   select(...columns: string[]): this {
@@ -666,18 +708,12 @@ export class QueryBuilder {
   }
 
   where(column: string, operator: string, value: unknown): this {
-    const param = this.nextParam();
-    this.whereClauses.push(`${column} ${operator} :${param}`);
-    this.whereParams[param] = value;
+    this.whereClauses.push(`${column} ${operator} ${this.nextPlaceholder(value)}`);
     return this;
   }
 
   whereIn(column: string, values: unknown[]): this {
-    const placeholders = values.map((val) => {
-      const param = this.nextParam();
-      this.whereParams[param] = val;
-      return `:${param}`;
-    });
+    const placeholders = values.map((val) => this.nextPlaceholder(val));
     this.whereClauses.push(`${column} IN (${placeholders.join(', ')})`);
     return this;
   }
@@ -721,7 +757,7 @@ export class QueryBuilder {
     return this;
   }
 
-  build(): { sql: string; params: Record<string, unknown> } {
+  build(): { sql: string; params: unknown[] } {
     const parts = [`SELECT ${this.selectCols.join(', ')} FROM ${this.table}`];
 
     if (this.joins.length) parts.push(...this.joins);
@@ -731,7 +767,7 @@ export class QueryBuilder {
     if (this.limitVal !== undefined) parts.push(`LIMIT ${this.limitVal}`);
     if (this.offsetVal !== undefined) parts.push(`OFFSET ${this.offsetVal}`);
 
-    return { sql: parts.join(' '), params: this.whereParams };
+    return { sql: parts.join(' '), params: this.whereParamValues };
   }
 
   async execute(): Promise<QueryResult> {
@@ -810,12 +846,12 @@ export class Transaction {
     this.savepoints = this.savepoints.slice(0, idx + 1);
   }
 
-  async execute(sql: string, params?: Record<string, unknown>): Promise<number> {
+  async execute(sql: string, params: unknown[] = []): Promise<number> {
     if (!this.active) throw new Error('No active transaction');
     return await this.client.execute(sql, params);
   }
 
-  async query(sql: string, params?: Record<string, unknown>): Promise<QueryResult> {
+  async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
     if (!this.active) throw new Error('No active transaction');
     return await this.client.query(sql, params);
   }

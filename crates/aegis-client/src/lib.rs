@@ -396,6 +396,31 @@ impl AegisClient {
     pub async fn metrics(&self) -> Result<serde_json::Value, ClientError> {
         self.pool.get().await?.metrics().await
     }
+
+    // ---- Prepared statements ------------------------------------------------
+
+    /// Prepare a statement and return its id for repeated execution.
+    pub async fn prepare(&self, sql: &str) -> Result<String, ClientError> {
+        self.pool.get().await?.prepare(sql).await
+    }
+
+    /// Execute a prepared statement with bound parameters.
+    pub async fn execute_prepared(
+        &self,
+        statement_id: &str,
+        params: Vec<Value>,
+    ) -> Result<QueryResult, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .execute_prepared(statement_id, params)
+            .await
+    }
+
+    /// Deallocate a prepared statement.
+    pub async fn deallocate(&self, statement_id: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.deallocate(statement_id).await
+    }
 }
 
 #[cfg(test)]

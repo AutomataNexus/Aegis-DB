@@ -236,7 +236,7 @@ class AegisClient:
     async def query(
         self,
         sql: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Optional[List[Any]] = None,
     ) -> QueryResult:
         """
         Execute a SQL query.
@@ -249,12 +249,13 @@ class AegisClient:
             QueryResult with rows and metadata
         """
         payload = {
-            "query": sql,
+            "sql": sql,
             "database": self.config.database,
-            "params": params or {},
+            "params": params or [],
         }
 
-        data = await self._request("POST", "/api/v1/query", payload)
+        resp = await self._request("POST", "/api/v1/query", payload)
+        data = resp.get("data") or {}
 
         rows = [Row(dict(zip(data.get("columns", []), row))) for row in data.get("rows", [])]
 
@@ -262,13 +263,13 @@ class AegisClient:
             columns=data.get("columns", []),
             rows=rows,
             rows_affected=data.get("rows_affected", 0),
-            execution_time_ms=data.get("execution_time_ms", 0),
+            execution_time_ms=resp.get("execution_time_ms", 0),
         )
 
     async def execute(
         self,
         sql: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Optional[List[Any]] = None,
     ) -> int:
         """
         Execute a SQL statement (INSERT, UPDATE, DELETE).
@@ -282,6 +283,41 @@ class AegisClient:
         """
         result = await self.query(sql, params)
         return result.rows_affected
+
+    async def prepare(self, sql: str) -> str:
+        """Prepare a statement; returns its id for repeated execution."""
+        resp = await self._request(
+            "POST",
+            "/api/v1/prepare",
+            {"sql": sql, "database": self.config.database},
+        )
+        return resp.get("statement_id", "")
+
+    async def execute_prepared(
+        self, statement_id: str, params: Optional[List[Any]] = None
+    ) -> QueryResult:
+        """Execute a prepared statement with bound positional parameters."""
+        resp = await self._request(
+            "POST",
+            "/api/v1/prepared/execute",
+            {"statement_id": statement_id, "params": params or []},
+        )
+        data = resp.get("data") or {}
+        rows = [Row(dict(zip(data.get("columns", []), row))) for row in data.get("rows", [])]
+        return QueryResult(
+            columns=data.get("columns", []),
+            rows=rows,
+            rows_affected=data.get("rows_affected", 0),
+            execution_time_ms=resp.get("execution_time_ms", 0),
+        )
+
+    async def deallocate(self, statement_id: str) -> bool:
+        """Deallocate a prepared statement."""
+        try:
+            await self._request("DELETE", f"/api/v1/prepared/{statement_id}")
+            return True
+        except QueryError:
+            return False
 
     def query_builder(self, table: str) -> QueryBuilder:
         """

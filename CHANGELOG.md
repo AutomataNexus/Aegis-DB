@@ -7,6 +7,11 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Prepared statements**: `POST /api/v1/prepare` (parse + plan once, returns an
+  id), `POST /api/v1/prepared/execute` (bind params, skips re-parse/plan), and
+  `DELETE /api/v1/prepared/:id`. Wrapped in all three SDKs
+  (`prepare`/`execute_prepared`/`deallocate`). Note: prepared mutations persist
+  locally but are not peer-replicated.
 - **Graph API completeness**: `PUT /api/v1/graph/nodes/:id` and
   `PUT` + `DELETE /api/v1/graph/edges/:id` (edge deletion existed in the engine
   but had no route); `GraphStore::update_node` / `update_edge`.
@@ -20,6 +25,17 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 - **SDK bulk helpers**: `kvBatchGet/Set/Delete` and `bulkInsert/bulkDelete`
   (JavaScript) and `kv_batch_get/set/delete`, `bulk_insert/bulk_delete`
   (Python).
+- **General blob compression** (`compress::encode_blob`/`decode_blob`): KV /
+  graph / relational snapshots persist through a self-describing NexusCompress
+  blob frame (best of ANS / zstd_max / identity), with a legacy raw-bytes
+  fallback. Round-trip + fallback test added.
+
+### Changed
+- Bumped the **NexusCompress** dependency `0.1.1 → 0.3.1`. The new release adds
+  adaptive entropy selection and per-field pipeline choice (every domain now
+  beats zstd-3) plus the `zstd_max`/`brotli_max` codec aliases, so document,
+  time-series, and blob frames get higher ratios transparently — no API change.
+  Frames remain self-describing/plan-driven.
 - **JavaScript & Python SDK parity**: document CRUD + query
   (create/insert/get/update/patch/delete/query), time series
   (register_metric / write / query), and graph mutations
@@ -30,6 +46,13 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 - **Document update/patch body**: the Rust client sent the bare document on
   `PUT`/`PATCH` instead of `{ "document": ... }`, so updates were rejected.
   Corrected to match the server contract (verified end-to-end).
+- **JavaScript & Python `query()` were broken against the server**: they sent
+  `{ query, params: {} }` (named/object params) but the server expects
+  `{ sql, params: [] }` (positional array) and wraps results in `data`. Fixed the
+  request/response shape, switched the `params` argument and both query builders
+  to positional `$1, $2, …` with an ordered array, and fixed JS `kvGet` to use
+  the direct key endpoint. Verified end-to-end by running both SDKs against a
+  live server (query+params, query builder, prepared statements, KV).
 - **HTTP benchmark KV path**: the load test hit `/api/v1/kv/:key` (no such
   route) instead of `/api/v1/kv/keys/:key`, so KV requests 404'd and the 404s
   were counted as successful ops. Corrected the paths and added

@@ -97,6 +97,9 @@ pub fn create_router(state: AppState) -> Router {
 
     let api_routes = Router::new()
         .route("/query", post(handlers::execute_query))
+        .route("/prepare", post(handlers::prepare_statement))
+        .route("/prepared/execute", post(handlers::execute_prepared))
+        .route("/prepared/:id", delete(handlers::deallocate_prepared))
         .route("/tables", get(handlers::list_tables))
         .route("/tables/:name", get(handlers::get_table))
         .route("/metrics", get(handlers::get_metrics))

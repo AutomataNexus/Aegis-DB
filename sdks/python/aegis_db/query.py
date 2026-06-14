@@ -35,19 +35,19 @@ class QueryBuilder:
         self._table = table
         self._select_cols: List[str] = ["*"]
         self._where_clauses: List[str] = []
-        self._where_params: Dict[str, Any] = {}
+        # Positional ($1, $2, ...) parameter values in order, matching the server.
+        self._params: List[Any] = []
         self._order_by_cols: List[str] = []
         self._group_by_cols: List[str] = []
         self._having_clauses: List[str] = []
         self._limit_val: Optional[int] = None
         self._offset_val: Optional[int] = None
         self._joins: List[str] = []
-        self._param_counter = 0
 
-    def _next_param(self) -> str:
-        """Generate next parameter name."""
-        self._param_counter += 1
-        return f"p{self._param_counter}"
+    def _placeholder(self, value: Any) -> str:
+        """Append a positional parameter value and return its ``$N`` placeholder."""
+        self._params.append(value)
+        return f"${len(self._params)}"
 
     def select(self, *columns: str) -> "QueryBuilder":
         """Select specific columns."""
@@ -61,18 +61,12 @@ class QueryBuilder:
         value: Any,
     ) -> "QueryBuilder":
         """Add a WHERE condition."""
-        param = self._next_param()
-        self._where_clauses.append(f"{column} {operator} :{param}")
-        self._where_params[param] = value
+        self._where_clauses.append(f"{column} {operator} {self._placeholder(value)}")
         return self
 
     def where_in(self, column: str, values: List[Any]) -> "QueryBuilder":
         """Add a WHERE IN condition."""
-        placeholders = []
-        for val in values:
-            param = self._next_param()
-            placeholders.append(f":{param}")
-            self._where_params[param] = val
+        placeholders = [self._placeholder(val) for val in values]
         self._where_clauses.append(f"{column} IN ({', '.join(placeholders)})")
         return self
 
@@ -93,18 +87,14 @@ class QueryBuilder:
         high: Any,
     ) -> "QueryBuilder":
         """Add a WHERE BETWEEN condition."""
-        param1 = self._next_param()
-        param2 = self._next_param()
-        self._where_clauses.append(f"{column} BETWEEN :{param1} AND :{param2}")
-        self._where_params[param1] = low
-        self._where_params[param2] = high
+        self._where_clauses.append(
+            f"{column} BETWEEN {self._placeholder(low)} AND {self._placeholder(high)}"
+        )
         return self
 
     def where_like(self, column: str, pattern: str) -> "QueryBuilder":
         """Add a WHERE LIKE condition."""
-        param = self._next_param()
-        self._where_clauses.append(f"{column} LIKE :{param}")
-        self._where_params[param] = pattern
+        self._where_clauses.append(f"{column} LIKE {self._placeholder(pattern)}")
         return self
 
     def or_where(
@@ -114,13 +104,12 @@ class QueryBuilder:
         value: Any,
     ) -> "QueryBuilder":
         """Add an OR WHERE condition."""
-        param = self._next_param()
+        placeholder = self._placeholder(value)
         if self._where_clauses:
             last = self._where_clauses.pop()
-            self._where_clauses.append(f"({last} OR {column} {operator} :{param})")
+            self._where_clauses.append(f"({last} OR {column} {operator} {placeholder})")
         else:
-            self._where_clauses.append(f"{column} {operator} :{param}")
-        self._where_params[param] = value
+            self._where_clauses.append(f"{column} {operator} {placeholder}")
         return self
 
     def join(
@@ -158,9 +147,7 @@ class QueryBuilder:
         value: Any,
     ) -> "QueryBuilder":
         """Add a HAVING clause."""
-        param = self._next_param()
-        self._having_clauses.append(f"{column} {operator} :{param}")
-        self._where_params[param] = value
+        self._having_clauses.append(f"{column} {operator} {self._placeholder(value)}")
         return self
 
     def limit(self, count: int) -> "QueryBuilder":
@@ -173,8 +160,8 @@ class QueryBuilder:
         self._offset_val = count
         return self
 
-    def build(self) -> tuple[str, Dict[str, Any]]:
-        """Build the SQL query and parameters."""
+    def build(self) -> tuple[str, List[Any]]:
+        """Build the SQL query and positional parameters."""
         parts = [f"SELECT {', '.join(self._select_cols)} FROM {self._table}"]
 
         if self._joins:
@@ -198,7 +185,7 @@ class QueryBuilder:
         if self._offset_val is not None:
             parts.append(f"OFFSET {self._offset_val}")
 
-        return " ".join(parts), self._where_params
+        return " ".join(parts), self._params
 
     async def execute(self) -> "QueryResult":
         """Execute the built query."""
