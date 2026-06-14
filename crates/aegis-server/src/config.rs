@@ -68,14 +68,26 @@ impl Default for ServerConfig {
             node_name: None,
             cluster_name: "aegis-cluster".to_string(),
             peers: Vec::new(),
-            rate_limit_per_minute: 100,
-            login_rate_limit_per_minute: 30,
+            // Per-source-IP request budget. Override via env for deployments where
+            // a single trusted client fronts the node — e.g. the AegisConsole
+            // gateway, the node's SOLE client, which funnels ALL console + ingest
+            // traffic from one IP and would otherwise be throttled to 100/min.
+            rate_limit_per_minute: env_u32("AEGIS_RATE_LIMIT_PER_MINUTE", 100),
+            login_rate_limit_per_minute: env_u32("AEGIS_LOGIN_RATE_LIMIT_PER_MINUTE", 30),
             auth_required: true,
             open_bootstrap: std::env::var("AEGIS_OPEN_BOOTSTRAP")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
         }
     }
+}
+
+/// Read a `u32` from an env var, falling back to `default` if unset/unparseable.
+fn env_u32(key: &str, default: u32) -> u32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(default)
 }
 
 /// Generate a unique node ID based on timestamp and random suffix
