@@ -9,6 +9,12 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ### Added
 - (none yet)
 
+## [0.4.4]
+
+### Changed
+- Re-cut of 0.4.3 (functionally identical) after a history purge that removed an
+  internal pricing-config file accidentally committed in 0.4.3. No code changes.
+
 ## [0.4.3]
 
 ### Security
