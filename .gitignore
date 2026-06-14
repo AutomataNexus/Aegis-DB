@@ -61,3 +61,6 @@ certs/
 
 # Release binaries (use GitHub Releases instead)
 release-artifacts/
+
+# Local-only website fact sheet — never commit
+/WEBSITE_FACTS.md
