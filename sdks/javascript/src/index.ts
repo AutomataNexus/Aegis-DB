@@ -220,7 +220,7 @@ export class AegisClient {
   // ==========================================================================
 
   private async request<T>(
-    method: 'GET' | 'POST' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     body?: unknown
   ): Promise<T> {
@@ -450,12 +450,174 @@ export class AegisClient {
     return res.deleted ?? 0;
   }
 
+  /** Create a document collection. */
+  async createCollection(name: string): Promise<unknown> {
+    return await this.request('POST', '/api/v1/documents/collections', { name });
+  }
+
+  /** Insert a single document, optionally with an explicit id. Returns the new id. */
+  async insertDocument(
+    collection: string,
+    document: unknown,
+    id?: string
+  ): Promise<string> {
+    const res = await this.request<{ id: string }>(
+      'POST',
+      `/api/v1/documents/collections/${collection}/documents`,
+      { id, document }
+    );
+    return res.id;
+  }
+
+  /** Get a document by id, or `undefined` if absent. */
+  async getDocument(collection: string, id: string): Promise<unknown | undefined> {
+    try {
+      return await this.request(
+        'GET',
+        `/api/v1/documents/collections/${collection}/documents/${id}`
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Replace a document (full update). */
+  async updateDocument(collection: string, id: string, document: unknown): Promise<unknown> {
+    return await this.request(
+      'PUT',
+      `/api/v1/documents/collections/${collection}/documents/${id}`,
+      { document }
+    );
+  }
+
+  /** Partially update (merge) a document. */
+  async patchDocument(collection: string, id: string, partial: unknown): Promise<unknown> {
+    return await this.request(
+      'PATCH',
+      `/api/v1/documents/collections/${collection}/documents/${id}`,
+      { document: partial }
+    );
+  }
+
+  /** Delete a document by id. */
+  async deleteDocument(collection: string, id: string): Promise<boolean> {
+    try {
+      await this.request(
+        'DELETE',
+        `/api/v1/documents/collections/${collection}/documents/${id}`
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Query documents with a MongoDB-style filter. */
+  async queryDocuments(
+    collection: string,
+    filter: Record<string, unknown> = {},
+    options: { limit?: number; skip?: number } = {}
+  ): Promise<unknown> {
+    return await this.request(
+      'POST',
+      `/api/v1/documents/collections/${collection}/query`,
+      { filter, limit: options.limit, skip: options.skip }
+    );
+  }
+
+  // ==========================================================================
+  // Time Series
+  // ==========================================================================
+
+  /** Register a metric (e.g. `counter`, `gauge`, `histogram`, `summary`). */
+  async registerMetric(name: string, metricType = 'gauge'): Promise<unknown> {
+    return await this.request('POST', '/api/v1/timeseries/metrics', {
+      name,
+      metric_type: metricType,
+    });
+  }
+
+  /** Write a single time-series point. */
+  async tsWrite(
+    metric: string,
+    value: number,
+    options: { timestamp?: number; tags?: Record<string, string> } = {}
+  ): Promise<void> {
+    await this.request('POST', '/api/v1/timeseries/write', {
+      metric,
+      value,
+      timestamp: options.timestamp,
+      tags: options.tags ?? {},
+    });
+  }
+
+  /** Query a time series within an optional `[start, end]` window. */
+  async tsQuery(
+    metric: string,
+    options: { start?: number; end?: number; limit?: number; tags?: Record<string, string> } = {}
+  ): Promise<unknown> {
+    return await this.request('POST', '/api/v1/timeseries/query', {
+      metric,
+      tags: options.tags,
+      start: options.start,
+      end: options.end,
+      limit: options.limit,
+    });
+  }
+
   // ==========================================================================
   // Graph Database
   // ==========================================================================
 
   async getGraphData(): Promise<GraphData> {
     return await this.request<GraphData>('GET', '/api/v1/graph/data');
+  }
+
+  /** Create a graph node. */
+  async createNode(label: string, properties: Record<string, unknown> = {}): Promise<unknown> {
+    return await this.request('POST', '/api/v1/graph/nodes', { label, properties });
+  }
+
+  /** Update a graph node (omit a field to leave it unchanged). */
+  async updateNode(
+    nodeId: string,
+    update: { label?: string; properties?: Record<string, unknown> }
+  ): Promise<unknown> {
+    return await this.request('PUT', `/api/v1/graph/nodes/${nodeId}`, update);
+  }
+
+  /** Delete a graph node (and its edges). */
+  async deleteNode(nodeId: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/graph/nodes/${nodeId}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Create a graph edge. */
+  async createEdge(source: string, target: string, relationship: string): Promise<unknown> {
+    return await this.request('POST', '/api/v1/graph/edges', {
+      source,
+      target,
+      relationship,
+    });
+  }
+
+  /** Update a graph edge's relationship. */
+  async updateEdge(edgeId: string, relationship: string): Promise<unknown> {
+    return await this.request('PUT', `/api/v1/graph/edges/${edgeId}`, { relationship });
+  }
+
+  /** Delete a graph edge. */
+  async deleteEdge(edgeId: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/graph/edges/${edgeId}`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // ==========================================================================

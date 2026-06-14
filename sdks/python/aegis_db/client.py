@@ -202,6 +202,12 @@ class AegisClient:
             elif method == "POST":
                 async with self._session.post(url, headers=headers, json=data) as resp:
                     return await self._handle_response(resp)
+            elif method == "PUT":
+                async with self._session.put(url, headers=headers, json=data) as resp:
+                    return await self._handle_response(resp)
+            elif method == "PATCH":
+                async with self._session.patch(url, headers=headers, json=data) as resp:
+                    return await self._handle_response(resp)
             elif method == "DELETE":
                 async with self._session.delete(url, headers=headers) as resp:
                     return await self._handle_response(resp)
@@ -457,6 +463,119 @@ class AegisClient:
         )
         return data.get("deleted", 0)
 
+    async def create_collection(self, name: str) -> Dict[str, Any]:
+        """Create a document collection."""
+        return await self._request(
+            "POST", "/api/v1/documents/collections", {"name": name}
+        )
+
+    async def insert_document(
+        self, collection: str, document: Any, doc_id: Optional[str] = None
+    ) -> str:
+        """Insert a single document, optionally with an explicit id. Returns the new id."""
+        data = await self._request(
+            "POST",
+            f"/api/v1/documents/collections/{collection}/documents",
+            {"id": doc_id, "document": document},
+        )
+        return data.get("id", "")
+
+    async def get_document(self, collection: str, doc_id: str) -> Optional[Any]:
+        """Get a document by id, or ``None`` if absent."""
+        try:
+            return await self._request(
+                "GET",
+                f"/api/v1/documents/collections/{collection}/documents/{doc_id}",
+            )
+        except QueryError:
+            return None
+
+    async def update_document(
+        self, collection: str, doc_id: str, document: Any
+    ) -> Dict[str, Any]:
+        """Replace a document (full update)."""
+        return await self._request(
+            "PUT",
+            f"/api/v1/documents/collections/{collection}/documents/{doc_id}",
+            {"document": document},
+        )
+
+    async def patch_document(
+        self, collection: str, doc_id: str, partial: Any
+    ) -> Dict[str, Any]:
+        """Partially update (merge) a document."""
+        return await self._request(
+            "PATCH",
+            f"/api/v1/documents/collections/{collection}/documents/{doc_id}",
+            {"document": partial},
+        )
+
+    async def delete_document(self, collection: str, doc_id: str) -> bool:
+        """Delete a document by id."""
+        try:
+            await self._request(
+                "DELETE",
+                f"/api/v1/documents/collections/{collection}/documents/{doc_id}",
+            )
+            return True
+        except QueryError:
+            return False
+
+    async def query_documents(
+        self,
+        collection: str,
+        filter: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+        skip: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Query documents with a MongoDB-style filter."""
+        return await self._request(
+            "POST",
+            f"/api/v1/documents/collections/{collection}/query",
+            {"filter": filter or {}, "limit": limit, "skip": skip},
+        )
+
+    # =========================================================================
+    # Time Series Methods
+    # =========================================================================
+
+    async def register_metric(self, name: str, metric_type: str = "gauge") -> Dict[str, Any]:
+        """Register a metric (counter / gauge / histogram / summary)."""
+        return await self._request(
+            "POST",
+            "/api/v1/timeseries/metrics",
+            {"name": name, "metric_type": metric_type},
+        )
+
+    async def ts_write(
+        self,
+        metric: str,
+        value: float,
+        timestamp: Optional[int] = None,
+        tags: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Write a single time-series point."""
+        await self._request(
+            "POST",
+            "/api/v1/timeseries/write",
+            {"metric": metric, "value": value, "timestamp": timestamp, "tags": tags or {}},
+        )
+
+    async def ts_query(
+        self,
+        metric: str,
+        start: Optional[int] = None,
+        end: Optional[int] = None,
+        limit: Optional[int] = None,
+        tags: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Query a time series within an optional ``[start, end]`` window."""
+        return await self._request(
+            "POST",
+            "/api/v1/timeseries/query",
+            {"metric": metric, "tags": tags, "start": start, "end": end, "limit": limit},
+        )
+
     # =========================================================================
     # Graph Methods
     # =========================================================================
@@ -464,3 +583,56 @@ class AegisClient:
     async def get_graph_data(self) -> Dict[str, Any]:
         """Get graph nodes and edges."""
         return await self._request("GET", "/api/v1/graph/data")
+
+    async def create_node(
+        self, label: str, properties: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Create a graph node."""
+        return await self._request(
+            "POST", "/api/v1/graph/nodes", {"label": label, "properties": properties or {}}
+        )
+
+    async def update_node(
+        self,
+        node_id: str,
+        label: Optional[str] = None,
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Update a graph node (omit a field to leave it unchanged)."""
+        return await self._request(
+            "PUT",
+            f"/api/v1/graph/nodes/{node_id}",
+            {"label": label, "properties": properties},
+        )
+
+    async def delete_node(self, node_id: str) -> bool:
+        """Delete a graph node (and its edges)."""
+        try:
+            await self._request("DELETE", f"/api/v1/graph/nodes/{node_id}")
+            return True
+        except QueryError:
+            return False
+
+    async def create_edge(
+        self, source: str, target: str, relationship: str
+    ) -> Dict[str, Any]:
+        """Create a graph edge."""
+        return await self._request(
+            "POST",
+            "/api/v1/graph/edges",
+            {"source": source, "target": target, "relationship": relationship},
+        )
+
+    async def update_edge(self, edge_id: str, relationship: str) -> Dict[str, Any]:
+        """Update a graph edge's relationship."""
+        return await self._request(
+            "PUT", f"/api/v1/graph/edges/{edge_id}", {"relationship": relationship}
+        )
+
+    async def delete_edge(self, edge_id: str) -> bool:
+        """Delete a graph edge."""
+        try:
+            await self._request("DELETE", f"/api/v1/graph/edges/{edge_id}")
+            return True
+        except QueryError:
+            return False
