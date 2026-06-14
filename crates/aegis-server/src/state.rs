@@ -25,6 +25,7 @@ use aegis_streaming::StreamingEngine;
 use aegis_timeseries::TimeSeriesEngine;
 use aegis_updates::orchestrator::UpdateOrchestrator;
 use aegis_vault::AegisVault;
+use aegis_vector::VectorEngine;
 use chrono::Utc;
 use parking_lot::RwLock as SyncRwLock;
 use std::collections::{HashMap, VecDeque};
@@ -53,6 +54,7 @@ pub struct AppState {
     pub settings: Arc<RwLock<ServerSettings>>,
     pub metrics_history: Arc<RwLock<VecDeque<MetricsDataPoint>>>,
     pub graph_store: Arc<GraphStore>,
+    pub vector_engine: Arc<VectorEngine>,
     pub rbac: Arc<RbacManager>,
     pub rate_limiter: Arc<RateLimiter>,
     pub login_rate_limiter: Arc<RateLimiter>,
@@ -165,6 +167,27 @@ impl AppState {
         // Create graph store with persistence
         let graph_store = Arc::new(GraphStore::with_data_dir(data_dir.clone()));
 
+        // Vector engine (HNSW). Persistence is a snapshot blob frame rebuilt on
+        // load; flushed on graceful shutdown via `flush_vectors`.
+        let vector_engine = Arc::new(VectorEngine::new());
+        if let Some(ref dir) = data_dir {
+            let vpath = dir.join("vectors.ncb");
+            if vpath.exists() {
+                if let Ok(bytes) = crate::compress::read_blob_file(&vpath) {
+                    match serde_json::from_slice::<aegis_vector::EngineSnapshot>(&bytes) {
+                        Ok(snap) => {
+                            vector_engine.load_snapshot(snap);
+                            tracing::info!(
+                                "Loaded vector collections: {:?}",
+                                vector_engine.list_collections()
+                            );
+                        }
+                        Err(e) => tracing::error!("Failed to decode {:?}: {}", vpath, e),
+                    }
+                }
+            }
+        }
+
         // Initialize metrics history with some data points
         let metrics_history = Arc::new(RwLock::new(VecDeque::new()));
 
@@ -276,6 +299,7 @@ impl AppState {
             })),
             metrics_history,
             graph_store,
+            vector_engine,
             rbac: Arc::new(RbacManager::with_data_dir(data_dir.clone())),
             rate_limiter,
             login_rate_limiter,
@@ -329,6 +353,16 @@ impl AppState {
             Err(e) => {
                 tracing::error!("Failed to serialize settings: {}", e);
             }
+        }
+    }
+
+    /// Persist all vector collections to disk as a single snapshot blob frame
+    /// (rebuilt into HNSW indexes on load). Called on graceful shutdown.
+    pub fn flush_vectors(&self) {
+        let Some(ref dir) = self.data_dir else { return };
+        let vpath = dir.join("vectors.ncb");
+        if let Err(e) = crate::compress::write_blob_json(&vpath, &self.vector_engine.snapshot()) {
+            tracing::error!("Failed to persist vectors to {:?}: {}", vpath, e);
         }
     }
 
@@ -397,6 +431,9 @@ impl AppState {
         let entries = self.kv_store.list(None, usize::MAX);
         let json = serde_json::to_vec(&entries)?;
         std::fs::write(&kv_path, crate::compress::encode_blob(&json))?;
+
+        // Vector collections snapshot (HNSW rebuilt on load).
+        self.flush_vectors();
 
         let docs_dir = dir.join("documents");
         std::fs::create_dir_all(&docs_dir)?;

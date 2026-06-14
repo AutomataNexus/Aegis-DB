@@ -157,6 +157,7 @@ dependencies = [
  "aegis-streaming",
  "aegis-timeseries",
  "aegis-updates",
+ "aegis-vector",
  "aes-gcm",
  "argon2",
  "axum",
@@ -283,6 +284,17 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "aegis-vector"
+version = "0.4.4"
+dependencies = [
+ "parking_lot",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

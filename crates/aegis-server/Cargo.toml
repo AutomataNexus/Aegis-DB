@@ -29,6 +29,7 @@ nexuscompress = { git = "https://github.com/AutomataNexus/NexusCompress.git", ta
 aegis-updates = { workspace = true }
 aegis-vault = { workspace = true }
 aegis-shield = { workspace = true }
+aegis-vector = { workspace = true }
 tokio = { workspace = true }
 # Stream adapter for the channel-subscription SSE endpoint
 futures-util = "0.3"

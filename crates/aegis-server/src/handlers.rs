@@ -3174,6 +3174,217 @@ pub async fn update_graph_edge(
 }
 
 // =============================================================================
+// Vector / KNN Endpoints
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateVectorCollectionRequest {
+    pub name: String,
+    pub dim: usize,
+    #[serde(default = "default_metric")]
+    pub metric: String,
+}
+fn default_metric() -> String {
+    "cosine".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpsertVectorRequest {
+    pub id: String,
+    pub vector: Vec<f32>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchUpsertVectorRequest {
+    pub vectors: Vec<aegis_vector::VectorRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VectorSearchRequest {
+    pub vector: Vec<f32>,
+    #[serde(default = "default_k")]
+    pub k: usize,
+    pub ef: Option<usize>,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+}
+fn default_k() -> usize {
+    10
+}
+
+/// List vector collections.
+pub async fn list_vector_collections(State(state): State<AppState>) -> impl IntoResponse {
+    let collections = state.vector_engine.list_collections();
+    Json(serde_json::json!({ "collections": collections }))
+}
+
+/// Create a vector collection: `{ name, dim, metric: cosine|l2|dot }`.
+pub async fn create_vector_collection(
+    State(state): State<AppState>,
+    Json(req): Json<CreateVectorCollectionRequest>,
+) -> impl IntoResponse {
+    let metric = match aegis_vector::Metric::parse(&req.metric) {
+        Some(m) => m,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("unknown metric '{}' (use cosine, l2, or dot)", req.metric)
+                })),
+            )
+        }
+    };
+    state
+        .activity
+        .log_write(&format!("Create vector collection: {}", req.name), None);
+    match state
+        .vector_engine
+        .create_collection(req.name.clone(), req.dim, metric)
+    {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({"success": true, "name": req.name})),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"success": false, "error": e.to_string()})),
+        ),
+    }
+}
+
+/// Vector collection stats.
+pub async fn get_vector_collection(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.vector_engine.collection_stats(&name) {
+        Some(stats) => (StatusCode::OK, Json(serde_json::json!(stats))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "collection not found"})),
+        ),
+    }
+}
+
+/// Drop a vector collection.
+pub async fn drop_vector_collection(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    state.activity.log(
+        ActivityType::Delete,
+        &format!("Drop vector collection: {}", name),
+    );
+    match state.vector_engine.drop_collection(&name) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": e.to_string()})),
+        ),
+    }
+}
+
+/// Upsert a single vector: `{ id, vector, metadata? }`.
+pub async fn upsert_vector(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<UpsertVectorRequest>,
+) -> impl IntoResponse {
+    match state
+        .vector_engine
+        .upsert(&name, req.id.clone(), &req.vector, req.metadata)
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "id": req.id})),
+        ),
+        Err(e) => vector_err(e),
+    }
+}
+
+/// Batch upsert: `{ vectors: [{ id, vector, metadata? }] }`.
+pub async fn batch_upsert_vectors(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<BatchUpsertVectorRequest>,
+) -> impl IntoResponse {
+    match state.vector_engine.upsert_many(&name, req.vectors) {
+        Ok(n) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "count": n})),
+        ),
+        Err(e) => vector_err(e),
+    }
+}
+
+/// Get a stored vector by id.
+pub async fn get_vector(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.vector_engine.get(&name, &id) {
+        Ok(Some(rec)) => (StatusCode::OK, Json(serde_json::json!(rec))),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "vector not found"})),
+        ),
+        Err(e) => vector_err(e),
+    }
+}
+
+/// Delete a vector by id.
+pub async fn delete_vector(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.vector_engine.delete(&name, &id) {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": "vector not found"})),
+        ),
+        Err(e) => vector_err(e),
+    }
+}
+
+/// KNN search: `{ vector, k, ef?, filter? }` → ranked hits with score + metadata.
+pub async fn search_vectors(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<VectorSearchRequest>,
+) -> impl IntoResponse {
+    match state
+        .vector_engine
+        .search(&name, &req.vector, req.k, req.ef, &req.filter)
+    {
+        Ok(hits) => {
+            let count = hits.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "hits": hits, "count": count })),
+            )
+        }
+        Err(e) => vector_err(e),
+    }
+}
+
+/// Map a `VectorError` to an HTTP status + JSON body.
+fn vector_err(e: aegis_vector::VectorError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match &e {
+        aegis_vector::VectorError::CollectionNotFound(_)
+        | aegis_vector::VectorError::VectorNotFound(_) => StatusCode::NOT_FOUND,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        Json(serde_json::json!({"success": false, "error": e.to_string()})),
+    )
+}
+
+// =============================================================================
 // OTA Update Handlers
 // =============================================================================
 

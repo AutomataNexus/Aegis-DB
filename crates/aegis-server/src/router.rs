@@ -302,6 +302,31 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    // Vector / KNN routes (require auth)
+    let vector_routes = Router::new()
+        .route(
+            "/collections",
+            get(handlers::list_vector_collections).post(handlers::create_vector_collection),
+        )
+        .route(
+            "/collections/:name",
+            get(handlers::get_vector_collection).delete(handlers::drop_vector_collection),
+        )
+        .route("/collections/:name/upsert", post(handlers::upsert_vector))
+        .route(
+            "/collections/:name/batch",
+            post(handlers::batch_upsert_vectors),
+        )
+        .route(
+            "/collections/:name/vectors/:id",
+            get(handlers::get_vector).delete(handlers::delete_vector),
+        )
+        .route("/collections/:name/search", post(handlers::search_vectors))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
     // Query builder routes (require auth)
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query))
@@ -470,6 +495,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/timeseries", timeseries_routes)
         .nest("/api/v1/streaming", streaming_routes)
         .nest("/api/v1/graph", graph_routes)
+        .nest("/api/v1/vector", vector_routes)
         .nest("/api/v1/query-builder", query_routes)
         .nest("/api/v1/updates", update_routes)
         .nest("/api/v1/compliance", compliance_routes)
