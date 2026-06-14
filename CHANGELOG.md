@@ -7,6 +7,14 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Columnar / OLAP paradigm** (`aegis-columnar`, the 10th engine) — named tables
+  with a typed schema (`int`/`float`/`text`/`bool`), stored **column-major** (one
+  vector per column) so analytical queries touch only the referenced columns.
+  Predicate scans (`{column, op, value}` conditions, ANDed) with projection +
+  limit, group-by aggregation (`count`/`sum`/`min`/`max`/`avg`), distinct, and
+  snapshot persistence. REST under `/api/v1/columnar/*` (tables, rows, scan,
+  aggregate, distinct); wrapped in the Rust/JS/Python SDKs. Validated by global +
+  grouped aggregation and filtered range-predicate tests.
 - **Geospatial paradigm** (`aegis-geo`, the 9th engine) — named collections of
   `{id, lat, lon, metadata}` features on a uniform grid spatial index, with
   radius / bounding-box / nearest-k queries over great-circle (**Haversine**)

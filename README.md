@@ -11,14 +11,14 @@
 <p align="center">
   <a href="https://crates.io/crates/aegis-server"><img src="https://img.shields.io/crates/v/aegis-server.svg" alt="crates.io"></a>
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/tests-815%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-822%20passing-brightgreen.svg" alt="Tests">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.85%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/paradigms-9-blueviolet.svg" alt="9 Data Paradigms">
+  <img src="https://img.shields.io/badge/paradigms-10-blueviolet.svg" alt="10 Data Paradigms">
   <img src="https://img.shields.io/badge/LOC-69K%2B-informational.svg" alt="Lines of Code">
 </p>
 
 <p align="center">
-  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming &bull; Vector &bull; Full-Text &bull; Geospatial<br>
+  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming &bull; Vector &bull; Full-Text &bull; Geospatial &bull; Columnar<br>
   All in a single binary. No external dependencies.
 </p>
 
@@ -81,6 +81,7 @@ Aegis-DB replaces all of them with a single binary:
 | Vector / KNN | Pinecone / pgvector | `POST /api/v1/vector/collections/:name/search` |
 | Full-text search | Elasticsearch | `POST /api/v1/fts/indexes/:name/search` (BM25) |
 | Geospatial | PostGIS | `POST /api/v1/geo/collections/:name/nearest` (Haversine) |
+| Columnar / OLAP | DuckDB / ClickHouse | `POST /api/v1/columnar/tables/:name/aggregate` |
 
 One binary. One port. One backup. One set of credentials.
 
@@ -125,7 +126,7 @@ Full results: [benchmarks/RESULTS.md](benchmarks/RESULTS.md)
 
 ## Features
 
-### Eight Data Models, One API
+### Ten Data Models, One API
 
 ```bash
 # SQL
@@ -163,6 +164,10 @@ curl -X POST localhost:9090/api/v1/fts/indexes/articles/search \
 # Geospatial (nearest-k, Haversine)
 curl -X POST localhost:9090/api/v1/geo/collections/cities/nearest \
   -d '{"lat": 40.7128, "lon": -74.0060, "k": 5}'
+
+# Columnar / OLAP (group-by aggregation)
+curl -X POST localhost:9090/api/v1/columnar/tables/sales/aggregate \
+  -d '{"group_by": ["region"], "aggregates": [{"func": "sum", "column": "amount"}]}'
 ```
 
 ### Multi-Database Isolation
@@ -475,6 +480,8 @@ aegis-server (REST API - Axum)
 | `/api/v1/geo/collections` · `/:name` | GET/POST · GET/DELETE | Geo collections (list/create/stats/drop) |
 | `/api/v1/geo/collections/:name/features` · `/:id` | POST · GET/DELETE | Upsert / get / delete a feature |
 | `/api/v1/geo/collections/:name/radius` · `/bbox` · `/nearest` | POST | Radius / bbox / nearest-k (Haversine) |
+| `/api/v1/columnar/tables` · `/:name` | GET/POST · GET/DELETE | Columnar tables (list/create/stats/drop) |
+| `/api/v1/columnar/tables/:name/rows` · `/scan` · `/aggregate` | POST | Insert rows / scan / group-by aggregation |
 | `/api/v1/auth/login` | POST | Authenticate |
 | `/api/v1/admin/*` | GET | Admin/monitoring endpoints |
 | `/api/v1/import/sql` | POST | Bulk import CSV/JSON data |

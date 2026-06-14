@@ -16,6 +16,7 @@ use crate::consent::ConsentManager;
 use crate::gdpr::GdprService;
 use crate::handlers::{MetricsDataPoint, ServerSettings};
 use crate::middleware::RateLimiter;
+use aegis_columnar::ColumnarEngine;
 use aegis_document::{Document, DocumentEngine};
 use aegis_fulltext::FullTextEngine;
 use aegis_geo::GeoEngine;
@@ -59,6 +60,7 @@ pub struct AppState {
     pub vector_engine: Arc<VectorEngine>,
     pub fulltext_engine: Arc<FullTextEngine>,
     pub geo_engine: Arc<GeoEngine>,
+    pub columnar_engine: Arc<ColumnarEngine>,
     pub rbac: Arc<RbacManager>,
     pub rate_limiter: Arc<RateLimiter>,
     pub login_rate_limiter: Arc<RateLimiter>,
@@ -234,6 +236,27 @@ impl AppState {
             }
         }
 
+        // Columnar / OLAP engine. Same snapshot-on-shutdown / rebuild-on-load
+        // persistence as the other index engines.
+        let columnar_engine = Arc::new(ColumnarEngine::new());
+        if let Some(ref dir) = data_dir {
+            let cpath = dir.join("columnar.ncb");
+            if cpath.exists() {
+                if let Ok(bytes) = crate::compress::read_blob_file(&cpath) {
+                    match serde_json::from_slice::<aegis_columnar::EngineSnapshot>(&bytes) {
+                        Ok(snap) => {
+                            columnar_engine.load_snapshot(snap);
+                            tracing::info!(
+                                "Loaded columnar tables: {:?}",
+                                columnar_engine.list_tables()
+                            );
+                        }
+                        Err(e) => tracing::error!("Failed to decode {:?}: {}", cpath, e),
+                    }
+                }
+            }
+        }
+
         // Initialize metrics history with some data points
         let metrics_history = Arc::new(RwLock::new(VecDeque::new()));
 
@@ -348,6 +371,7 @@ impl AppState {
             vector_engine,
             fulltext_engine,
             geo_engine,
+            columnar_engine,
             rbac: Arc::new(RbacManager::with_data_dir(data_dir.clone())),
             rate_limiter,
             login_rate_limiter,
@@ -434,6 +458,16 @@ impl AppState {
         }
     }
 
+    /// Persist all columnar tables to disk (snapshot blob frame). Called on
+    /// graceful shutdown.
+    pub fn flush_columnar(&self) {
+        let Some(ref dir) = self.data_dir else { return };
+        let cpath = dir.join("columnar.ncb");
+        if let Err(e) = crate::compress::write_blob_json(&cpath, &self.columnar_engine.snapshot()) {
+            tracing::error!("Failed to persist columnar tables to {:?}: {}", cpath, e);
+        }
+    }
+
     /// Flush a single document collection to disk (if data_dir is configured).
     pub fn flush_collection(&self, collection_name: &str) {
         let Some(ref dir) = self.data_dir else { return };
@@ -500,10 +534,11 @@ impl AppState {
         let json = serde_json::to_vec(&entries)?;
         std::fs::write(&kv_path, crate::compress::encode_blob(&json))?;
 
-        // Vector + full-text + geo snapshots (indexes rebuilt on load).
+        // Vector + full-text + geo + columnar snapshots (rebuilt on load).
         self.flush_vectors();
         self.flush_fulltext();
         self.flush_geo();
+        self.flush_columnar();
 
         let docs_dir = dir.join("documents");
         std::fs::create_dir_all(&docs_dir)?;

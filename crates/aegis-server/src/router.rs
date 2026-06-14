@@ -377,6 +377,31 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    // Columnar / OLAP routes (require auth)
+    let columnar_routes = Router::new()
+        .route(
+            "/tables",
+            get(handlers::list_columnar_tables).post(handlers::create_columnar_table),
+        )
+        .route(
+            "/tables/:name",
+            get(handlers::get_columnar_table).delete(handlers::drop_columnar_table),
+        )
+        .route("/tables/:name/rows", post(handlers::columnar_insert))
+        .route("/tables/:name/scan", post(handlers::columnar_scan))
+        .route(
+            "/tables/:name/aggregate",
+            post(handlers::columnar_aggregate),
+        )
+        .route(
+            "/tables/:name/distinct/:column",
+            get(handlers::columnar_distinct),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
     // Query builder routes (require auth)
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query))
@@ -548,6 +573,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/vector", vector_routes)
         .nest("/api/v1/fts", fts_routes)
         .nest("/api/v1/geo", geo_routes)
+        .nest("/api/v1/columnar", columnar_routes)
         .nest("/api/v1/query-builder", query_routes)
         .nest("/api/v1/updates", update_routes)
         .nest("/api/v1/compliance", compliance_routes)

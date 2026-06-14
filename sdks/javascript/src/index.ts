@@ -1004,6 +1004,87 @@ export class AegisClient {
   }
 
   // ==========================================================================
+  // Columnar / OLAP (column-major store + group-by aggregation)
+  // ==========================================================================
+
+  /** Create a columnar table. `columns` is `[{ name, type }]` where type is
+   *  one of `int` | `float` | `text` | `bool`. */
+  async createColumnarTable(
+    name: string,
+    columns: { name: string; type: 'int' | 'float' | 'text' | 'bool' }[]
+  ): Promise<unknown> {
+    return await this.request('POST', '/api/v1/columnar/tables', { name, columns });
+  }
+
+  /** List columnar tables. */
+  async listColumnarTables(): Promise<string[]> {
+    const res = await this.request<{ tables: string[] }>('GET', '/api/v1/columnar/tables');
+    return res.tables ?? [];
+  }
+
+  /** Columnar table stats (row count + schema). */
+  async columnarTableStats(name: string): Promise<unknown> {
+    return await this.request('GET', `/api/v1/columnar/tables/${name}`);
+  }
+
+  /** Drop a columnar table. */
+  async dropColumnarTable(name: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/columnar/tables/${name}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Insert many rows into a columnar table. */
+  async columnarInsert(
+    table: string,
+    rows: Record<string, unknown>[]
+  ): Promise<{ inserted: number }> {
+    return await this.request('POST', `/api/v1/columnar/tables/${table}/rows`, { rows });
+  }
+
+  /** Scan rows. `filter` is a list of `{ column, op, value }` conditions (ANDed);
+   *  `op` is one of `eq`|`ne`|`lt`|`lte`|`gt`|`gte`. */
+  async columnarScan(
+    table: string,
+    options: {
+      columns?: string[];
+      filter?: { column: string; op: string; value: unknown }[];
+      limit?: number;
+    } = {}
+  ): Promise<{ rows: Record<string, unknown>[]; count: number }> {
+    return await this.request('POST', `/api/v1/columnar/tables/${table}/scan`, {
+      columns: options.columns ?? [],
+      filter: options.filter ?? [],
+      limit: options.limit ?? null,
+    });
+  }
+
+  /** Group-by aggregation. `aggregates` is `[{ func, column }]` where func is
+   *  one of `count`|`sum`|`min`|`max`|`avg` (column `"*"` allowed for count). */
+  async columnarAggregate(
+    table: string,
+    aggregates: { func: string; column: string }[],
+    options: {
+      groupBy?: string[];
+      filter?: { column: string; op: string; value: unknown }[];
+    } = {}
+  ): Promise<{ groups: { keys: unknown[]; values: unknown[] }[]; count: number }> {
+    return await this.request('POST', `/api/v1/columnar/tables/${table}/aggregate`, {
+      group_by: options.groupBy ?? [],
+      aggregates,
+      filter: options.filter ?? [],
+    });
+  }
+
+  /** Distinct non-null values of a column. */
+  async columnarDistinct(table: string, column: string): Promise<{ values: unknown[]; count: number }> {
+    return await this.request('GET', `/api/v1/columnar/tables/${table}/distinct/${column}`);
+  }
+
+  // ==========================================================================
   // Health and Metrics
   // ==========================================================================
 

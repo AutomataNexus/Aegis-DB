@@ -1318,6 +1318,114 @@ impl Connection {
         )
         .await
     }
+
+    // ---- Columnar / OLAP ------------------------------------------------
+
+    /// Create a columnar table. `columns` is a list of `{name, type}` where
+    /// `type` is one of `int` / `float` / `text` / `bool`.
+    pub async fn create_columnar_table(
+        &self,
+        name: &str,
+        columns: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/columnar/tables",
+            Some(serde_json::json!({ "name": name, "columns": columns })),
+        )
+        .await
+    }
+
+    /// List columnar tables.
+    pub async fn list_columnar_tables(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/columnar/tables", None)
+            .await
+    }
+
+    /// Columnar table stats (row count + schema).
+    pub async fn columnar_table_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/columnar/tables/{}", name),
+            None,
+        )
+        .await
+    }
+
+    /// Drop a columnar table.
+    pub async fn drop_columnar_table(&self, name: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/columnar/tables/{}", name),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Insert many rows into a columnar table.
+    pub async fn columnar_insert(
+        &self,
+        table: &str,
+        rows: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/columnar/tables/{}/rows", table),
+            Some(serde_json::json!({ "rows": rows })),
+        )
+        .await
+    }
+
+    /// Scan rows with optional column projection, filter, and limit.
+    /// `filter` is a list of `{column, op, value}` conditions (ANDed).
+    pub async fn columnar_scan(
+        &self,
+        table: &str,
+        columns: serde_json::Value,
+        filter: serde_json::Value,
+        limit: Option<usize>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/columnar/tables/{}/scan", table),
+            Some(serde_json::json!({ "columns": columns, "filter": filter, "limit": limit })),
+        )
+        .await
+    }
+
+    /// Group-by aggregation. `aggregates` is a list of `{func, column}` where
+    /// `func` is one of `count`/`sum`/`min`/`max`/`avg`.
+    pub async fn columnar_aggregate(
+        &self,
+        table: &str,
+        group_by: serde_json::Value,
+        aggregates: serde_json::Value,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/columnar/tables/{}/aggregate", table),
+            Some(serde_json::json!({
+                "group_by": group_by, "aggregates": aggregates, "filter": filter
+            })),
+        )
+        .await
+    }
+
+    /// Distinct non-null values of a column.
+    pub async fn columnar_distinct(
+        &self,
+        table: &str,
+        column: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/columnar/tables/{}/distinct/{}", table, column),
+            None,
+        )
+        .await
+    }
 }
 
 // =============================================================================

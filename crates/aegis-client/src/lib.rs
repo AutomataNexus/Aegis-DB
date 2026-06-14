@@ -688,6 +688,88 @@ impl AegisClient {
             .geo_nearest(collection, lat, lon, k, filter)
             .await
     }
+
+    // ---- Columnar / OLAP ----------------------------------------------------
+
+    /// Create a columnar table (`columns` = list of `{name, type}`).
+    pub async fn create_columnar_table(
+        &self,
+        name: &str,
+        columns: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .create_columnar_table(name, columns)
+            .await
+    }
+
+    /// List columnar tables.
+    pub async fn list_columnar_tables(&self) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.list_columnar_tables().await
+    }
+
+    /// Columnar table stats.
+    pub async fn columnar_table_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.columnar_table_stats(name).await
+    }
+
+    /// Drop a columnar table.
+    pub async fn drop_columnar_table(&self, name: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.drop_columnar_table(name).await
+    }
+
+    /// Insert many rows into a columnar table.
+    pub async fn columnar_insert(
+        &self,
+        table: &str,
+        rows: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.columnar_insert(table, rows).await
+    }
+
+    /// Scan rows with optional projection, filter, and limit.
+    pub async fn columnar_scan(
+        &self,
+        table: &str,
+        columns: serde_json::Value,
+        filter: serde_json::Value,
+        limit: Option<usize>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .columnar_scan(table, columns, filter, limit)
+            .await
+    }
+
+    /// Group-by aggregation (`aggregates` = list of `{func, column}`).
+    pub async fn columnar_aggregate(
+        &self,
+        table: &str,
+        group_by: serde_json::Value,
+        aggregates: serde_json::Value,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .columnar_aggregate(table, group_by, aggregates, filter)
+            .await
+    }
+
+    /// Distinct non-null values of a column.
+    pub async fn columnar_distinct(
+        &self,
+        table: &str,
+        column: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .columnar_distinct(table, column)
+            .await
+    }
 }
 
 #[cfg(test)]

@@ -3778,6 +3778,192 @@ fn geo_err(e: aegis_geo::GeoError) -> (StatusCode, Json<serde_json::Value>) {
 }
 
 // =============================================================================
+// Columnar / OLAP Handlers (column-major store + group-by aggregation)
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateColumnarTableRequest {
+    pub name: String,
+    pub columns: Vec<aegis_columnar::ColumnDef>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ColumnarInsertRequest {
+    /// Many rows via `{rows: [...]}`, or a single row as the bare object body.
+    #[serde(default)]
+    pub rows: Vec<serde_json::Value>,
+    #[serde(flatten)]
+    pub single: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ColumnarScanRequest {
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub filter: Vec<aegis_columnar::Condition>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ColumnarAggregateRequest {
+    #[serde(default)]
+    pub group_by: Vec<String>,
+    pub aggregates: Vec<aegis_columnar::AggSpec>,
+    #[serde(default)]
+    pub filter: Vec<aegis_columnar::Condition>,
+}
+
+/// List columnar tables.
+pub async fn list_columnar_tables(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({ "tables": state.columnar_engine.list_tables() }))
+}
+
+/// Create a columnar table: `{ name, columns: [{name, type}] }`.
+pub async fn create_columnar_table(
+    State(state): State<AppState>,
+    Json(req): Json<CreateColumnarTableRequest>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log_write(&format!("Create columnar table: {}", req.name), None);
+    match state
+        .columnar_engine
+        .create_table(req.name.clone(), req.columns)
+    {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({"success": true, "name": req.name})),
+        ),
+        Err(e) => columnar_err(e),
+    }
+}
+
+/// Columnar table stats (row count + schema).
+pub async fn get_columnar_table(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.columnar_engine.table_stats(&name) {
+        Some(stats) => (StatusCode::OK, Json(serde_json::json!(stats))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "table not found"})),
+        ),
+    }
+}
+
+/// Drop a columnar table.
+pub async fn drop_columnar_table(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    state.activity.log(
+        ActivityType::Delete,
+        &format!("Drop columnar table: {}", name),
+    );
+    match state.columnar_engine.drop_table(&name) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => columnar_err(e),
+    }
+}
+
+/// Insert one row (`{col: val, ...}`) or many (`{rows: [...]}`).
+pub async fn columnar_insert(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<ColumnarInsertRequest>,
+) -> impl IntoResponse {
+    let result = if !req.rows.is_empty() {
+        state.columnar_engine.insert_many(&name, &req.rows)
+    } else {
+        state
+            .columnar_engine
+            .insert(&name, &req.single)
+            .map(|_| 1usize)
+    };
+    match result {
+        Ok(n) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "inserted": n})),
+        ),
+        Err(e) => columnar_err(e),
+    }
+}
+
+/// Scan rows: `{ columns?, filter?, limit? }` → projected rows.
+pub async fn columnar_scan(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<ColumnarScanRequest>,
+) -> impl IntoResponse {
+    match state
+        .columnar_engine
+        .scan(&name, &req.columns, &req.filter, req.limit)
+    {
+        Ok(rows) => {
+            let count = rows.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "rows": rows, "count": count })),
+            )
+        }
+        Err(e) => columnar_err(e),
+    }
+}
+
+/// Group-by aggregation: `{ group_by?, aggregates, filter? }`.
+pub async fn columnar_aggregate(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<ColumnarAggregateRequest>,
+) -> impl IntoResponse {
+    match state
+        .columnar_engine
+        .aggregate(&name, &req.group_by, &req.aggregates, &req.filter)
+    {
+        Ok(groups) => {
+            let count = groups.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "groups": groups, "count": count })),
+            )
+        }
+        Err(e) => columnar_err(e),
+    }
+}
+
+/// Distinct non-null values of a column.
+pub async fn columnar_distinct(
+    State(state): State<AppState>,
+    Path((name, column)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.columnar_engine.distinct(&name, &column) {
+        Ok(values) => {
+            let count = values.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "values": values, "count": count })),
+            )
+        }
+        Err(e) => columnar_err(e),
+    }
+}
+
+fn columnar_err(e: aegis_columnar::ColumnarError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match &e {
+        aegis_columnar::ColumnarError::TableNotFound(_) => StatusCode::NOT_FOUND,
+        aegis_columnar::ColumnarError::TableExists(_) => StatusCode::CONFLICT,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        Json(serde_json::json!({"success": false, "error": e.to_string()})),
+    )
+}
+
+// =============================================================================
 // OTA Update Handlers
 // =============================================================================
 

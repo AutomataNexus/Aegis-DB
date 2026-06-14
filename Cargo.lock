@@ -44,6 +44,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-columnar"
+version = "0.4.4"
+dependencies = [
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "aegis-common"
 version = "0.4.4"
 dependencies = [
@@ -168,6 +178,7 @@ dependencies = [
 name = "aegis-server"
 version = "0.4.4"
 dependencies = [
+ "aegis-columnar",
  "aegis-common",
  "aegis-db-vault",
  "aegis-document",

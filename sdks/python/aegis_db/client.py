@@ -985,3 +985,81 @@ class AegisClient:
             f"/api/v1/geo/collections/{collection}/nearest",
             {"lat": lat, "lon": lon, "k": k, "filter": filter or {}},
         )
+
+    # =========================================================================
+    # Columnar / OLAP (column-major store + group-by aggregation)
+    # =========================================================================
+
+    async def create_columnar_table(
+        self, name: str, columns: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """Create a columnar table. ``columns`` is ``[{"name", "type"}]`` where
+        type is one of ``int`` / ``float`` / ``text`` / ``bool``."""
+        return await self._request(
+            "POST", "/api/v1/columnar/tables", {"name": name, "columns": columns}
+        )
+
+    async def list_columnar_tables(self) -> List[str]:
+        """List columnar tables."""
+        data = await self._request("GET", "/api/v1/columnar/tables")
+        return data.get("tables", [])
+
+    async def columnar_table_stats(self, name: str) -> Dict[str, Any]:
+        """Columnar table stats (row count + schema)."""
+        return await self._request("GET", f"/api/v1/columnar/tables/{name}")
+
+    async def drop_columnar_table(self, name: str) -> bool:
+        """Drop a columnar table."""
+        try:
+            await self._request("DELETE", f"/api/v1/columnar/tables/{name}")
+            return True
+        except QueryError:
+            return False
+
+    async def columnar_insert(
+        self, table: str, rows: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Insert many rows into a columnar table."""
+        return await self._request(
+            "POST", f"/api/v1/columnar/tables/{table}/rows", {"rows": rows}
+        )
+
+    async def columnar_scan(
+        self,
+        table: str,
+        columns: Optional[List[str]] = None,
+        filter: Optional[List[Dict[str, Any]]] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Scan rows. ``filter`` is a list of ``{"column", "op", "value"}``
+        conditions (ANDed); ``op`` is one of eq/ne/lt/lte/gt/gte."""
+        return await self._request(
+            "POST",
+            f"/api/v1/columnar/tables/{table}/scan",
+            {"columns": columns or [], "filter": filter or [], "limit": limit},
+        )
+
+    async def columnar_aggregate(
+        self,
+        table: str,
+        aggregates: List[Dict[str, str]],
+        group_by: Optional[List[str]] = None,
+        filter: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Group-by aggregation. ``aggregates`` is ``[{"func", "column"}]`` where
+        func is one of count/sum/min/max/avg (column ``"*"`` allowed for count)."""
+        return await self._request(
+            "POST",
+            f"/api/v1/columnar/tables/{table}/aggregate",
+            {
+                "group_by": group_by or [],
+                "aggregates": aggregates,
+                "filter": filter or [],
+            },
+        )
+
+    async def columnar_distinct(self, table: str, column: str) -> Dict[str, Any]:
+        """Distinct non-null values of a column."""
+        return await self._request(
+            "GET", f"/api/v1/columnar/tables/{table}/distinct/{column}"
+        )
