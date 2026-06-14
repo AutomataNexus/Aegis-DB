@@ -9,6 +9,13 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ### Added
 - (none yet)
 
+## [0.4.1]
+
+### Added
+- **Drop collection** over HTTP: `DELETE /api/v1/documents/collections/:name`
+  removes a collection and all its documents (the `DocumentEngine::drop_collection`
+  capability existed but had no route). Returns `{success, collection}`.
+
 ## [0.4.0] - 2026-06-14
 
 ### Added
