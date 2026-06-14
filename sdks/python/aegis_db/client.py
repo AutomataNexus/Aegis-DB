@@ -1262,3 +1262,72 @@ class AegisClient:
                 "limit": limit,
             },
         )
+
+    # =========================================================================
+    # Ledger (immutable, hash-chained append-only log)
+    # =========================================================================
+
+    async def create_ledger(self, name: str) -> Dict[str, Any]:
+        """Create a ledger."""
+        return await self._request("POST", "/api/v1/ledger/ledgers", {"name": name})
+
+    async def list_ledgers(self) -> List[str]:
+        """List ledgers."""
+        data = await self._request("GET", "/api/v1/ledger/ledgers")
+        return data.get("ledgers", [])
+
+    async def ledger_stats(self, name: str) -> Dict[str, Any]:
+        """Ledger stats (entry count + chain-tip hash)."""
+        return await self._request("GET", f"/api/v1/ledger/ledgers/{name}")
+
+    async def drop_ledger(self, name: str) -> bool:
+        """Drop a ledger."""
+        try:
+            await self._request("DELETE", f"/api/v1/ledger/ledgers/{name}")
+            return True
+        except QueryError:
+            return False
+
+    async def ledger_append(
+        self,
+        ledger: str,
+        payload: Any,
+        timestamp: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Append a payload; returns the immutable entry (seq + hash)."""
+        return await self._request(
+            "POST",
+            f"/api/v1/ledger/ledgers/{ledger}/entries",
+            {"payload": payload, "timestamp": timestamp},
+        )
+
+    async def ledger_entries(
+        self,
+        ledger: str,
+        start: int = 0,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Read entries from ``start``, capped at ``limit``."""
+        qs = f"?start={start}"
+        if limit is not None:
+            qs += f"&limit={limit}"
+        return await self._request(
+            "GET", f"/api/v1/ledger/ledgers/{ledger}/entries{qs}"
+        )
+
+    async def ledger_get_entry(
+        self, ledger: str, seq: int
+    ) -> Optional[Dict[str, Any]]:
+        """Get a single entry by sequence number, or ``None`` if absent."""
+        try:
+            return await self._request(
+                "GET", f"/api/v1/ledger/ledgers/{ledger}/entries/{seq}"
+            )
+        except QueryError:
+            return None
+
+    async def ledger_verify(self, ledger: str) -> Dict[str, Any]:
+        """Verify a ledger's hash chain; returns ``{valid, entries, broken_at}``."""
+        return await self._request(
+            "GET", f"/api/v1/ledger/ledgers/{ledger}/verify"
+        )

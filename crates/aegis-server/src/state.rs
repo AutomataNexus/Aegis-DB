@@ -20,6 +20,7 @@ use aegis_columnar::ColumnarEngine;
 use aegis_document::{Document, DocumentEngine};
 use aegis_fulltext::FullTextEngine;
 use aegis_geo::GeoEngine;
+use aegis_ledger::LedgerEngine;
 use aegis_object::ObjectEngine;
 use aegis_query::executor::{ExecutionContext, ExecutionContextSnapshot};
 use aegis_query::planner::{PlanNode, PlannerSchema};
@@ -65,6 +66,7 @@ pub struct AppState {
     pub columnar_engine: Arc<ColumnarEngine>,
     pub object_engine: Arc<ObjectEngine>,
     pub widecolumn_engine: Arc<WideColumnEngine>,
+    pub ledger_engine: Arc<LedgerEngine>,
     pub rbac: Arc<RbacManager>,
     pub rate_limiter: Arc<RateLimiter>,
     pub login_rate_limiter: Arc<RateLimiter>,
@@ -303,6 +305,24 @@ impl AppState {
             }
         }
 
+        // Ledger / append-only engine. Same snapshot-on-shutdown /
+        // rebuild-on-load persistence as the other engines.
+        let ledger_engine = Arc::new(LedgerEngine::new());
+        if let Some(ref dir) = data_dir {
+            let lpath = dir.join("ledger.ncb");
+            if lpath.exists() {
+                if let Ok(bytes) = crate::compress::read_blob_file(&lpath) {
+                    match serde_json::from_slice::<aegis_ledger::EngineSnapshot>(&bytes) {
+                        Ok(snap) => {
+                            ledger_engine.load_snapshot(snap);
+                            tracing::info!("Loaded ledgers: {:?}", ledger_engine.list_ledgers());
+                        }
+                        Err(e) => tracing::error!("Failed to decode {:?}: {}", lpath, e),
+                    }
+                }
+            }
+        }
+
         // Initialize metrics history with some data points
         let metrics_history = Arc::new(RwLock::new(VecDeque::new()));
 
@@ -420,6 +440,7 @@ impl AppState {
             columnar_engine,
             object_engine,
             widecolumn_engine,
+            ledger_engine,
             rbac: Arc::new(RbacManager::with_data_dir(data_dir.clone())),
             rate_limiter,
             login_rate_limiter,
@@ -537,6 +558,16 @@ impl AppState {
         }
     }
 
+    /// Persist all ledgers to disk (snapshot blob frame). Called on graceful
+    /// shutdown.
+    pub fn flush_ledger(&self) {
+        let Some(ref dir) = self.data_dir else { return };
+        let lpath = dir.join("ledger.ncb");
+        if let Err(e) = crate::compress::write_blob_json(&lpath, &self.ledger_engine.snapshot()) {
+            tracing::error!("Failed to persist ledgers to {:?}: {}", lpath, e);
+        }
+    }
+
     /// Flush a single document collection to disk (if data_dir is configured).
     pub fn flush_collection(&self, collection_name: &str) {
         let Some(ref dir) = self.data_dir else { return };
@@ -610,6 +641,7 @@ impl AppState {
         self.flush_columnar();
         self.flush_objects();
         self.flush_widecolumn();
+        self.flush_ledger();
 
         let docs_dir = dir.join("documents");
         std::fs::create_dir_all(&docs_dir)?;

@@ -4360,6 +4360,155 @@ fn wide_err(e: aegis_widecolumn::WideColumnError) -> (StatusCode, Json<serde_jso
 }
 
 // =============================================================================
+// Ledger Handlers (immutable, hash-chained append-only log)
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateLedgerRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LedgerAppendRequest {
+    pub payload: serde_json::Value,
+    #[serde(default)]
+    pub timestamp: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LedgerRangeParams {
+    #[serde(default)]
+    pub start: u64,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// List ledgers.
+pub async fn list_ledgers(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({ "ledgers": state.ledger_engine.list_ledgers() }))
+}
+
+/// Create a ledger: `{ name }`.
+pub async fn create_ledger(
+    State(state): State<AppState>,
+    Json(req): Json<CreateLedgerRequest>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log_write(&format!("Create ledger: {}", req.name), None);
+    match state.ledger_engine.create_ledger(req.name.clone()) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({"success": true, "name": req.name})),
+        ),
+        Err(e) => ledger_err(e),
+    }
+}
+
+/// Ledger stats (entry count + chain-tip hash).
+pub async fn get_ledger(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.ledger_engine.ledger_stats(&name) {
+        Some(stats) => (StatusCode::OK, Json(serde_json::json!(stats))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "ledger not found"})),
+        ),
+    }
+}
+
+/// Drop a ledger.
+pub async fn drop_ledger(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log(ActivityType::Delete, &format!("Drop ledger: {}", name));
+    match state.ledger_engine.drop_ledger(&name) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => ledger_err(e),
+    }
+}
+
+/// Append an entry: `{ payload, timestamp? }`. Returns the immutable entry.
+pub async fn ledger_append(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<LedgerAppendRequest>,
+) -> impl IntoResponse {
+    match state
+        .ledger_engine
+        .append(&name, req.payload, req.timestamp)
+    {
+        Ok(entry) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "entry": entry})),
+        ),
+        Err(e) => ledger_err(e),
+    }
+}
+
+/// Read entries from `?start=&limit=`.
+pub async fn ledger_entries(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(params): Query<LedgerRangeParams>,
+) -> impl IntoResponse {
+    match state.ledger_engine.range(&name, params.start, params.limit) {
+        Ok(entries) => {
+            let count = entries.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "entries": entries, "count": count })),
+            )
+        }
+        Err(e) => ledger_err(e),
+    }
+}
+
+/// Get a single entry by sequence number.
+pub async fn ledger_get_entry(
+    State(state): State<AppState>,
+    Path((name, seq)): Path<(String, u64)>,
+) -> impl IntoResponse {
+    match state.ledger_engine.get(&name, seq) {
+        Ok(Some(entry)) => (StatusCode::OK, Json(serde_json::json!(entry))).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "entry not found"})),
+        )
+            .into_response(),
+        Err(e) => ledger_err(e).into_response(),
+    }
+}
+
+/// Verify a ledger's hash chain end to end.
+pub async fn ledger_verify(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.ledger_engine.verify(&name) {
+        Ok(result) => (StatusCode::OK, Json(serde_json::json!(result))),
+        Err(e) => ledger_err(e),
+    }
+}
+
+fn ledger_err(e: aegis_ledger::LedgerError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match &e {
+        aegis_ledger::LedgerError::LedgerNotFound(_)
+        | aegis_ledger::LedgerError::EntryNotFound(_) => StatusCode::NOT_FOUND,
+        aegis_ledger::LedgerError::LedgerExists(_) => StatusCode::CONFLICT,
+    };
+    (
+        status,
+        Json(serde_json::json!({"success": false, "error": e.to_string()})),
+    )
+}
+
+// =============================================================================
 // OTA Update Handlers
 // =============================================================================
 

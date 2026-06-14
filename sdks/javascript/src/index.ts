@@ -1290,6 +1290,74 @@ export class AegisClient {
   }
 
   // ==========================================================================
+  // Ledger (immutable, hash-chained append-only log)
+  // ==========================================================================
+
+  /** Create a ledger. */
+  async createLedger(name: string): Promise<unknown> {
+    return await this.request('POST', '/api/v1/ledger/ledgers', { name });
+  }
+
+  /** List ledgers. */
+  async listLedgers(): Promise<string[]> {
+    const res = await this.request<{ ledgers: string[] }>('GET', '/api/v1/ledger/ledgers');
+    return res.ledgers ?? [];
+  }
+
+  /** Ledger stats (entry count + chain-tip hash). */
+  async ledgerStats(name: string): Promise<unknown> {
+    return await this.request('GET', `/api/v1/ledger/ledgers/${name}`);
+  }
+
+  /** Drop a ledger. */
+  async dropLedger(name: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/ledger/ledgers/${name}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Append a payload; returns the immutable entry (seq + hash). */
+  async ledgerAppend(
+    ledger: string,
+    payload: unknown,
+    options: { timestamp?: number } = {}
+  ): Promise<{ entry: { seq: number; hash: string; prev_hash: string } }> {
+    return await this.request('POST', `/api/v1/ledger/ledgers/${ledger}/entries`, {
+      payload,
+      timestamp: options.timestamp ?? null,
+    });
+  }
+
+  /** Read entries from `start`, capped at `limit`. */
+  async ledgerEntries(
+    ledger: string,
+    options: { start?: number; limit?: number } = {}
+  ): Promise<{ entries: { seq: number; payload: unknown; hash: string }[]; count: number }> {
+    const q = new URLSearchParams();
+    if (options.start != null) q.set('start', String(options.start));
+    if (options.limit != null) q.set('limit', String(options.limit));
+    const qs = q.toString();
+    return await this.request('GET', `/api/v1/ledger/ledgers/${ledger}/entries${qs ? `?${qs}` : ''}`);
+  }
+
+  /** Get a single entry by sequence number, or `undefined` if absent. */
+  async ledgerGetEntry(ledger: string, seq: number): Promise<unknown | undefined> {
+    try {
+      return await this.request('GET', `/api/v1/ledger/ledgers/${ledger}/entries/${seq}`);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Verify a ledger's hash chain. */
+  async ledgerVerify(ledger: string): Promise<{ valid: boolean; entries: number; broken_at: number | null }> {
+    return await this.request('GET', `/api/v1/ledger/ledgers/${ledger}/verify`);
+  }
+
+  // ==========================================================================
   // Health and Metrics
   // ==========================================================================
 

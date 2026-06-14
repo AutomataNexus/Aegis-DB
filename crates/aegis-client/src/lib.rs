@@ -924,6 +924,70 @@ impl AegisClient {
     ) -> Result<serde_json::Value, ClientError> {
         self.pool.get().await?.wide_scan(table, body).await
     }
+
+    // ---- Ledger / append-only -----------------------------------------------
+
+    /// Create a ledger.
+    pub async fn create_ledger(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.create_ledger(name).await
+    }
+
+    /// List ledgers.
+    pub async fn list_ledgers(&self) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.list_ledgers().await
+    }
+
+    /// Ledger stats (entry count + chain-tip hash).
+    pub async fn ledger_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.ledger_stats(name).await
+    }
+
+    /// Drop a ledger.
+    pub async fn drop_ledger(&self, name: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.drop_ledger(name).await
+    }
+
+    /// Append a payload to a ledger; returns the immutable entry.
+    pub async fn ledger_append(
+        &self,
+        ledger: &str,
+        payload: serde_json::Value,
+        timestamp: Option<u64>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .ledger_append(ledger, payload, timestamp)
+            .await
+    }
+
+    /// Read entries from `start`, capped at `limit`.
+    pub async fn ledger_entries(
+        &self,
+        ledger: &str,
+        start: u64,
+        limit: Option<usize>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .ledger_entries(ledger, start, limit)
+            .await
+    }
+
+    /// Get a single entry by sequence number, or `None` if absent.
+    pub async fn ledger_get_entry(
+        &self,
+        ledger: &str,
+        seq: u64,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        self.pool.get().await?.ledger_get_entry(ledger, seq).await
+    }
+
+    /// Verify a ledger's hash chain; returns `{ valid, entries, broken_at }`.
+    pub async fn ledger_verify(&self, ledger: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.ledger_verify(ledger).await
+    }
 }
 
 #[cfg(test)]

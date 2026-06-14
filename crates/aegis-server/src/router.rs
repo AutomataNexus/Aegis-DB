@@ -451,6 +451,30 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    // Ledger / append-only routes (require auth)
+    let ledger_routes = Router::new()
+        .route(
+            "/ledgers",
+            get(handlers::list_ledgers).post(handlers::create_ledger),
+        )
+        .route(
+            "/ledgers/:name",
+            get(handlers::get_ledger).delete(handlers::drop_ledger),
+        )
+        .route(
+            "/ledgers/:name/entries",
+            get(handlers::ledger_entries).post(handlers::ledger_append),
+        )
+        .route(
+            "/ledgers/:name/entries/:seq",
+            get(handlers::ledger_get_entry),
+        )
+        .route("/ledgers/:name/verify", get(handlers::ledger_verify))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
     // Query builder routes (require auth)
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query))
@@ -625,6 +649,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/columnar", columnar_routes)
         .nest("/api/v1/objects", object_routes)
         .nest("/api/v1/widecolumn", widecolumn_routes)
+        .nest("/api/v1/ledger", ledger_routes)
         .nest("/api/v1/query-builder", query_routes)
         .nest("/api/v1/updates", update_routes)
         .nest("/api/v1/compliance", compliance_routes)

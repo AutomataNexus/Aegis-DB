@@ -124,6 +124,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-ledger"
+version = "0.4.4"
+dependencies = [
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "aegis-memory"
 version = "0.4.4"
 dependencies = [
@@ -194,6 +204,7 @@ dependencies = [
  "aegis-document",
  "aegis-fulltext",
  "aegis-geo",
+ "aegis-ledger",
  "aegis-object",
  "aegis-query",
  "aegis-shield",

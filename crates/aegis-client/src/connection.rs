@@ -1751,6 +1751,119 @@ impl Connection {
         )
         .await
     }
+
+    // ---- Ledger / append-only -------------------------------------------
+
+    /// Create a ledger.
+    pub async fn create_ledger(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/ledger/ledgers",
+            Some(serde_json::json!({ "name": name })),
+        )
+        .await
+    }
+
+    /// List ledgers.
+    pub async fn list_ledgers(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/ledger/ledgers", None)
+            .await
+    }
+
+    /// Ledger stats (entry count + chain-tip hash).
+    pub async fn ledger_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/ledger/ledgers/{}", name),
+            None,
+        )
+        .await
+    }
+
+    /// Drop a ledger.
+    pub async fn drop_ledger(&self, name: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/ledger/ledgers/{}", name),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Append a payload to a ledger; returns the immutable entry (seq + hash).
+    pub async fn ledger_append(
+        &self,
+        ledger: &str,
+        payload: serde_json::Value,
+        timestamp: Option<u64>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/ledger/ledgers/{}/entries", ledger),
+            Some(serde_json::json!({ "payload": payload, "timestamp": timestamp })),
+        )
+        .await
+    }
+
+    /// Read entries from `start`, capped at `limit`.
+    pub async fn ledger_entries(
+        &self,
+        ledger: &str,
+        start: u64,
+        limit: Option<usize>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut path = format!("/api/v1/ledger/ledgers/{}/entries?start={}", ledger, start);
+        if let Some(l) = limit {
+            path.push_str(&format!("&limit={}", l));
+        }
+        self.send_json(reqwest::Method::GET, &path, None).await
+    }
+
+    /// Get a single entry by sequence number, or `None` if absent.
+    pub async fn ledger_get_entry(
+        &self,
+        ledger: &str,
+        seq: u64,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let url = format!(
+            "{}/api/v1/ledger/ledgers/{}/entries/{}",
+            self.base_url, ledger, seq
+        );
+        let response = self
+            .add_auth(self.http_client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "ledger_get_entry failed: {}",
+                response.status()
+            )));
+        }
+        let value = response
+            .json()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        Ok(Some(value))
+    }
+
+    /// Verify a ledger's hash chain; returns `{ valid, entries, broken_at }`.
+    pub async fn ledger_verify(&self, ledger: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/ledger/ledgers/{}/verify", ledger),
+            None,
+        )
+        .await
+    }
 }
 
 // =============================================================================

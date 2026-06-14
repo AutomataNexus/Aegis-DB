@@ -7,6 +7,17 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Ledger / append-only paradigm** (`aegis-ledger`, the 13th engine) — named
+  ledgers of immutable, **hash-chained** entries (QLDB-style audit logs). Each
+  entry's hash covers the previous entry's hash, so the log is tamper-evident:
+  any retroactive edit breaks every link after it and is caught by `verify`,
+  which walks the chain end to end and reports the first broken sequence.
+  Append-only (no entry update/delete), sequence + range reads, chain-tip hash in
+  stats, snapshot persistence (appends after a restore continue the chain). REST
+  under `/api/v1/ledger/*` (ledgers, entries, verify); wrapped in the
+  Rust/JS/Python SDKs. The chain hash is a fast 128-bit non-cryptographic digest
+  (detects corruption / naive tampering, not a forging adversary). Validated by
+  chaining, verification, and tamper-detection tests.
 - **Wide-column paradigm** (`aegis-widecolumn`, the 12th engine) — Cassandra /
   Bigtable-style tables: rows keyed by a row key, each row a **sparse, dynamic**
   set of columns (no fixed schema). Per-cell write timestamps with
