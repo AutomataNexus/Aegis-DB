@@ -629,15 +629,19 @@ impl Connection {
         Ok(())
     }
 
-    /// Query documents with a MongoDB-style filter, optional limit/skip.
+    /// Query documents with a MongoDB-style filter, optional limit/skip, and an
+    /// optional opaque pagination `cursor` (from a prior response's
+    /// `next_cursor`). The response includes `next_cursor` when more pages exist.
     pub async fn query_documents(
         &self,
         collection: &str,
         filter: serde_json::Value,
         limit: Option<usize>,
         skip: Option<usize>,
+        cursor: Option<&str>,
     ) -> Result<serde_json::Value, ClientError> {
-        let body = serde_json::json!({ "filter": filter, "limit": limit, "skip": skip });
+        let body =
+            serde_json::json!({ "filter": filter, "limit": limit, "skip": skip, "cursor": cursor });
         self.send_json(
             reqwest::Method::POST,
             &format!("/api/v1/documents/collections/{}/query", collection),

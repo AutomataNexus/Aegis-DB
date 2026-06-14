@@ -1048,6 +1048,10 @@ pub struct CollectionQueryResponse {
     pub documents: Vec<DocumentResponse>,
     pub total_scanned: usize,
     pub execution_time_ms: u64,
+    /// Cursor for the next page; present only when a full page was returned
+    /// (i.e. more results may exist). Pass it back as `cursor` to continue.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// Get documents in a collection - uses real DocumentEngine.
@@ -1079,6 +1083,7 @@ pub async fn get_collection_documents(
                 documents: docs,
                 total_scanned: query_result.total_scanned,
                 execution_time_ms: query_result.execution_time_ms,
+                next_cursor: None,
             };
             (StatusCode::OK, Json(response))
         }
@@ -1087,6 +1092,7 @@ pub async fn get_collection_documents(
                 documents: vec![],
                 total_scanned: 0,
                 execution_time_ms: 0,
+                next_cursor: None,
             };
             (StatusCode::NOT_FOUND, Json(empty))
         }
@@ -1512,19 +1518,31 @@ pub async fn list_collection_documents(
         &format!("List documents in: {}", collection),
     );
 
-    let limit = params.get("limit").and_then(|s| s.parse().ok());
-    let skip = params.get("skip").and_then(|s| s.parse().ok());
+    let limit: Option<usize> = params.get("limit").and_then(|s| s.parse().ok());
+    // `?cursor=` (opaque) supplies the offset, overriding `?skip=`.
+    let effective_skip = params
+        .get("cursor")
+        .and_then(|c| decode_cursor(c))
+        .or_else(|| params.get("skip").and_then(|s| s.parse().ok()))
+        .unwrap_or(0);
 
     let mut query = DocQuery::new();
     if let Some(limit) = limit {
         query = query.with_limit(limit);
     }
-    if let Some(skip) = skip {
-        query = query.with_skip(skip);
+    if effective_skip > 0 {
+        query = query.with_skip(effective_skip);
     }
 
     match state.document_engine.find(&collection, &query) {
         Ok(result) => {
+            let returned = result.documents.len();
+            let next_cursor = match limit {
+                Some(limit) if limit > 0 && returned >= limit => {
+                    Some(encode_cursor(effective_skip + returned))
+                }
+                _ => None,
+            };
             let docs: Vec<DocumentResponse> = result
                 .documents
                 .iter()
@@ -1538,6 +1556,7 @@ pub async fn list_collection_documents(
                 documents: docs,
                 total_scanned: result.total_scanned,
                 execution_time_ms: result.execution_time_ms,
+                next_cursor,
             };
             (StatusCode::OK, Json(response))
         }
@@ -1546,6 +1565,7 @@ pub async fn list_collection_documents(
                 documents: vec![],
                 total_scanned: 0,
                 execution_time_ms: 0,
+                next_cursor: None,
             };
             (StatusCode::NOT_FOUND, Json(empty))
         }
@@ -1560,6 +1580,26 @@ pub struct DocumentQueryRequest {
     pub limit: Option<usize>,
     pub skip: Option<usize>,
     pub sort: Option<SortSpec>,
+    /// Opaque pagination cursor from a previous response's `next_cursor`.
+    /// When present it supplies the starting offset (overriding `skip`).
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+/// Encode an offset into an opaque (base64url) pagination cursor.
+///
+/// This is offset-backed: like SQL `OFFSET`, a cursor is only stable if the
+/// underlying result ordering is stable between calls (provide a `sort`).
+pub fn encode_cursor(offset: usize) -> String {
+    data_encoding::BASE64URL_NOPAD.encode(offset.to_string().as_bytes())
+}
+
+/// Decode an opaque pagination cursor back into an offset.
+pub fn decode_cursor(cursor: &str) -> Option<usize> {
+    let bytes = data_encoding::BASE64URL_NOPAD
+        .decode(cursor.as_bytes())
+        .ok()?;
+    std::str::from_utf8(&bytes).ok()?.parse::<usize>().ok()
 }
 
 /// Sort specification for queries.
@@ -1597,11 +1637,19 @@ pub async fn query_collection_documents(
         }
     }
 
+    // A cursor (if present and valid) supplies the starting offset, overriding
+    // `skip`; otherwise fall back to `skip`.
+    let effective_skip = request
+        .cursor
+        .as_deref()
+        .and_then(decode_cursor)
+        .or(request.skip)
+        .unwrap_or(0);
+    if effective_skip > 0 {
+        query = query.with_skip(effective_skip);
+    }
     if let Some(limit) = request.limit {
         query = query.with_limit(limit);
-    }
-    if let Some(skip) = request.skip {
-        query = query.with_skip(skip);
     }
     if let Some(ref sort) = request.sort {
         query = query.with_sort(&sort.field, sort.ascending);
@@ -1609,6 +1657,15 @@ pub async fn query_collection_documents(
 
     match state.document_engine.find(&collection, &query) {
         Ok(result) => {
+            let returned = result.documents.len();
+            // Only emit a next cursor when a full page was returned (a limit was
+            // set and we filled it) — a partial/last page has no continuation.
+            let next_cursor = match request.limit {
+                Some(limit) if limit > 0 && returned >= limit => {
+                    Some(encode_cursor(effective_skip + returned))
+                }
+                _ => None,
+            };
             let docs: Vec<DocumentResponse> = result
                 .documents
                 .iter()
@@ -1622,6 +1679,7 @@ pub async fn query_collection_documents(
                 documents: docs,
                 total_scanned: result.total_scanned,
                 execution_time_ms: result.execution_time_ms,
+                next_cursor,
             };
             (StatusCode::OK, Json(response))
         }
@@ -1630,6 +1688,7 @@ pub async fn query_collection_documents(
                 documents: vec![],
                 total_scanned: 0,
                 execution_time_ms: 0,
+                next_cursor: None,
             };
             (StatusCode::NOT_FOUND, Json(empty))
         }
