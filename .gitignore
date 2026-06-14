@@ -64,3 +64,5 @@ release-artifacts/
 
 # Local-only website fact sheet — never commit
 /WEBSITE_FACTS.md
+STRIPE_TIERS.md
+WEBSITE_FACTS.md
