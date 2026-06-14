@@ -17,6 +17,7 @@ use crate::gdpr::GdprService;
 use crate::handlers::{MetricsDataPoint, ServerSettings};
 use crate::middleware::RateLimiter;
 use aegis_document::{Document, DocumentEngine};
+use aegis_fulltext::FullTextEngine;
 use aegis_query::executor::{ExecutionContext, ExecutionContextSnapshot};
 use aegis_query::planner::{PlanNode, PlannerSchema};
 use aegis_query::{Executor, Parser, Planner, Statement};
@@ -55,6 +56,7 @@ pub struct AppState {
     pub metrics_history: Arc<RwLock<VecDeque<MetricsDataPoint>>>,
     pub graph_store: Arc<GraphStore>,
     pub vector_engine: Arc<VectorEngine>,
+    pub fulltext_engine: Arc<FullTextEngine>,
     pub rbac: Arc<RbacManager>,
     pub rate_limiter: Arc<RateLimiter>,
     pub login_rate_limiter: Arc<RateLimiter>,
@@ -188,6 +190,27 @@ impl AppState {
             }
         }
 
+        // Full-text engine (BM25). Same snapshot-on-shutdown / rebuild-on-load
+        // persistence as the vector engine.
+        let fulltext_engine = Arc::new(FullTextEngine::new());
+        if let Some(ref dir) = data_dir {
+            let fpath = dir.join("fulltext.ncb");
+            if fpath.exists() {
+                if let Ok(bytes) = crate::compress::read_blob_file(&fpath) {
+                    match serde_json::from_slice::<aegis_fulltext::EngineSnapshot>(&bytes) {
+                        Ok(snap) => {
+                            fulltext_engine.load_snapshot(snap);
+                            tracing::info!(
+                                "Loaded full-text indexes: {:?}",
+                                fulltext_engine.list_indexes()
+                            );
+                        }
+                        Err(e) => tracing::error!("Failed to decode {:?}: {}", fpath, e),
+                    }
+                }
+            }
+        }
+
         // Initialize metrics history with some data points
         let metrics_history = Arc::new(RwLock::new(VecDeque::new()));
 
@@ -300,6 +323,7 @@ impl AppState {
             metrics_history,
             graph_store,
             vector_engine,
+            fulltext_engine,
             rbac: Arc::new(RbacManager::with_data_dir(data_dir.clone())),
             rate_limiter,
             login_rate_limiter,
@@ -363,6 +387,16 @@ impl AppState {
         let vpath = dir.join("vectors.ncb");
         if let Err(e) = crate::compress::write_blob_json(&vpath, &self.vector_engine.snapshot()) {
             tracing::error!("Failed to persist vectors to {:?}: {}", vpath, e);
+        }
+    }
+
+    /// Persist all full-text indexes to disk (snapshot blob frame, rebuilt on
+    /// load). Called on graceful shutdown.
+    pub fn flush_fulltext(&self) {
+        let Some(ref dir) = self.data_dir else { return };
+        let fpath = dir.join("fulltext.ncb");
+        if let Err(e) = crate::compress::write_blob_json(&fpath, &self.fulltext_engine.snapshot()) {
+            tracing::error!("Failed to persist full-text indexes to {:?}: {}", fpath, e);
         }
     }
 
@@ -432,8 +466,9 @@ impl AppState {
         let json = serde_json::to_vec(&entries)?;
         std::fs::write(&kv_path, crate::compress::encode_blob(&json))?;
 
-        // Vector collections snapshot (HNSW rebuilt on load).
+        // Vector + full-text snapshots (indexes rebuilt on load).
         self.flush_vectors();
+        self.flush_fulltext();
 
         let docs_dir = dir.join("documents");
         std::fs::create_dir_all(&docs_dir)?;

@@ -327,6 +327,30 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    // Full-text search routes (require auth)
+    let fts_routes = Router::new()
+        .route(
+            "/indexes",
+            get(handlers::list_fts_indexes).post(handlers::create_fts_index),
+        )
+        .route(
+            "/indexes/:name",
+            get(handlers::get_fts_index).delete(handlers::drop_fts_index),
+        )
+        .route(
+            "/indexes/:name/documents",
+            post(handlers::fts_upsert_document),
+        )
+        .route(
+            "/indexes/:name/documents/:id",
+            get(handlers::fts_get_document).delete(handlers::fts_delete_document),
+        )
+        .route("/indexes/:name/search", post(handlers::fts_search))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
     // Query builder routes (require auth)
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query))
@@ -496,6 +520,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/streaming", streaming_routes)
         .nest("/api/v1/graph", graph_routes)
         .nest("/api/v1/vector", vector_routes)
+        .nest("/api/v1/fts", fts_routes)
         .nest("/api/v1/query-builder", query_routes)
         .nest("/api/v1/updates", update_routes)
         .nest("/api/v1/compliance", compliance_routes)

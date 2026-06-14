@@ -17,6 +17,7 @@ members = [
     "crates/aegis-vault",
     "crates/aegis-shield",
     "crates/aegis-vector",
+    "crates/aegis-fulltext",
     "benchmarks",
 ]
 # WASM crates built separately with Trunk
@@ -125,6 +126,7 @@ aegis-db-vault = { version = "0.4.0", path = "crates/aegis-vault" }
 aegis-vault = { version = "0.4.0", path = "crates/aegis-vault", package = "aegis-db-vault" }
 aegis-shield = { version = "0.4.0", path = "crates/aegis-shield" }
 aegis-vector = { version = "0.4.0", path = "crates/aegis-vector" }
+aegis-fulltext = { version = "0.4.0", path = "crates/aegis-fulltext" }
 
 [profile.release]
 lto = "thin"

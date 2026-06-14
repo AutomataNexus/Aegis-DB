@@ -818,6 +818,78 @@ export class AegisClient {
   }
 
   // ==========================================================================
+  // Full-Text Search (BM25)
+  // ==========================================================================
+
+  /** Create a full-text index. */
+  async createFtsIndex(name: string): Promise<unknown> {
+    return await this.request('POST', '/api/v1/fts/indexes', { name });
+  }
+
+  /** List full-text indexes. */
+  async listFtsIndexes(): Promise<string[]> {
+    const res = await this.request<{ indexes: string[] }>('GET', '/api/v1/fts/indexes');
+    return res.indexes ?? [];
+  }
+
+  /** Full-text index stats. */
+  async ftsIndexStats(name: string): Promise<unknown> {
+    return await this.request('GET', `/api/v1/fts/indexes/${name}`);
+  }
+
+  /** Drop a full-text index. */
+  async dropFtsIndex(name: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/fts/indexes/${name}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Index (insert or replace) a document with optional metadata. */
+  async ftsIndexDocument(
+    index: string,
+    id: string,
+    text: string,
+    metadata: Record<string, unknown> = {}
+  ): Promise<void> {
+    await this.request('POST', `/api/v1/fts/indexes/${index}/documents`, { id, text, metadata });
+  }
+
+  /** Get an indexed document by id, or `undefined` if absent. */
+  async ftsGetDocument(index: string, id: string): Promise<unknown | undefined> {
+    try {
+      return await this.request('GET', `/api/v1/fts/indexes/${index}/documents/${id}`);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Delete a document from a full-text index. */
+  async ftsDeleteDocument(index: string, id: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/fts/indexes/${index}/documents/${id}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** BM25 search; returns ranked hits with score + metadata. */
+  async ftsSearch(
+    index: string,
+    query: string,
+    options: { k?: number; filter?: Record<string, unknown> } = {}
+  ): Promise<{ hits: { id: string; score: number; metadata: unknown }[] }> {
+    return await this.request('POST', `/api/v1/fts/indexes/${index}/search`, {
+      query,
+      k: options.k ?? 10,
+      filter: options.filter ?? {},
+    });
+  }
+
+  // ==========================================================================
   // Health and Metrics
   // ==========================================================================
 

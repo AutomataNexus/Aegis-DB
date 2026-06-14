@@ -514,6 +514,72 @@ impl AegisClient {
             .vector_search(collection, query, k, ef, filter)
             .await
     }
+
+    // ---- Full-text search ---------------------------------------------------
+
+    /// Create a full-text (BM25) index.
+    pub async fn create_fts_index(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.create_fts_index(name).await
+    }
+
+    /// List full-text indexes.
+    pub async fn list_fts_indexes(&self) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.list_fts_indexes().await
+    }
+
+    /// Full-text index stats.
+    pub async fn fts_index_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.fts_index_stats(name).await
+    }
+
+    /// Drop a full-text index.
+    pub async fn drop_fts_index(&self, name: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.drop_fts_index(name).await
+    }
+
+    /// Index (insert or replace) a document.
+    pub async fn fts_index_document(
+        &self,
+        index: &str,
+        id: &str,
+        text: &str,
+        metadata: serde_json::Value,
+    ) -> Result<(), ClientError> {
+        self.pool
+            .get()
+            .await?
+            .fts_index_document(index, id, text, metadata)
+            .await
+    }
+
+    /// Get an indexed document by id.
+    pub async fn fts_get_document(
+        &self,
+        index: &str,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        self.pool.get().await?.fts_get_document(index, id).await
+    }
+
+    /// Delete a document from a full-text index.
+    pub async fn fts_delete_document(&self, index: &str, id: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.fts_delete_document(index, id).await
+    }
+
+    /// BM25 search over a full-text index.
+    pub async fn fts_search(
+        &self,
+        index: &str,
+        query: &str,
+        k: usize,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .fts_search(index, query, k, filter)
+            .await
+    }
 }
 
 #[cfg(test)]

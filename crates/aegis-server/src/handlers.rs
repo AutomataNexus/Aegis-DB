@@ -3385,6 +3385,170 @@ fn vector_err(e: aegis_vector::VectorError) -> (StatusCode, Json<serde_json::Val
 }
 
 // =============================================================================
+// Full-Text Search Endpoints
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateFtsIndexRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FtsDocumentRequest {
+    pub id: String,
+    pub text: String,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FtsSearchRequest {
+    pub query: String,
+    #[serde(default = "default_k")]
+    pub k: usize,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+}
+
+/// List full-text indexes.
+pub async fn list_fts_indexes(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({ "indexes": state.fulltext_engine.list_indexes() }))
+}
+
+/// Create a full-text index.
+pub async fn create_fts_index(
+    State(state): State<AppState>,
+    Json(req): Json<CreateFtsIndexRequest>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log_write(&format!("Create full-text index: {}", req.name), None);
+    match state.fulltext_engine.create_index(req.name.clone()) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({"success": true, "name": req.name})),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"success": false, "error": e.to_string()})),
+        ),
+    }
+}
+
+/// Full-text index stats.
+pub async fn get_fts_index(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.fulltext_engine.index_stats(&name) {
+        Some(stats) => (StatusCode::OK, Json(serde_json::json!(stats))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "index not found"})),
+        ),
+    }
+}
+
+/// Drop a full-text index.
+pub async fn drop_fts_index(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    state.activity.log(
+        ActivityType::Delete,
+        &format!("Drop full-text index: {}", name),
+    );
+    match state.fulltext_engine.drop_index(&name) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": e.to_string()})),
+        ),
+    }
+}
+
+/// Index (insert or replace) a document: `{ id, text, metadata? }`.
+pub async fn fts_upsert_document(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<FtsDocumentRequest>,
+) -> impl IntoResponse {
+    match state
+        .fulltext_engine
+        .upsert(&name, req.id.clone(), req.text, req.metadata)
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "id": req.id})),
+        ),
+        Err(e) => fts_err(e),
+    }
+}
+
+/// Get an indexed document by id.
+pub async fn fts_get_document(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.fulltext_engine.get(&name, &id) {
+        Ok(Some(doc)) => (StatusCode::OK, Json(serde_json::json!(doc))),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "document not found"})),
+        ),
+        Err(e) => fts_err(e),
+    }
+}
+
+/// Delete a document from the index.
+pub async fn fts_delete_document(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.fulltext_engine.delete(&name, &id) {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": "document not found"})),
+        ),
+        Err(e) => fts_err(e),
+    }
+}
+
+/// BM25 search: `{ query, k, filter? }` → ranked hits.
+pub async fn fts_search(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<FtsSearchRequest>,
+) -> impl IntoResponse {
+    match state
+        .fulltext_engine
+        .search(&name, &req.query, req.k, &req.filter)
+    {
+        Ok(hits) => {
+            let count = hits.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "hits": hits, "count": count })),
+            )
+        }
+        Err(e) => fts_err(e),
+    }
+}
+
+fn fts_err(e: aegis_fulltext::FtsError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match &e {
+        aegis_fulltext::FtsError::IndexNotFound(_)
+        | aegis_fulltext::FtsError::DocumentNotFound(_) => StatusCode::NOT_FOUND,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        Json(serde_json::json!({"success": false, "error": e.to_string()})),
+    )
+}
+
+// =============================================================================
 // OTA Update Handlers
 // =============================================================================
 

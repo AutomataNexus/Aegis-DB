@@ -800,3 +800,75 @@ class AegisClient:
             f"/api/v1/vector/collections/{collection}/search",
             {"vector": query, "k": k, "ef": ef, "filter": filter or {}},
         )
+
+    # =========================================================================
+    # Full-Text Search (BM25)
+    # =========================================================================
+
+    async def create_fts_index(self, name: str) -> Dict[str, Any]:
+        """Create a full-text (BM25) index."""
+        return await self._request("POST", "/api/v1/fts/indexes", {"name": name})
+
+    async def list_fts_indexes(self) -> List[str]:
+        """List full-text indexes."""
+        data = await self._request("GET", "/api/v1/fts/indexes")
+        return data.get("indexes", [])
+
+    async def fts_index_stats(self, name: str) -> Dict[str, Any]:
+        """Full-text index stats."""
+        return await self._request("GET", f"/api/v1/fts/indexes/{name}")
+
+    async def drop_fts_index(self, name: str) -> bool:
+        """Drop a full-text index."""
+        try:
+            await self._request("DELETE", f"/api/v1/fts/indexes/{name}")
+            return True
+        except QueryError:
+            return False
+
+    async def fts_index_document(
+        self,
+        index: str,
+        id: str,
+        text: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Index (insert or replace) a document with optional metadata."""
+        await self._request(
+            "POST",
+            f"/api/v1/fts/indexes/{index}/documents",
+            {"id": id, "text": text, "metadata": metadata or {}},
+        )
+
+    async def fts_get_document(self, index: str, id: str) -> Optional[Dict[str, Any]]:
+        """Get an indexed document by id, or ``None`` if absent."""
+        try:
+            return await self._request(
+                "GET", f"/api/v1/fts/indexes/{index}/documents/{id}"
+            )
+        except QueryError:
+            return None
+
+    async def fts_delete_document(self, index: str, id: str) -> bool:
+        """Delete a document from a full-text index."""
+        try:
+            await self._request(
+                "DELETE", f"/api/v1/fts/indexes/{index}/documents/{id}"
+            )
+            return True
+        except QueryError:
+            return False
+
+    async def fts_search(
+        self,
+        index: str,
+        query: str,
+        k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """BM25 search; returns ``{"hits": [...], "count": n}`` ranked by score."""
+        return await self._request(
+            "POST",
+            f"/api/v1/fts/indexes/{index}/search",
+            {"query": query, "k": k, "filter": filter or {}},
+        )

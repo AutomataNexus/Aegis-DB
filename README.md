@@ -13,12 +13,12 @@
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/tests-808%20passing-brightgreen.svg" alt="Tests">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.85%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/paradigms-7-blueviolet.svg" alt="6 Data Paradigms">
+  <img src="https://img.shields.io/badge/paradigms-8-blueviolet.svg" alt="6 Data Paradigms">
   <img src="https://img.shields.io/badge/LOC-69K%2B-informational.svg" alt="Lines of Code">
 </p>
 
 <p align="center">
-  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming &bull; Vector<br>
+  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming &bull; Vector &bull; Full-Text<br>
   All in a single binary. No external dependencies.
 </p>
 
@@ -79,6 +79,7 @@ Aegis-DB replaces all of them with a single binary:
 | Graph queries | Neo4j | `POST /api/v1/graph/nodes` |
 | Event streaming | Kafka | `POST /api/v1/streaming/publish` |
 | Vector / KNN | Pinecone / pgvector | `POST /api/v1/vector/collections/:name/search` |
+| Full-text search | Elasticsearch | `POST /api/v1/fts/indexes/:name/search` (BM25) |
 
 One binary. One port. One backup. One set of credentials.
 
@@ -123,7 +124,7 @@ Full results: [benchmarks/RESULTS.md](benchmarks/RESULTS.md)
 
 ## Features
 
-### Seven Data Models, One API
+### Eight Data Models, One API
 
 ```bash
 # SQL
@@ -153,6 +154,10 @@ curl -X POST localhost:9090/api/v1/streaming/publish \
 # Vector / KNN (HNSW)
 curl -X POST localhost:9090/api/v1/vector/collections/docs/search \
   -d '{"vector": [0.12, -0.04, ...], "k": 10, "filter": {"source": "wiki"}}'
+
+# Full-Text Search (BM25)
+curl -X POST localhost:9090/api/v1/fts/indexes/articles/search \
+  -d '{"query": "rust database", "k": 10}'
 ```
 
 ### Multi-Database Isolation
@@ -432,7 +437,7 @@ aegis-server (REST API - Axum)
         └── aegis-common (shared types, errors)
 ```
 
-17 crates, ~67,000 lines of Rust code, 815 tests.
+18 crates, ~69,000 lines of Rust code, 824 tests.
 
 ---
 
@@ -459,6 +464,9 @@ aegis-server (REST API - Axum)
 | `/api/v1/vector/collections` · `/:name` | GET/POST · GET/DELETE | Vector collections (list/create/stats/drop) |
 | `/api/v1/vector/collections/:name/upsert` · `/batch` | POST | Upsert one / many vectors |
 | `/api/v1/vector/collections/:name/search` | POST | KNN search (HNSW) `{vector, k, filter}` |
+| `/api/v1/fts/indexes` · `/:name` | GET/POST · GET/DELETE | Full-text indexes (list/create/stats/drop) |
+| `/api/v1/fts/indexes/:name/documents` | POST | Index a document `{id, text, metadata}` |
+| `/api/v1/fts/indexes/:name/search` | POST | BM25 search `{query, k, filter}` |
 | `/api/v1/auth/login` | POST | Authenticate |
 | `/api/v1/admin/*` | GET | Admin/monitoring endpoints |
 | `/api/v1/import/sql` | POST | Bulk import CSV/JSON data |

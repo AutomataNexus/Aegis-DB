@@ -1035,6 +1035,125 @@ impl Connection {
         )
         .await
     }
+
+    // ---- Full-text search ---------------------------------------------------
+
+    /// Create a full-text (BM25) index.
+    pub async fn create_fts_index(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/fts/indexes",
+            Some(serde_json::json!({ "name": name })),
+        )
+        .await
+    }
+
+    /// List full-text indexes.
+    pub async fn list_fts_indexes(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/fts/indexes", None)
+            .await
+    }
+
+    /// Full-text index stats.
+    pub async fn fts_index_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/fts/indexes/{}", name),
+            None,
+        )
+        .await
+    }
+
+    /// Drop a full-text index.
+    pub async fn drop_fts_index(&self, name: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/fts/indexes/{}", name),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Index (insert or replace) a document with optional metadata.
+    pub async fn fts_index_document(
+        &self,
+        index: &str,
+        id: &str,
+        text: &str,
+        metadata: serde_json::Value,
+    ) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/fts/indexes/{}/documents", index),
+            Some(serde_json::json!({ "id": id, "text": text, "metadata": metadata })),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Get an indexed document by id, or `None` if absent.
+    pub async fn fts_get_document(
+        &self,
+        index: &str,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let url = format!(
+            "{}/api/v1/fts/indexes/{}/documents/{}",
+            self.base_url, index, id
+        );
+        let response = self
+            .add_auth(self.http_client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "fts_get_document failed: {}",
+                response.status()
+            )));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        Ok(Some(value))
+    }
+
+    /// Delete a document from a full-text index.
+    pub async fn fts_delete_document(&self, index: &str, id: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/fts/indexes/{}/documents/{}", index, id),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// BM25 search over a full-text index. `filter` is an exact-match metadata
+    /// object (`Value::Null` for none).
+    pub async fn fts_search(
+        &self,
+        index: &str,
+        query: &str,
+        k: usize,
+        filter: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/fts/indexes/{}/search", index),
+            Some(serde_json::json!({ "query": query, "k": k, "filter": filter })),
+        )
+        .await
+    }
 }
 
 // =============================================================================

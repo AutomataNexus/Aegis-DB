@@ -7,6 +7,13 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Full-text search paradigm** (`aegis-fulltext`, the 8th engine) — named
+  indexes of `{id, text, metadata}` documents with an inverted index and Okapi
+  **BM25** ranking (the model behind Elasticsearch/Lucene). Tokenizer with
+  stopword removal, exact deletes (no tombstones), exact-match metadata
+  filtering, snapshot persistence. REST under `/api/v1/fts/*` (indexes, document
+  upsert/get/delete, search); wrapped in the Rust/JS/Python SDKs. Validated by a
+  BM25 relevance-ranking test.
 - **Vector / KNN paradigm** (`aegis-vector`, the 7th engine) — dense-embedding
   collections with approximate nearest-neighbor search backed by a from-scratch
   **HNSW** index (cosine / squared-L2 / inner-product metrics), per-record JSON
