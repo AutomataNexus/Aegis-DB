@@ -17,9 +17,90 @@
 use crate::activity::ActivityType;
 use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
-use nexuscompress::core_types::{DType, Domain, Schema};
+use nexuscompress::codecs::create_codec;
+use nexuscompress::core_types::{CodecContext, DType, Domain, Schema};
 use nexuscompress::record::RecordCompressor;
 use serde::{Deserialize, Serialize};
+
+// ── General NexusCompress blob frame (any opaque byte payload) ─────────────
+//
+// Document collections + time-series already compress through their structured
+// NexusCompress domains. KV, graph, and relational snapshots are persisted as
+// opaque serialized JSON, so they ride this general blob frame instead — a
+// best-of among NexusCompress-native codecs (his ANS entropy coder vs the
+// zstd_max entropy backstop), with an identity fallback so the frame is never
+// larger than `raw.len() + 13`. The frame is self-describing and lossless:
+//
+//   [b"NCB1"][codec_id: u8][raw_len: u64 LE][payload]
+//
+// `decode_blob` returns `None` for bytes that are not a frame (e.g. a legacy
+// plain-JSON file written before this landed), so loaders stay backward
+// compatible by falling back to the raw bytes.
+const BLOB_MAGIC: &[u8; 4] = b"NCB1";
+const BLOB_IDENTITY: u8 = 0;
+const BLOB_ANS: u8 = 1;
+const BLOB_ZSTD_MAX: u8 = 2;
+
+fn blob_codec_name(id: u8) -> Option<&'static str> {
+    match id {
+        BLOB_ANS => Some("ans"),
+        BLOB_ZSTD_MAX => Some("zstd_max"),
+        _ => None,
+    }
+}
+
+/// Compress an arbitrary byte blob into a self-describing NexusCompress frame.
+/// Picks the smallest of {ANS, zstd_max, identity}; lossless on any input.
+pub fn encode_blob(raw: &[u8]) -> Vec<u8> {
+    let ctx = CodecContext::new(DType::U8, raw.len());
+    let mut best_id = BLOB_IDENTITY;
+    let mut best_len = raw.len();
+    let mut best_payload: Option<Vec<u8>> = None;
+    for (id, name) in [(BLOB_ANS, "ans"), (BLOB_ZSTD_MAX, "zstd_max")] {
+        if let Ok(codec) = create_codec(name, &[]) {
+            let mut out = Vec::new();
+            if codec.compress(raw, &mut out, &ctx).is_ok() && out.len() < best_len {
+                best_len = out.len();
+                best_id = id;
+                best_payload = Some(out);
+            }
+        }
+    }
+    let payload = best_payload.unwrap_or_else(|| raw.to_vec());
+    let mut frame = Vec::with_capacity(13 + payload.len());
+    frame.extend_from_slice(BLOB_MAGIC);
+    frame.push(best_id);
+    frame.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+    frame.extend_from_slice(&payload);
+    frame
+}
+
+/// Decode a frame produced by [`encode_blob`]. Returns `None` if `bytes` is not
+/// a NexusCompress blob frame (caller should treat it as legacy raw bytes).
+pub fn decode_blob(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() < 13 || &bytes[0..4] != BLOB_MAGIC {
+        return None;
+    }
+    let codec_id = bytes[4];
+    let raw_len = u64::from_le_bytes(bytes[5..13].try_into().ok()?) as usize;
+    let payload = &bytes[13..];
+    if codec_id == BLOB_IDENTITY {
+        return (payload.len() == raw_len).then(|| payload.to_vec());
+    }
+    let name = blob_codec_name(codec_id)?;
+    let codec = create_codec(name, &[]).ok()?;
+    let ctx = CodecContext::new(DType::U8, raw_len);
+    let mut out = Vec::with_capacity(raw_len);
+    codec.decompress(payload, &mut out, &ctx).ok()?;
+    (out.len() == raw_len).then_some(out)
+}
+
+/// Read a file that may be a NexusCompress blob frame or a legacy plain file,
+/// returning the decompressed bytes either way. `Err` only on I/O failure.
+pub fn read_blob_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let bytes = std::fs::read(path)?;
+    Ok(decode_blob(&bytes).unwrap_or(bytes))
+}
 
 // ── Document-collection compression (NexusCompress, Record domain) ─────────
 // A collection persists as `documents/<name>.json` (a JSON array). To make that
@@ -233,6 +314,31 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    #[test]
+    fn blob_frame_roundtrip_and_legacy_fallback() {
+        // KV / graph / relational snapshots persist through encode_blob; verify
+        // a lossless round-trip across compressible, incompressible, and empty
+        // inputs, plus that non-frame bytes are treated as legacy raw.
+        for raw in [
+            serde_json::to_vec(&sample()).unwrap(),
+            vec![0u8; 4096], // highly compressible
+            (0..255u8).cycle().take(5000).collect::<Vec<u8>>(),
+            b"plain legacy json".to_vec(),
+            Vec::new(),
+        ] {
+            let frame = encode_blob(&raw);
+            assert_eq!(
+                decode_blob(&frame).as_deref(),
+                Some(raw.as_slice()),
+                "blob frame must round-trip losslessly"
+            );
+            // A frame is never pathologically larger than raw + small header.
+            assert!(frame.len() <= raw.len() + 13);
+        }
+        // Bytes that are not a blob frame decode as None (caller keeps raw).
+        assert_eq!(decode_blob(b"not-a-frame"), None);
     }
 
     #[test]
