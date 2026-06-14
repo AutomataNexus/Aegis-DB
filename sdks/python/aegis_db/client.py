@@ -394,6 +394,25 @@ class AegisClient:
         data = await self._request("GET", "/api/v1/kv/keys")
         return [entry["key"] for entry in data]
 
+    async def kv_batch_get(self, keys: List[str]) -> List[Dict[str, Any]]:
+        """Get many keys at once (missing keys are omitted)."""
+        data = await self._request("POST", "/api/v1/kv/batch/get", {"keys": keys})
+        return data.get("entries", [])
+
+    async def kv_batch_set(self, entries: List[Dict[str, Any]]) -> int:
+        """Set many keys at once.
+
+        Each entry is a dict ``{"key": ..., "value": ..., "ttl": optional}``.
+        Returns the number of keys written.
+        """
+        data = await self._request("POST", "/api/v1/kv/batch/set", {"entries": entries})
+        return data.get("count", 0)
+
+    async def kv_batch_delete(self, keys: List[str]) -> int:
+        """Delete many keys at once. Returns the number deleted."""
+        data = await self._request("POST", "/api/v1/kv/batch/delete", {"keys": keys})
+        return data.get("deleted", 0)
+
     # =========================================================================
     # Health and Metrics
     # =========================================================================
@@ -419,6 +438,24 @@ class AegisClient:
         """Get documents from a collection."""
         data = await self._request("GET", f"/api/v1/documents/collections/{name}")
         return data
+
+    async def bulk_insert(self, collection: str, documents: List[Any]) -> List[str]:
+        """Insert many documents into a collection in one call. Returns new ids."""
+        data = await self._request(
+            "POST",
+            f"/api/v1/documents/collections/{collection}/batch-insert",
+            {"documents": documents},
+        )
+        return data.get("ids", [])
+
+    async def bulk_delete(self, collection: str, ids: List[str]) -> int:
+        """Delete many documents by id in one call. Returns the number deleted."""
+        data = await self._request(
+            "POST",
+            f"/api/v1/documents/collections/{collection}/batch-delete",
+            {"ids": ids},
+        )
+        return data.get("deleted", 0)
 
     # =========================================================================
     # Graph Methods

@@ -4,6 +4,30 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) and the format of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **Graph API completeness**: `PUT /api/v1/graph/nodes/:id` and
+  `PUT` + `DELETE /api/v1/graph/edges/:id` (edge deletion existed in the engine
+  but had no route); `GraphStore::update_node` / `update_edge`.
+- **Bulk / batch endpoints**:
+  - KV: `POST /api/v1/kv/batch/{get,set,delete}`.
+  - Documents: `POST /api/v1/documents/collections/:name/batch-insert` and
+    `.../batch-delete`.
+- **Rust client parity**: `aegis-client` is no longer SQL-only — added KV,
+  document (CRUD + query), time-series, graph (incl. mutations), schema, health,
+  metrics, and the new bulk helpers, matching the JavaScript/Python SDKs.
+- **SDK bulk helpers**: `kvBatchGet/Set/Delete` and `bulkInsert/bulkDelete`
+  (JavaScript) and `kv_batch_get/set/delete`, `bulk_insert/bulk_delete`
+  (Python).
+
+### Fixed
+- **HTTP benchmark KV path**: the load test hit `/api/v1/kv/:key` (no such
+  route) instead of `/api/v1/kv/keys/:key`, so KV requests 404'd and the 404s
+  were counted as successful ops. Corrected the paths and added
+  `error_for_status()` to the bench HTTP helpers so a wrong path fails instead of
+  inflating throughput.
+
 ## [0.3.1] - 2026-06-13
 
 ### Security
