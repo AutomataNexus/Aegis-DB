@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://aegis-db.com/sitemap.xml
