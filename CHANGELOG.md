@@ -7,6 +7,14 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Wide-column paradigm** (`aegis-widecolumn`, the 12th engine) — Cassandra /
+  Bigtable-style tables: rows keyed by a row key, each row a **sparse, dynamic**
+  set of columns (no fixed schema). Per-cell write timestamps with
+  **last-write-wins** conflict resolution, partial-update merges, ordered range /
+  prefix scans (with projection + limit), single-cell and whole-row deletes, and
+  snapshot persistence (including the logical clock). REST under
+  `/api/v1/widecolumn/*` (tables, rows, cells, scan); wrapped in the
+  Rust/JS/Python SDKs. Validated by LWW, sparse-column, and ordered-scan tests.
 - **Object / blob paradigm** (`aegis-object`, the 11th engine) — S3-style
   **buckets** of binary objects, each with a content type, a content-addressed
   **ETag** (FNV-1a fingerprint), and JSON metadata. put / get / head / delete and

@@ -30,6 +30,7 @@ use aegis_timeseries::TimeSeriesEngine;
 use aegis_updates::orchestrator::UpdateOrchestrator;
 use aegis_vault::AegisVault;
 use aegis_vector::VectorEngine;
+use aegis_widecolumn::WideColumnEngine;
 use chrono::Utc;
 use parking_lot::RwLock as SyncRwLock;
 use std::collections::{HashMap, VecDeque};
@@ -63,6 +64,7 @@ pub struct AppState {
     pub geo_engine: Arc<GeoEngine>,
     pub columnar_engine: Arc<ColumnarEngine>,
     pub object_engine: Arc<ObjectEngine>,
+    pub widecolumn_engine: Arc<WideColumnEngine>,
     pub rbac: Arc<RbacManager>,
     pub rate_limiter: Arc<RateLimiter>,
     pub login_rate_limiter: Arc<RateLimiter>,
@@ -280,6 +282,27 @@ impl AppState {
             }
         }
 
+        // Wide-column engine. Same snapshot-on-shutdown / rebuild-on-load
+        // persistence as the other index engines.
+        let widecolumn_engine = Arc::new(WideColumnEngine::new());
+        if let Some(ref dir) = data_dir {
+            let wpath = dir.join("widecolumn.ncb");
+            if wpath.exists() {
+                if let Ok(bytes) = crate::compress::read_blob_file(&wpath) {
+                    match serde_json::from_slice::<aegis_widecolumn::EngineSnapshot>(&bytes) {
+                        Ok(snap) => {
+                            widecolumn_engine.load_snapshot(snap);
+                            tracing::info!(
+                                "Loaded wide-column tables: {:?}",
+                                widecolumn_engine.list_tables()
+                            );
+                        }
+                        Err(e) => tracing::error!("Failed to decode {:?}: {}", wpath, e),
+                    }
+                }
+            }
+        }
+
         // Initialize metrics history with some data points
         let metrics_history = Arc::new(RwLock::new(VecDeque::new()));
 
@@ -396,6 +419,7 @@ impl AppState {
             geo_engine,
             columnar_engine,
             object_engine,
+            widecolumn_engine,
             rbac: Arc::new(RbacManager::with_data_dir(data_dir.clone())),
             rate_limiter,
             login_rate_limiter,
@@ -502,6 +526,17 @@ impl AppState {
         }
     }
 
+    /// Persist all wide-column tables to disk (snapshot blob frame). Called on
+    /// graceful shutdown.
+    pub fn flush_widecolumn(&self) {
+        let Some(ref dir) = self.data_dir else { return };
+        let wpath = dir.join("widecolumn.ncb");
+        if let Err(e) = crate::compress::write_blob_json(&wpath, &self.widecolumn_engine.snapshot())
+        {
+            tracing::error!("Failed to persist wide-column tables to {:?}: {}", wpath, e);
+        }
+    }
+
     /// Flush a single document collection to disk (if data_dir is configured).
     pub fn flush_collection(&self, collection_name: &str) {
         let Some(ref dir) = self.data_dir else { return };
@@ -574,6 +609,7 @@ impl AppState {
         self.flush_geo();
         self.flush_columnar();
         self.flush_objects();
+        self.flush_widecolumn();
 
         let docs_dir = dir.join("documents");
         std::fs::create_dir_all(&docs_dir)?;

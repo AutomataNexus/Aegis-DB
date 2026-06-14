@@ -425,6 +425,32 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    // Wide-column routes (require auth)
+    let widecolumn_routes = Router::new()
+        .route(
+            "/tables",
+            get(handlers::list_wide_tables).post(handlers::create_wide_table),
+        )
+        .route(
+            "/tables/:name",
+            get(handlers::get_wide_table).delete(handlers::drop_wide_table),
+        )
+        .route("/tables/:name/scan", post(handlers::wide_scan))
+        .route(
+            "/tables/:name/rows/:row",
+            put(handlers::wide_put_row)
+                .get(handlers::wide_get_row)
+                .delete(handlers::wide_delete_row),
+        )
+        .route(
+            "/tables/:name/rows/:row/columns/:column",
+            delete(handlers::wide_delete_cell),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
     // Query builder routes (require auth)
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query))
@@ -598,6 +624,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/geo", geo_routes)
         .nest("/api/v1/columnar", columnar_routes)
         .nest("/api/v1/objects", object_routes)
+        .nest("/api/v1/widecolumn", widecolumn_routes)
         .nest("/api/v1/query-builder", query_routes)
         .nest("/api/v1/updates", update_routes)
         .nest("/api/v1/compliance", compliance_routes)

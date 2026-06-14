@@ -1612,6 +1612,145 @@ impl Connection {
         .await?;
         Ok(())
     }
+
+    // ---- Wide-column ----------------------------------------------------
+
+    /// Create a wide-column table.
+    pub async fn create_wide_table(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/widecolumn/tables",
+            Some(serde_json::json!({ "name": name })),
+        )
+        .await
+    }
+
+    /// List wide-column tables.
+    pub async fn list_wide_tables(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/widecolumn/tables", None)
+            .await
+    }
+
+    /// Wide-column table stats (rows + cells).
+    pub async fn wide_table_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/widecolumn/tables/{}", name),
+            None,
+        )
+        .await
+    }
+
+    /// Drop a wide-column table.
+    pub async fn drop_wide_table(&self, name: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/widecolumn/tables/{}", name),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Set columns on a row (last-write-wins; optional explicit timestamp).
+    pub async fn wide_put_row(
+        &self,
+        table: &str,
+        row: &str,
+        columns: serde_json::Value,
+        timestamp: Option<u64>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::PUT,
+            &format!("/api/v1/widecolumn/tables/{}/rows/{}", table, row),
+            Some(serde_json::json!({ "columns": columns, "timestamp": timestamp })),
+        )
+        .await
+    }
+
+    /// Get a row, optionally projecting a subset of columns.
+    pub async fn wide_get_row(
+        &self,
+        table: &str,
+        row: &str,
+        columns: &[&str],
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let mut url = format!(
+            "{}/api/v1/widecolumn/tables/{}/rows/{}",
+            self.base_url, table, row
+        );
+        if !columns.is_empty() {
+            url.push_str("?columns=");
+            url.push_str(&columns.join(","));
+        }
+        let response = self
+            .add_auth(self.http_client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "wide_get_row failed: {}",
+                response.status()
+            )));
+        }
+        let value = response
+            .json()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        Ok(Some(value))
+    }
+
+    /// Delete a row.
+    pub async fn wide_delete_row(&self, table: &str, row: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/widecolumn/tables/{}/rows/{}", table, row),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Delete a single column (cell) from a row.
+    pub async fn wide_delete_cell(
+        &self,
+        table: &str,
+        row: &str,
+        column: &str,
+    ) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!(
+                "/api/v1/widecolumn/tables/{}/rows/{}/columns/{}",
+                table, row, column
+            ),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Scan rows in key order (range / prefix / projection / limit).
+    pub async fn wide_scan(
+        &self,
+        table: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/widecolumn/tables/{}/scan", table),
+            Some(body),
+        )
+        .await
+    }
 }
 
 // =============================================================================

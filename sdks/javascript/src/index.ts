@@ -1189,6 +1189,107 @@ export class AegisClient {
   }
 
   // ==========================================================================
+  // Wide-Column (row-keyed sparse columns, per-cell timestamps, LWW)
+  // ==========================================================================
+
+  /** Create a wide-column table. */
+  async createWideTable(name: string): Promise<unknown> {
+    return await this.request('POST', '/api/v1/widecolumn/tables', { name });
+  }
+
+  /** List wide-column tables. */
+  async listWideTables(): Promise<string[]> {
+    const res = await this.request<{ tables: string[] }>('GET', '/api/v1/widecolumn/tables');
+    return res.tables ?? [];
+  }
+
+  /** Wide-column table stats (rows + cells). */
+  async wideTableStats(name: string): Promise<unknown> {
+    return await this.request('GET', `/api/v1/widecolumn/tables/${name}`);
+  }
+
+  /** Drop a wide-column table. */
+  async dropWideTable(name: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/widecolumn/tables/${name}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Set columns on a row (last-write-wins; optional explicit timestamp). */
+  async widePutRow(
+    table: string,
+    row: string,
+    columns: Record<string, unknown>,
+    options: { timestamp?: number } = {}
+  ): Promise<unknown> {
+    return await this.request('PUT', `/api/v1/widecolumn/tables/${table}/rows/${row}`, {
+      columns,
+      timestamp: options.timestamp ?? null,
+    });
+  }
+
+  /** Get a row, optionally projecting a subset of columns. Returns `undefined`
+   *  if the row is absent. */
+  async wideGetRow(
+    table: string,
+    row: string,
+    columns?: string[]
+  ): Promise<{ key: string; columns: Record<string, unknown>; timestamps: Record<string, number> } | undefined> {
+    const qs = columns && columns.length ? `?columns=${columns.join(',')}` : '';
+    try {
+      return await this.request('GET', `/api/v1/widecolumn/tables/${table}/rows/${row}${qs}`);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Delete a row. */
+  async wideDeleteRow(table: string, row: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/widecolumn/tables/${table}/rows/${row}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Delete a single column (cell) from a row. */
+  async wideDeleteCell(table: string, row: string, column: string): Promise<boolean> {
+    try {
+      await this.request(
+        'DELETE',
+        `/api/v1/widecolumn/tables/${table}/rows/${row}/columns/${column}`
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Scan rows in key order (range / prefix / projection / limit). */
+  async wideScan(
+    table: string,
+    options: {
+      start?: string;
+      end?: string;
+      prefix?: string;
+      columns?: string[];
+      limit?: number;
+    } = {}
+  ): Promise<{ rows: { key: string; columns: Record<string, unknown> }[]; count: number }> {
+    return await this.request('POST', `/api/v1/widecolumn/tables/${table}/scan`, {
+      start: options.start ?? null,
+      end: options.end ?? null,
+      prefix: options.prefix ?? null,
+      columns: options.columns ?? [],
+      limit: options.limit ?? null,
+    });
+  }
+
+  // ==========================================================================
   // Health and Metrics
   // ==========================================================================
 

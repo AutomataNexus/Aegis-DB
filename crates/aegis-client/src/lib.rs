@@ -845,6 +845,85 @@ impl AegisClient {
     pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<(), ClientError> {
         self.pool.get().await?.delete_object(bucket, key).await
     }
+
+    // ---- Wide-column --------------------------------------------------------
+
+    /// Create a wide-column table.
+    pub async fn create_wide_table(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.create_wide_table(name).await
+    }
+
+    /// List wide-column tables.
+    pub async fn list_wide_tables(&self) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.list_wide_tables().await
+    }
+
+    /// Wide-column table stats.
+    pub async fn wide_table_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.wide_table_stats(name).await
+    }
+
+    /// Drop a wide-column table.
+    pub async fn drop_wide_table(&self, name: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.drop_wide_table(name).await
+    }
+
+    /// Set columns on a row (last-write-wins; optional timestamp).
+    pub async fn wide_put_row(
+        &self,
+        table: &str,
+        row: &str,
+        columns: serde_json::Value,
+        timestamp: Option<u64>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .wide_put_row(table, row, columns, timestamp)
+            .await
+    }
+
+    /// Get a row, optionally projecting a subset of columns.
+    pub async fn wide_get_row(
+        &self,
+        table: &str,
+        row: &str,
+        columns: &[&str],
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .wide_get_row(table, row, columns)
+            .await
+    }
+
+    /// Delete a row.
+    pub async fn wide_delete_row(&self, table: &str, row: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.wide_delete_row(table, row).await
+    }
+
+    /// Delete a single column (cell) from a row.
+    pub async fn wide_delete_cell(
+        &self,
+        table: &str,
+        row: &str,
+        column: &str,
+    ) -> Result<(), ClientError> {
+        self.pool
+            .get()
+            .await?
+            .wide_delete_cell(table, row, column)
+            .await
+    }
+
+    /// Scan rows in key order (range / prefix / projection / limit).
+    pub async fn wide_scan(
+        &self,
+        table: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.wide_scan(table, body).await
+    }
 }
 
 #[cfg(test)]

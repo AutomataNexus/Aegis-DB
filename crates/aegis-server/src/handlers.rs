@@ -4159,6 +4159,207 @@ fn object_err(e: aegis_object::ObjectError) -> (StatusCode, Json<serde_json::Val
 }
 
 // =============================================================================
+// Wide-Column Handlers (row-keyed sparse columns, per-cell timestamps, LWW)
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateWideTableRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WidePutRequest {
+    pub columns: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub timestamp: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WideGetParams {
+    /// Comma-separated column projection; empty = all columns.
+    #[serde(default)]
+    pub columns: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WideScanRequest {
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
+    pub end: Option<String>,
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+fn split_columns(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .map(|c| c.to_string())
+        .collect()
+}
+
+/// List wide-column tables.
+pub async fn list_wide_tables(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({ "tables": state.widecolumn_engine.list_tables() }))
+}
+
+/// Create a wide-column table: `{ name }`.
+pub async fn create_wide_table(
+    State(state): State<AppState>,
+    Json(req): Json<CreateWideTableRequest>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log_write(&format!("Create wide-column table: {}", req.name), None);
+    match state.widecolumn_engine.create_table(req.name.clone()) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({"success": true, "name": req.name})),
+        ),
+        Err(e) => wide_err(e),
+    }
+}
+
+/// Wide-column table stats (rows + cells).
+pub async fn get_wide_table(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match state.widecolumn_engine.table_stats(&name) {
+        Some(stats) => (StatusCode::OK, Json(serde_json::json!(stats))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "table not found"})),
+        ),
+    }
+}
+
+/// Drop a wide-column table.
+pub async fn drop_wide_table(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    state.activity.log(
+        ActivityType::Delete,
+        &format!("Drop wide-column table: {}", name),
+    );
+    match state.widecolumn_engine.drop_table(&name) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => wide_err(e),
+    }
+}
+
+/// Set columns on a row: `{ columns: {...}, timestamp? }` (last-write-wins).
+pub async fn wide_put_row(
+    State(state): State<AppState>,
+    Path((table, row_key)): Path<(String, String)>,
+    Json(req): Json<WidePutRequest>,
+) -> impl IntoResponse {
+    match state
+        .widecolumn_engine
+        .put(&table, row_key, req.columns, req.timestamp)
+    {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => wide_err(e),
+    }
+}
+
+/// Get a row (optional `?columns=a,b` projection).
+pub async fn wide_get_row(
+    State(state): State<AppState>,
+    Path((table, row_key)): Path<(String, String)>,
+    Query(params): Query<WideGetParams>,
+) -> impl IntoResponse {
+    let cols = split_columns(&params.columns);
+    match state.widecolumn_engine.get(&table, &row_key, &cols) {
+        Ok(Some(row)) => (StatusCode::OK, Json(serde_json::json!(row))).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "row not found"})),
+        )
+            .into_response(),
+        Err(e) => wide_err(e).into_response(),
+    }
+}
+
+/// Delete a row.
+pub async fn wide_delete_row(
+    State(state): State<AppState>,
+    Path((table, row_key)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.widecolumn_engine.delete_row(&table, &row_key) {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": "row not found"})),
+        )
+            .into_response(),
+        Err(e) => wide_err(e).into_response(),
+    }
+}
+
+/// Delete a single column (cell) from a row.
+pub async fn wide_delete_cell(
+    State(state): State<AppState>,
+    Path((table, row_key, column)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    match state
+        .widecolumn_engine
+        .delete_cell(&table, &row_key, &column)
+    {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": "cell not found"})),
+        )
+            .into_response(),
+        Err(e) => wide_err(e).into_response(),
+    }
+}
+
+/// Scan rows in key order: `{ start?, end?, prefix?, columns?, limit? }`.
+pub async fn wide_scan(
+    State(state): State<AppState>,
+    Path(table): Path<String>,
+    Json(req): Json<WideScanRequest>,
+) -> impl IntoResponse {
+    match state.widecolumn_engine.scan(
+        &table,
+        req.start.as_deref(),
+        req.end.as_deref(),
+        req.prefix.as_deref(),
+        &req.columns,
+        req.limit,
+    ) {
+        Ok(rows) => {
+            let count = rows.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "rows": rows, "count": count })),
+            )
+        }
+        Err(e) => wide_err(e),
+    }
+}
+
+fn wide_err(e: aegis_widecolumn::WideColumnError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match &e {
+        aegis_widecolumn::WideColumnError::TableNotFound(_) => StatusCode::NOT_FOUND,
+        aegis_widecolumn::WideColumnError::TableExists(_) => StatusCode::CONFLICT,
+        aegis_widecolumn::WideColumnError::EmptyWrite => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        Json(serde_json::json!({"success": false, "error": e.to_string()})),
+    )
+}
+
+// =============================================================================
 // OTA Update Handlers
 // =============================================================================
 

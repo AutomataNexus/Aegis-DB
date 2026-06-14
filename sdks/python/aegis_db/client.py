@@ -1163,3 +1163,102 @@ class AegisClient:
             return True
         except QueryError:
             return False
+
+    # =========================================================================
+    # Wide-Column (row-keyed sparse columns, per-cell timestamps, LWW)
+    # =========================================================================
+
+    async def create_wide_table(self, name: str) -> Dict[str, Any]:
+        """Create a wide-column table."""
+        return await self._request(
+            "POST", "/api/v1/widecolumn/tables", {"name": name}
+        )
+
+    async def list_wide_tables(self) -> List[str]:
+        """List wide-column tables."""
+        data = await self._request("GET", "/api/v1/widecolumn/tables")
+        return data.get("tables", [])
+
+    async def wide_table_stats(self, name: str) -> Dict[str, Any]:
+        """Wide-column table stats (rows + cells)."""
+        return await self._request("GET", f"/api/v1/widecolumn/tables/{name}")
+
+    async def drop_wide_table(self, name: str) -> bool:
+        """Drop a wide-column table."""
+        try:
+            await self._request("DELETE", f"/api/v1/widecolumn/tables/{name}")
+            return True
+        except QueryError:
+            return False
+
+    async def wide_put_row(
+        self,
+        table: str,
+        row: str,
+        columns: Dict[str, Any],
+        timestamp: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Set columns on a row (last-write-wins; optional explicit timestamp)."""
+        return await self._request(
+            "PUT",
+            f"/api/v1/widecolumn/tables/{table}/rows/{row}",
+            {"columns": columns, "timestamp": timestamp},
+        )
+
+    async def wide_get_row(
+        self,
+        table: str,
+        row: str,
+        columns: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Get a row, optionally projecting a subset of columns; ``None`` if absent."""
+        qs = f"?columns={','.join(columns)}" if columns else ""
+        try:
+            return await self._request(
+                "GET", f"/api/v1/widecolumn/tables/{table}/rows/{row}{qs}"
+            )
+        except QueryError:
+            return None
+
+    async def wide_delete_row(self, table: str, row: str) -> bool:
+        """Delete a row."""
+        try:
+            await self._request(
+                "DELETE", f"/api/v1/widecolumn/tables/{table}/rows/{row}"
+            )
+            return True
+        except QueryError:
+            return False
+
+    async def wide_delete_cell(self, table: str, row: str, column: str) -> bool:
+        """Delete a single column (cell) from a row."""
+        try:
+            await self._request(
+                "DELETE",
+                f"/api/v1/widecolumn/tables/{table}/rows/{row}/columns/{column}",
+            )
+            return True
+        except QueryError:
+            return False
+
+    async def wide_scan(
+        self,
+        table: str,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        prefix: Optional[str] = None,
+        columns: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Scan rows in key order (range / prefix / projection / limit)."""
+        return await self._request(
+            "POST",
+            f"/api/v1/widecolumn/tables/{table}/scan",
+            {
+                "start": start,
+                "end": end,
+                "prefix": prefix,
+                "columns": columns or [],
+                "limit": limit,
+            },
+        )
