@@ -393,6 +393,427 @@ impl Connection {
 }
 
 // =============================================================================
+// Resource APIs (KV, documents, time series, graph, schema, health)
+//
+// These mirror the JavaScript / Python SDK surface so the Rust client is no
+// longer SQL-only. Loosely-typed payloads use `serde_json::Value` to match the
+// flexible document/graph/time-series shapes.
+// =============================================================================
+
+impl Connection {
+    /// Generic JSON request helper. Adds auth, fails on non-2xx, returns the
+    /// parsed response body (or `Null` for empty responses).
+    async fn send_json(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+
+        let url = format!("{}{}", self.base_url, path);
+        let mut request = self.http_client.request(method, &url);
+        if let Some(b) = body {
+            request = request.json(&b);
+        }
+        let request = self.add_auth(request);
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        let value: serde_json::Value = if text.trim().is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)
+        };
+
+        if !status.is_success() {
+            let error = value
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("request failed");
+            return Err(ClientError::QueryFailed(format!("{}: {}", status, error)));
+        }
+        Ok(value)
+    }
+
+    // ---- Key-Value ----------------------------------------------------------
+
+    /// Get a key's entry, or `None` if it does not exist.
+    pub async fn kv_get(&self, key: &str) -> Result<Option<serde_json::Value>, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let url = format!("{}/api/v1/kv/keys/{}", self.base_url, key);
+        let response = self
+            .add_auth(self.http_client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "kv_get failed: {}",
+                response.status()
+            )));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        Ok(if value.is_null() { None } else { Some(value) })
+    }
+
+    /// Set a key with an optional TTL (seconds).
+    pub async fn kv_set(
+        &self,
+        key: &str,
+        value: serde_json::Value,
+        ttl: Option<u64>,
+    ) -> Result<(), ClientError> {
+        let mut body = serde_json::json!({ "key": key, "value": value });
+        if let Some(ttl) = ttl {
+            body["ttl"] = serde_json::json!(ttl);
+        }
+        self.send_json(reqwest::Method::POST, "/api/v1/kv/keys", Some(body))
+            .await?;
+        Ok(())
+    }
+
+    /// Delete a key.
+    pub async fn kv_delete(&self, key: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/kv/keys/{}", key),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// List all key entries.
+    pub async fn kv_list(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/kv/keys", None)
+            .await
+    }
+
+    // ---- Documents ----------------------------------------------------------
+
+    /// List document collections.
+    pub async fn list_collections(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/documents/collections", None)
+            .await
+    }
+
+    /// Create a document collection.
+    pub async fn create_collection(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/documents/collections",
+            Some(serde_json::json!({ "name": name })),
+        )
+        .await
+    }
+
+    /// Insert a document, optionally with an explicit id.
+    pub async fn insert_document(
+        &self,
+        collection: &str,
+        document: serde_json::Value,
+        id: Option<&str>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let body = serde_json::json!({ "id": id, "document": document });
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/documents/collections/{}/documents", collection),
+            Some(body),
+        )
+        .await
+    }
+
+    /// Get a document by id, or `None` if absent.
+    pub async fn get_document(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let url = format!(
+            "{}/api/v1/documents/collections/{}/documents/{}",
+            self.base_url, collection, id
+        );
+        let response = self
+            .add_auth(self.http_client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "get_document failed: {}",
+                response.status()
+            )));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        Ok(if value.is_null() { None } else { Some(value) })
+    }
+
+    /// Replace a document (full update).
+    pub async fn update_document(
+        &self,
+        collection: &str,
+        id: &str,
+        document: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::PUT,
+            &format!(
+                "/api/v1/documents/collections/{}/documents/{}",
+                collection, id
+            ),
+            Some(document),
+        )
+        .await
+    }
+
+    /// Partially update (merge) a document.
+    pub async fn patch_document(
+        &self,
+        collection: &str,
+        id: &str,
+        partial: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::PATCH,
+            &format!(
+                "/api/v1/documents/collections/{}/documents/{}",
+                collection, id
+            ),
+            Some(partial),
+        )
+        .await
+    }
+
+    /// Delete a document.
+    pub async fn delete_document(&self, collection: &str, id: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!(
+                "/api/v1/documents/collections/{}/documents/{}",
+                collection, id
+            ),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Query documents with a MongoDB-style filter, optional limit/skip.
+    pub async fn query_documents(
+        &self,
+        collection: &str,
+        filter: serde_json::Value,
+        limit: Option<usize>,
+        skip: Option<usize>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let body = serde_json::json!({ "filter": filter, "limit": limit, "skip": skip });
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/api/v1/documents/collections/{}/query", collection),
+            Some(body),
+        )
+        .await
+    }
+
+    // ---- Time series --------------------------------------------------------
+
+    /// Register a metric (e.g. `counter`, `gauge`, `histogram`, `summary`).
+    pub async fn register_metric(
+        &self,
+        name: &str,
+        metric_type: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        let body = serde_json::json!({ "name": name, "metric_type": metric_type });
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/timeseries/metrics",
+            Some(body),
+        )
+        .await
+    }
+
+    /// Write a single time-series point.
+    pub async fn ts_write(
+        &self,
+        metric: &str,
+        value: f64,
+        timestamp: Option<i64>,
+        tags: serde_json::Value,
+    ) -> Result<(), ClientError> {
+        let body = serde_json::json!({ "metric": metric, "value": value, "timestamp": timestamp, "tags": tags });
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/timeseries/write",
+            Some(body),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Query a time series within an optional `[start, end]` window.
+    pub async fn ts_query(
+        &self,
+        metric: &str,
+        start: Option<i64>,
+        end: Option<i64>,
+        limit: Option<usize>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let body =
+            serde_json::json!({ "metric": metric, "start": start, "end": end, "limit": limit });
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/timeseries/query",
+            Some(body),
+        )
+        .await
+    }
+
+    // ---- Graph --------------------------------------------------------------
+
+    /// Get the full graph (nodes + edges).
+    pub async fn graph_data(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/graph/data", None)
+            .await
+    }
+
+    /// Create a graph node.
+    pub async fn create_node(
+        &self,
+        label: &str,
+        properties: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        let body = serde_json::json!({ "label": label, "properties": properties });
+        self.send_json(reqwest::Method::POST, "/api/v1/graph/nodes", Some(body))
+            .await
+    }
+
+    /// Update a graph node (omit `label`/`properties` to leave unchanged).
+    pub async fn update_node(
+        &self,
+        node_id: &str,
+        label: Option<&str>,
+        properties: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let body = serde_json::json!({ "label": label, "properties": properties });
+        self.send_json(
+            reqwest::Method::PUT,
+            &format!("/api/v1/graph/nodes/{}", node_id),
+            Some(body),
+        )
+        .await
+    }
+
+    /// Delete a graph node (and its edges).
+    pub async fn delete_node(&self, node_id: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/graph/nodes/{}", node_id),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Create a graph edge.
+    pub async fn create_edge(
+        &self,
+        source: &str,
+        target: &str,
+        relationship: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        let body =
+            serde_json::json!({ "source": source, "target": target, "relationship": relationship });
+        self.send_json(reqwest::Method::POST, "/api/v1/graph/edges", Some(body))
+            .await
+    }
+
+    /// Update a graph edge's relationship.
+    pub async fn update_edge(
+        &self,
+        edge_id: &str,
+        relationship: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        let body = serde_json::json!({ "relationship": relationship });
+        self.send_json(
+            reqwest::Method::PUT,
+            &format!("/api/v1/graph/edges/{}", edge_id),
+            Some(body),
+        )
+        .await
+    }
+
+    /// Delete a graph edge.
+    pub async fn delete_edge(&self, edge_id: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/graph/edges/{}", edge_id),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    // ---- Schema / health / metrics ------------------------------------------
+
+    /// Server health.
+    pub async fn health(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/health", None).await
+    }
+
+    /// List tables in the current database.
+    pub async fn list_tables(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/tables", None)
+            .await
+    }
+
+    /// Get a table's schema and row count.
+    pub async fn get_table(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/tables/{}", name),
+            None,
+        )
+        .await
+    }
+
+    /// Current server metrics snapshot.
+    pub async fn metrics(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/metrics", None)
+            .await
+    }
+}
+
+// =============================================================================
 // Value Conversion
 // =============================================================================
 
