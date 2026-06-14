@@ -1,0 +1,19 @@
+[package]
+name = "aegis-object"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Object / blob store (S3-style buckets, content-addressed ETags) for Aegis database"
+readme = "README.md"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+parking_lot = { workspace = true }

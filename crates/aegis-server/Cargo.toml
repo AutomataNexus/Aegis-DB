@@ -33,6 +33,7 @@ aegis-vector = { workspace = true }
 aegis-fulltext = { workspace = true }
 aegis-geo = { workspace = true }
 aegis-columnar = { workspace = true }
+aegis-object = { workspace = true }
 tokio = { workspace = true }
 # Stream adapter for the channel-subscription SSE endpoint
 futures-util = "0.3"

@@ -20,6 +20,7 @@ use aegis_columnar::ColumnarEngine;
 use aegis_document::{Document, DocumentEngine};
 use aegis_fulltext::FullTextEngine;
 use aegis_geo::GeoEngine;
+use aegis_object::ObjectEngine;
 use aegis_query::executor::{ExecutionContext, ExecutionContextSnapshot};
 use aegis_query::planner::{PlanNode, PlannerSchema};
 use aegis_query::{Executor, Parser, Planner, Statement};
@@ -61,6 +62,7 @@ pub struct AppState {
     pub fulltext_engine: Arc<FullTextEngine>,
     pub geo_engine: Arc<GeoEngine>,
     pub columnar_engine: Arc<ColumnarEngine>,
+    pub object_engine: Arc<ObjectEngine>,
     pub rbac: Arc<RbacManager>,
     pub rate_limiter: Arc<RateLimiter>,
     pub login_rate_limiter: Arc<RateLimiter>,
@@ -257,6 +259,27 @@ impl AppState {
             }
         }
 
+        // Object / blob store. Same snapshot-on-shutdown / rebuild-on-load
+        // persistence as the other index engines.
+        let object_engine = Arc::new(ObjectEngine::new());
+        if let Some(ref dir) = data_dir {
+            let opath = dir.join("objects.ncb");
+            if opath.exists() {
+                if let Ok(bytes) = crate::compress::read_blob_file(&opath) {
+                    match serde_json::from_slice::<aegis_object::EngineSnapshot>(&bytes) {
+                        Ok(snap) => {
+                            object_engine.load_snapshot(snap);
+                            tracing::info!(
+                                "Loaded object buckets: {:?}",
+                                object_engine.list_buckets()
+                            );
+                        }
+                        Err(e) => tracing::error!("Failed to decode {:?}: {}", opath, e),
+                    }
+                }
+            }
+        }
+
         // Initialize metrics history with some data points
         let metrics_history = Arc::new(RwLock::new(VecDeque::new()));
 
@@ -372,6 +395,7 @@ impl AppState {
             fulltext_engine,
             geo_engine,
             columnar_engine,
+            object_engine,
             rbac: Arc::new(RbacManager::with_data_dir(data_dir.clone())),
             rate_limiter,
             login_rate_limiter,
@@ -468,6 +492,16 @@ impl AppState {
         }
     }
 
+    /// Persist all object buckets to disk (snapshot blob frame). Called on
+    /// graceful shutdown.
+    pub fn flush_objects(&self) {
+        let Some(ref dir) = self.data_dir else { return };
+        let opath = dir.join("objects.ncb");
+        if let Err(e) = crate::compress::write_blob_json(&opath, &self.object_engine.snapshot()) {
+            tracing::error!("Failed to persist object buckets to {:?}: {}", opath, e);
+        }
+    }
+
     /// Flush a single document collection to disk (if data_dir is configured).
     pub fn flush_collection(&self, collection_name: &str) {
         let Some(ref dir) = self.data_dir else { return };
@@ -534,11 +568,12 @@ impl AppState {
         let json = serde_json::to_vec(&entries)?;
         std::fs::write(&kv_path, crate::compress::encode_blob(&json))?;
 
-        // Vector + full-text + geo + columnar snapshots (rebuilt on load).
+        // Vector + full-text + geo + columnar + object snapshots (rebuilt on load).
         self.flush_vectors();
         self.flush_fulltext();
         self.flush_geo();
         self.flush_columnar();
+        self.flush_objects();
 
         let docs_dir = dir.join("documents");
         std::fs::create_dir_all(&docs_dir)?;

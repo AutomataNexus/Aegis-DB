@@ -7,6 +7,15 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Object / blob paradigm** (`aegis-object`, the 11th engine) — S3-style
+  **buckets** of binary objects, each with a content type, a content-addressed
+  **ETag** (FNV-1a fingerprint), and JSON metadata. put / get / head / delete and
+  lexical prefix listing (range scan + limit), with snapshot persistence. REST
+  under `/api/v1/objects/*` — the raw request body is the object content; object
+  keys may contain slashes (`*key` wildcard); `GET` returns bytes with the stored
+  `Content-Type` + `ETag` (or `?meta=1` for metadata). Wrapped in the
+  Rust/JS/Python SDKs (binary-safe put/get). Validated by round-trip + ETag,
+  overwrite, prefix-listing, and snapshot tests.
 - **Columnar / OLAP paradigm** (`aegis-columnar`, the 10th engine) — named tables
   with a typed schema (`int`/`float`/`text`/`bool`), stored **column-major** (one
   vector per column) so analytical queries touch only the referenced columns.

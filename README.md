@@ -11,14 +11,14 @@
 <p align="center">
   <a href="https://crates.io/crates/aegis-server"><img src="https://img.shields.io/crates/v/aegis-server.svg" alt="crates.io"></a>
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/tests-822%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-829%20passing-brightgreen.svg" alt="Tests">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.85%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/paradigms-10-blueviolet.svg" alt="10 Data Paradigms">
+  <img src="https://img.shields.io/badge/paradigms-11-blueviolet.svg" alt="11 Data Paradigms">
   <img src="https://img.shields.io/badge/LOC-69K%2B-informational.svg" alt="Lines of Code">
 </p>
 
 <p align="center">
-  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming &bull; Vector &bull; Full-Text &bull; Geospatial &bull; Columnar<br>
+  SQL &bull; Documents &bull; Key-Value &bull; Time Series &bull; Graph &bull; Streaming &bull; Vector &bull; Full-Text &bull; Geospatial &bull; Columnar &bull; Objects<br>
   All in a single binary. No external dependencies.
 </p>
 
@@ -82,6 +82,7 @@ Aegis-DB replaces all of them with a single binary:
 | Full-text search | Elasticsearch | `POST /api/v1/fts/indexes/:name/search` (BM25) |
 | Geospatial | PostGIS | `POST /api/v1/geo/collections/:name/nearest` (Haversine) |
 | Columnar / OLAP | DuckDB / ClickHouse | `POST /api/v1/columnar/tables/:name/aggregate` |
+| Object / blob store | S3 / MinIO | `PUT /api/v1/objects/buckets/:bucket/object/*key` |
 
 One binary. One port. One backup. One set of credentials.
 
@@ -126,7 +127,7 @@ Full results: [benchmarks/RESULTS.md](benchmarks/RESULTS.md)
 
 ## Features
 
-### Ten Data Models, One API
+### Eleven Data Models, One API
 
 ```bash
 # SQL
@@ -168,6 +169,10 @@ curl -X POST localhost:9090/api/v1/geo/collections/cities/nearest \
 # Columnar / OLAP (group-by aggregation)
 curl -X POST localhost:9090/api/v1/columnar/tables/sales/aggregate \
   -d '{"group_by": ["region"], "aggregates": [{"func": "sum", "column": "amount"}]}'
+
+# Object / blob store (S3-style; raw body is the content)
+curl -X PUT localhost:9090/api/v1/objects/buckets/media/object/img/logo.png \
+  -H "Content-Type: image/png" --data-binary @logo.png
 ```
 
 ### Multi-Database Isolation
@@ -482,6 +487,8 @@ aegis-server (REST API - Axum)
 | `/api/v1/geo/collections/:name/radius` · `/bbox` · `/nearest` | POST | Radius / bbox / nearest-k (Haversine) |
 | `/api/v1/columnar/tables` · `/:name` | GET/POST · GET/DELETE | Columnar tables (list/create/stats/drop) |
 | `/api/v1/columnar/tables/:name/rows` · `/scan` · `/aggregate` | POST | Insert rows / scan / group-by aggregation |
+| `/api/v1/objects/buckets` · `/:bucket` | GET/POST · GET/DELETE | Object buckets (list/create/stats/drop) |
+| `/api/v1/objects/buckets/:bucket/object/*key` | PUT/GET/DELETE | Store / fetch (raw bytes) / delete an object |
 | `/api/v1/auth/login` | POST | Authenticate |
 | `/api/v1/admin/*` | GET | Admin/monitoring endpoints |
 | `/api/v1/import/sql` | POST | Bulk import CSV/JSON data |

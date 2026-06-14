@@ -770,6 +770,81 @@ impl AegisClient {
             .columnar_distinct(table, column)
             .await
     }
+
+    // ---- Object / blob store ------------------------------------------------
+
+    /// Create an object bucket.
+    pub async fn create_bucket(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.create_bucket(name).await
+    }
+
+    /// List object buckets.
+    pub async fn list_buckets(&self) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.list_buckets().await
+    }
+
+    /// Bucket stats (object count + total bytes).
+    pub async fn bucket_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.pool.get().await?.bucket_stats(name).await
+    }
+
+    /// Drop an object bucket.
+    pub async fn drop_bucket(&self, name: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.drop_bucket(name).await
+    }
+
+    /// List object metadata in a bucket (optional prefix + limit).
+    pub async fn list_objects(
+        &self,
+        bucket: &str,
+        prefix: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .list_objects(bucket, prefix, limit)
+            .await
+    }
+
+    /// Store (or replace) an object from raw bytes; returns its metadata.
+    pub async fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: Vec<u8>,
+        content_type: Option<&str>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.pool
+            .get()
+            .await?
+            .put_object(bucket, key, data, content_type, metadata)
+            .await
+    }
+
+    /// Fetch an object's raw bytes, or `None` if absent.
+    pub async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<Vec<u8>>, ClientError> {
+        self.pool.get().await?.get_object(bucket, key).await
+    }
+
+    /// Fetch an object's metadata only, or `None` if absent.
+    pub async fn head_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        self.pool.get().await?.head_object(bucket, key).await
+    }
+
+    /// Delete an object.
+    pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<(), ClientError> {
+        self.pool.get().await?.delete_object(bucket, key).await
+    }
 }
 
 #[cfg(test)]

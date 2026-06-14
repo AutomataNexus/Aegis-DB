@@ -1063,3 +1063,103 @@ class AegisClient:
         return await self._request(
             "GET", f"/api/v1/columnar/tables/{table}/distinct/{column}"
         )
+
+    # =========================================================================
+    # Object / Blob Store (S3-style buckets + content-addressed ETags)
+    # =========================================================================
+
+    async def create_bucket(self, name: str) -> Dict[str, Any]:
+        """Create an object bucket."""
+        return await self._request("POST", "/api/v1/objects/buckets", {"name": name})
+
+    async def list_buckets(self) -> List[str]:
+        """List object buckets."""
+        data = await self._request("GET", "/api/v1/objects/buckets")
+        return data.get("buckets", [])
+
+    async def bucket_stats(self, name: str) -> Dict[str, Any]:
+        """Bucket stats (object count + total bytes)."""
+        return await self._request("GET", f"/api/v1/objects/buckets/{name}")
+
+    async def drop_bucket(self, name: str) -> bool:
+        """Drop an object bucket."""
+        try:
+            await self._request("DELETE", f"/api/v1/objects/buckets/{name}")
+            return True
+        except QueryError:
+            return False
+
+    async def list_objects(
+        self,
+        bucket: str,
+        prefix: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """List object metadata in a bucket (optional key prefix + limit)."""
+        params = []
+        if prefix:
+            params.append(f"prefix={prefix}")
+        if limit is not None:
+            params.append(f"limit={limit}")
+        qs = ("?" + "&".join(params)) if params else ""
+        return await self._request(
+            "GET", f"/api/v1/objects/buckets/{bucket}/objects{qs}"
+        )
+
+    async def put_object(
+        self,
+        bucket: str,
+        key: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Store (or replace) an object from raw bytes; returns its metadata."""
+        if self._session is None:
+            raise ConnectionError("Client not connected. Call connect() first.")
+        headers = {"Content-Type": content_type}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        if self.config.api_key:
+            headers["X-API-Key"] = self.config.api_key
+        if metadata is not None:
+            headers["X-Aegis-Meta"] = json.dumps(metadata)
+        url = f"{self.config.url}/api/v1/objects/buckets/{bucket}/object/{key}"
+        async with self._session.put(url, headers=headers, data=data) as resp:
+            return await self._handle_response(resp)
+
+    async def get_object(self, bucket: str, key: str) -> Optional[bytes]:
+        """Fetch an object's raw bytes, or ``None`` if absent."""
+        if self._session is None:
+            raise ConnectionError("Client not connected. Call connect() first.")
+        headers = {}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        if self.config.api_key:
+            headers["X-API-Key"] = self.config.api_key
+        url = f"{self.config.url}/api/v1/objects/buckets/{bucket}/object/{key}"
+        async with self._session.get(url, headers=headers) as resp:
+            if resp.status == 404:
+                return None
+            if resp.status >= 400:
+                raise QueryError(f"get_object failed ({resp.status})")
+            return await resp.read()
+
+    async def head_object(self, bucket: str, key: str) -> Optional[Dict[str, Any]]:
+        """Fetch an object's metadata only, or ``None`` if absent."""
+        try:
+            return await self._request(
+                "GET", f"/api/v1/objects/buckets/{bucket}/object/{key}?meta=1"
+            )
+        except QueryError:
+            return None
+
+    async def delete_object(self, bucket: str, key: str) -> bool:
+        """Delete an object."""
+        try:
+            await self._request(
+                "DELETE", f"/api/v1/objects/buckets/{bucket}/object/{key}"
+            )
+            return True
+        except QueryError:
+            return False

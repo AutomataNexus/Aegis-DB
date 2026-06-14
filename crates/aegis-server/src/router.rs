@@ -402,6 +402,29 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    // Object / blob store routes (require auth). Object keys may contain
+    // slashes, so item operations use a `*key` wildcard.
+    let object_routes = Router::new()
+        .route(
+            "/buckets",
+            get(handlers::list_buckets).post(handlers::create_bucket),
+        )
+        .route(
+            "/buckets/:bucket",
+            get(handlers::get_bucket).delete(handlers::drop_bucket),
+        )
+        .route("/buckets/:bucket/objects", get(handlers::list_objects))
+        .route(
+            "/buckets/:bucket/object/*key",
+            put(handlers::put_object)
+                .get(handlers::get_object)
+                .delete(handlers::delete_object),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_auth,
+        ));
+
     // Query builder routes (require auth)
     let query_routes = Router::new()
         .route("/execute", post(handlers::execute_builder_query))
@@ -574,6 +597,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1/fts", fts_routes)
         .nest("/api/v1/geo", geo_routes)
         .nest("/api/v1/columnar", columnar_routes)
+        .nest("/api/v1/objects", object_routes)
         .nest("/api/v1/query-builder", query_routes)
         .nest("/api/v1/updates", update_routes)
         .nest("/api/v1/compliance", compliance_routes)

@@ -1085,6 +1085,110 @@ export class AegisClient {
   }
 
   // ==========================================================================
+  // Object / Blob Store (S3-style buckets + content-addressed ETags)
+  // ==========================================================================
+
+  /** Create an object bucket. */
+  async createBucket(name: string): Promise<unknown> {
+    return await this.request('POST', '/api/v1/objects/buckets', { name });
+  }
+
+  /** List object buckets. */
+  async listBuckets(): Promise<string[]> {
+    const res = await this.request<{ buckets: string[] }>('GET', '/api/v1/objects/buckets');
+    return res.buckets ?? [];
+  }
+
+  /** Bucket stats (object count + total bytes). */
+  async bucketStats(name: string): Promise<unknown> {
+    return await this.request('GET', `/api/v1/objects/buckets/${name}`);
+  }
+
+  /** Drop an object bucket. */
+  async dropBucket(name: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/objects/buckets/${name}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** List object metadata in a bucket (optional key prefix + limit). */
+  async listObjects(
+    bucket: string,
+    options: { prefix?: string; limit?: number } = {}
+  ): Promise<{ objects: { key: string; size: number; content_type: string; etag: string }[]; count: number }> {
+    const q = new URLSearchParams();
+    if (options.prefix) q.set('prefix', options.prefix);
+    if (options.limit != null) q.set('limit', String(options.limit));
+    const qs = q.toString();
+    return await this.request(
+      'GET',
+      `/api/v1/objects/buckets/${bucket}/objects${qs ? `?${qs}` : ''}`
+    );
+  }
+
+  /** Build auth headers for the raw object endpoints. */
+  private objectHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const headers: Record<string, string> = { ...extra };
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+    if (this.config.apiKey) headers['X-API-Key'] = this.config.apiKey;
+    return headers;
+  }
+
+  /** Store (or replace) an object from raw bytes; returns its metadata. */
+  async putObject(
+    bucket: string,
+    key: string,
+    data: Uint8Array | ArrayBuffer,
+    options: { contentType?: string; metadata?: Record<string, unknown> } = {}
+  ): Promise<unknown> {
+    const headers = this.objectHeaders({
+      'Content-Type': options.contentType ?? 'application/octet-stream',
+    });
+    if (options.metadata) headers['X-Aegis-Meta'] = JSON.stringify(options.metadata);
+    const url = `${this.config.url}/api/v1/objects/buckets/${bucket}/object/${key}`;
+    const response = await fetch(url, { method: 'PUT', headers, body: data as BodyInit });
+    if (!response.ok) {
+      throw new QueryError(`putObject failed (${response.status}): ${await response.text()}`);
+    }
+    return await response.json();
+  }
+
+  /** Fetch an object's raw bytes, or `undefined` if absent. */
+  async getObject(bucket: string, key: string): Promise<Uint8Array | undefined> {
+    const url = `${this.config.url}/api/v1/objects/buckets/${bucket}/object/${key}`;
+    const response = await fetch(url, { headers: this.objectHeaders() });
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      throw new QueryError(`getObject failed (${response.status}): ${await response.text()}`);
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /** Fetch an object's metadata only, or `undefined` if absent. */
+  async headObject(bucket: string, key: string): Promise<unknown | undefined> {
+    const url = `${this.config.url}/api/v1/objects/buckets/${bucket}/object/${key}?meta=1`;
+    const response = await fetch(url, { headers: this.objectHeaders() });
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      throw new QueryError(`headObject failed (${response.status}): ${await response.text()}`);
+    }
+    return await response.json();
+  }
+
+  /** Delete an object. */
+  async deleteObject(bucket: string, key: string): Promise<boolean> {
+    try {
+      await this.request('DELETE', `/api/v1/objects/buckets/${bucket}/object/${key}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // ==========================================================================
   // Health and Metrics
   // ==========================================================================
 

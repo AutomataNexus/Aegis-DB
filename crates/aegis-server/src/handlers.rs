@@ -17,8 +17,9 @@ use aegis_document::{Document, DocumentId, Query as DocQuery, QueryResult as Doc
 use aegis_streaming::{event::EventData, ChannelId, Event, EventType as StreamEventType};
 use aegis_timeseries::{DataPoint, Metric, MetricType, Tags, TimeSeriesQuery};
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    body::Bytes,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -3956,6 +3957,200 @@ fn columnar_err(e: aegis_columnar::ColumnarError) -> (StatusCode, Json<serde_jso
         aegis_columnar::ColumnarError::TableNotFound(_) => StatusCode::NOT_FOUND,
         aegis_columnar::ColumnarError::TableExists(_) => StatusCode::CONFLICT,
         _ => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        Json(serde_json::json!({"success": false, "error": e.to_string()})),
+    )
+}
+
+// =============================================================================
+// Object / Blob Handlers (S3-style buckets + content-addressed ETags)
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateBucketRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ObjectListParams {
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ObjectGetParams {
+    /// When set (`?meta=1`), return JSON metadata instead of the object bytes.
+    #[serde(default)]
+    pub meta: Option<String>,
+}
+
+/// List buckets.
+pub async fn list_buckets(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({ "buckets": state.object_engine.list_buckets() }))
+}
+
+/// Create a bucket: `{ name }`.
+pub async fn create_bucket(
+    State(state): State<AppState>,
+    Json(req): Json<CreateBucketRequest>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log_write(&format!("Create bucket: {}", req.name), None);
+    match state.object_engine.create_bucket(req.name.clone()) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({"success": true, "name": req.name})),
+        ),
+        Err(e) => object_err(e),
+    }
+}
+
+/// Bucket stats (object count + total bytes).
+pub async fn get_bucket(
+    State(state): State<AppState>,
+    Path(bucket): Path<String>,
+) -> impl IntoResponse {
+    match state.object_engine.bucket_stats(&bucket) {
+        Some(stats) => (StatusCode::OK, Json(serde_json::json!(stats))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "bucket not found"})),
+        ),
+    }
+}
+
+/// Drop a bucket.
+pub async fn drop_bucket(
+    State(state): State<AppState>,
+    Path(bucket): Path<String>,
+) -> impl IntoResponse {
+    state
+        .activity
+        .log(ActivityType::Delete, &format!("Drop bucket: {}", bucket));
+    match state.object_engine.drop_bucket(&bucket) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
+        Err(e) => object_err(e),
+    }
+}
+
+/// List object metadata in a bucket (`?prefix=&limit=`).
+pub async fn list_objects(
+    State(state): State<AppState>,
+    Path(bucket): Path<String>,
+    Query(params): Query<ObjectListParams>,
+) -> impl IntoResponse {
+    match state
+        .object_engine
+        .list(&bucket, &params.prefix, params.limit)
+    {
+        Ok(objects) => {
+            let count = objects.len();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "objects": objects, "count": count })),
+            )
+                .into_response()
+        }
+        Err(e) => object_err(e).into_response(),
+    }
+}
+
+/// Store an object — the raw request body is the content. `Content-Type` sets
+/// the stored content type; the optional `X-Aegis-Meta` header (JSON) sets
+/// custom metadata.
+pub async fn put_object(
+    State(state): State<AppState>,
+    Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let metadata = headers
+        .get("x-aegis-meta")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::Value::Null);
+    match state
+        .object_engine
+        .put(&bucket, key, body.to_vec(), content_type, metadata)
+    {
+        Ok(meta) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "object": meta})),
+        )
+            .into_response(),
+        Err(e) => object_err(e).into_response(),
+    }
+}
+
+/// Fetch an object. Returns the raw bytes (with `Content-Type` + `ETag`), or —
+/// with `?meta=1` — the JSON metadata only.
+pub async fn get_object(
+    State(state): State<AppState>,
+    Path((bucket, key)): Path<(String, String)>,
+    Query(params): Query<ObjectGetParams>,
+) -> impl IntoResponse {
+    if params.meta.is_some() {
+        return match state.object_engine.head(&bucket, &key) {
+            Ok(Some(meta)) => (StatusCode::OK, Json(serde_json::json!(meta))).into_response(),
+            Ok(None) => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "object not found"})),
+            )
+                .into_response(),
+            Err(e) => object_err(e).into_response(),
+        };
+    }
+    match state.object_engine.get(&bucket, &key) {
+        Ok(Some((data, meta))) => {
+            let mut resp_headers = HeaderMap::new();
+            if let Ok(ct) = meta.content_type.parse() {
+                resp_headers.insert(axum::http::header::CONTENT_TYPE, ct);
+            }
+            if let Ok(tag) = format!("\"{}\"", meta.etag).parse() {
+                resp_headers.insert(axum::http::header::ETAG, tag);
+            }
+            (StatusCode::OK, resp_headers, data).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "object not found"})),
+        )
+            .into_response(),
+        Err(e) => object_err(e).into_response(),
+    }
+}
+
+/// Delete an object.
+pub async fn delete_object(
+    State(state): State<AppState>,
+    Path((bucket, key)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.object_engine.delete(&bucket, &key) {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"success": false, "error": "object not found"})),
+        )
+            .into_response(),
+        Err(e) => object_err(e).into_response(),
+    }
+}
+
+fn object_err(e: aegis_object::ObjectError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = match &e {
+        aegis_object::ObjectError::BucketNotFound(_)
+        | aegis_object::ObjectError::ObjectNotFound(_) => StatusCode::NOT_FOUND,
+        aegis_object::ObjectError::BucketExists(_) => StatusCode::CONFLICT,
+        aegis_object::ObjectError::InvalidBucketName(_) => StatusCode::BAD_REQUEST,
     };
     (
         status,

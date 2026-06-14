@@ -1426,6 +1426,192 @@ impl Connection {
         )
         .await
     }
+
+    // ---- Object / blob store --------------------------------------------
+
+    /// Create an object bucket.
+    pub async fn create_bucket(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::POST,
+            "/api/v1/objects/buckets",
+            Some(serde_json::json!({ "name": name })),
+        )
+        .await
+    }
+
+    /// List object buckets.
+    pub async fn list_buckets(&self) -> Result<serde_json::Value, ClientError> {
+        self.send_json(reqwest::Method::GET, "/api/v1/objects/buckets", None)
+            .await
+    }
+
+    /// Bucket stats (object count + total bytes).
+    pub async fn bucket_stats(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+        self.send_json(
+            reqwest::Method::GET,
+            &format!("/api/v1/objects/buckets/{}", name),
+            None,
+        )
+        .await
+    }
+
+    /// Drop an object bucket.
+    pub async fn drop_bucket(&self, name: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/objects/buckets/{}", name),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// List object metadata in a bucket (optional key prefix + limit).
+    pub async fn list_objects(
+        &self,
+        bucket: &str,
+        prefix: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut path = format!("/api/v1/objects/buckets/{}/objects", bucket);
+        let mut q: Vec<String> = Vec::new();
+        if let Some(p) = prefix {
+            q.push(format!("prefix={}", p));
+        }
+        if let Some(l) = limit {
+            q.push(format!("limit={}", l));
+        }
+        if !q.is_empty() {
+            path.push('?');
+            path.push_str(&q.join("&"));
+        }
+        self.send_json(reqwest::Method::GET, &path, None).await
+    }
+
+    /// Store (or replace) an object — the raw bytes are the content. Returns the
+    /// stored object's metadata (including its ETag).
+    pub async fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: Vec<u8>,
+        content_type: Option<&str>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let url = format!(
+            "{}/api/v1/objects/buckets/{}/object/{}",
+            self.base_url, bucket, key
+        );
+        let mut req = self
+            .add_auth(self.http_client.put(&url))
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                content_type.unwrap_or("application/octet-stream"),
+            )
+            .body(data);
+        if let Some(meta) = metadata {
+            req = req.header("X-Aegis-Meta", meta.to_string());
+        }
+        let response = req
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "put_object failed: {}",
+                response.status()
+            )));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))
+    }
+
+    /// Fetch an object's raw bytes, or `None` if absent.
+    pub async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<Vec<u8>>, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let url = format!(
+            "{}/api/v1/objects/buckets/{}/object/{}",
+            self.base_url, bucket, key
+        );
+        let response = self
+            .add_auth(self.http_client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "get_object failed: {}",
+                response.status()
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        Ok(Some(bytes.to_vec()))
+    }
+
+    /// Fetch an object's metadata only (HEAD), or `None` if absent.
+    pub async fn head_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        if !self.is_connected() {
+            return Err(ClientError::NotConnected);
+        }
+        self.mark_used();
+        let url = format!(
+            "{}/api/v1/objects/buckets/{}/object/{}?meta=1",
+            self.base_url, bucket, key
+        );
+        let response = self
+            .add_auth(self.http_client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ClientError::QueryFailed(format!(
+                "head_object failed: {}",
+                response.status()
+            )));
+        }
+        let value = response
+            .json()
+            .await
+            .map_err(|e| ClientError::QueryFailed(e.to_string()))?;
+        Ok(Some(value))
+    }
+
+    /// Delete an object.
+    pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/objects/buckets/{}/object/{}", bucket, key),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 // =============================================================================

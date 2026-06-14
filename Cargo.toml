@@ -20,6 +20,7 @@ members = [
     "crates/aegis-fulltext",
     "crates/aegis-geo",
     "crates/aegis-columnar",
+    "crates/aegis-object",
     "benchmarks",
 ]
 # WASM crates built separately with Trunk
@@ -131,6 +132,7 @@ aegis-vector = { version = "0.4.0", path = "crates/aegis-vector" }
 aegis-fulltext = { version = "0.4.0", path = "crates/aegis-fulltext" }
 aegis-geo = { version = "0.4.0", path = "crates/aegis-geo" }
 aegis-columnar = { version = "0.4.0", path = "crates/aegis-columnar" }
+aegis-object = { version = "0.4.0", path = "crates/aegis-object" }
 
 [profile.release]
 lto = "thin"
