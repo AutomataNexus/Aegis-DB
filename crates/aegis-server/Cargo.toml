@@ -25,11 +25,13 @@ aegis-query = { workspace = true }
 aegis-document = { workspace = true }
 aegis-timeseries = { workspace = true }
 aegis-streaming = { workspace = true }
-nexuscompress = { git = "https://github.com/AutomataNexus/NexusCompress.git", rev = "58989fc0d62548b45fcfac22d227b56879aee2d3" }
+nexuscompress = { git = "https://github.com/AutomataNexus/NexusCompress.git", tag = "v0.4.0" }
 aegis-updates = { workspace = true }
 aegis-vault = { workspace = true }
 aegis-shield = { workspace = true }
 tokio = { workspace = true }
+# Stream adapter for the channel-subscription SSE endpoint
+futures-util = "0.3"
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }

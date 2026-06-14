@@ -667,6 +667,58 @@ export class AegisClient {
   }
 
   // ==========================================================================
+  // Streaming (Server-Sent Events)
+  // ==========================================================================
+
+  /**
+   * Subscribe to a streaming channel as an async iterator of events (SSE).
+   * The channel is created on the server if it does not exist. Iteration ends
+   * when the response stream closes; `break` out of the loop to disconnect.
+   *
+   *   for await (const event of client.subscribeChannel('cdc')) { ... }
+   */
+  async *subscribeChannel(channel: string): AsyncGenerator<unknown> {
+    const url = `${this.config.url}/api/v1/streaming/channels/${channel}/sse`;
+    const headers: Record<string, string> = { Accept: 'text/event-stream' };
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+    if (this.config.apiKey) headers['X-API-Key'] = this.config.apiKey;
+
+    const response = await fetch(url, { headers });
+    if (!response.ok || !response.body) {
+      throw new QueryError(`Subscribe failed (${response.status})`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sep: number;
+        // SSE frames are separated by a blank line.
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('data:')) {
+              const data = line.slice(5).trim();
+              try {
+                yield JSON.parse(data);
+              } catch {
+                yield data;
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      reader.cancel().catch(() => undefined);
+    }
+  }
+
+  // ==========================================================================
   // Health and Metrics
   // ==========================================================================
 

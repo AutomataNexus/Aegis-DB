@@ -677,3 +677,36 @@ class AegisClient:
             return True
         except QueryError:
             return False
+
+    # =========================================================================
+    # Streaming (Server-Sent Events)
+    # =========================================================================
+
+    async def subscribe_channel(self, channel: str) -> AsyncIterator[Any]:
+        """Subscribe to a streaming channel as an async iterator of events (SSE).
+
+        The channel is created on the server if it does not exist. Iteration
+        ends when the response stream closes; ``break`` out of the loop to
+        disconnect::
+
+            async for event in client.subscribe_channel("cdc"):
+                ...
+        """
+        if self._session is None:
+            raise ConnectionError("Client not connected. Call connect() first.")
+
+        url = f"{self.config.url}/api/v1/streaming/channels/{channel}/sse"
+        headers = self._headers()
+        headers["Accept"] = "text/event-stream"
+
+        async with self._session.get(url, headers=headers) as resp:
+            if resp.status != 200:
+                raise QueryError(f"Subscribe failed ({resp.status})")
+            async for raw in resp.content:
+                line = raw.decode("utf-8").rstrip("\r\n")
+                if line.startswith("data:"):
+                    data = line[5:].strip()
+                    try:
+                        yield json.loads(data)
+                    except (ValueError, TypeError):
+                        yield data

@@ -7,6 +7,11 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **SSE streaming** for channels: `GET /api/v1/streaming/channels/:channel/sse`
+  opens a `text/event-stream` and pushes every published event in real time
+  (built on the engine's existing broadcast subscribe). Wrapped as async
+  iterators in the JS (`subscribeChannel`) and Python (`subscribe_channel`)
+  SDKs. Verified end-to-end.
 - **Cursor pagination** for document queries: `query`/`list` accept an opaque
   `cursor` and return `next_cursor` when a full page was returned. Offset-backed
   (stable with a `sort`). Threaded through all three SDK `query_documents` calls.
