@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://crates.io/crates/aegis-server"><img src="https://img.shields.io/crates/v/aegis-server.svg" alt="crates.io"></a>
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-BSL%201.1-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/tests-686%20passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-808%20passing-brightgreen.svg" alt="Tests">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.85%2B-orange.svg" alt="Rust"></a>
   <img src="https://img.shields.io/badge/paradigms-6-blueviolet.svg" alt="6 Data Paradigms">
   <img src="https://img.shields.io/badge/LOC-69K%2B-informational.svg" alt="Lines of Code">
@@ -85,32 +85,36 @@ One binary. One port. One backup. One set of credentials.
 
 ## Benchmarks
 
-Tested on Intel Core Ultra 9 275HX, 55GB RAM, Rust 1.92.0.
+Tested on Intel Core Ultra 9 275HX, 48GB RAM, Rust 1.95.0 (v0.3.1).
 
 ### Engine-Level (direct calls, no network)
 
 | Workload | Throughput |
 |----------|-----------|
-| SQL single-row insert | **223,000 rows/sec** |
-| SQL batch insert (1000 rows) | **195,000 rows/sec** |
-| KV read (64B values) | **12,350,000 ops/sec** |
-| KV write (64B values) | **3,970,000 ops/sec** |
-| Fund transfer (indexed UPDATE) | **758,000 TPS** |
+| SQL single-row insert | **204,000 rows/sec** |
+| KV read (64B values) | **10,800,000 ops/sec** |
+| KV write (64B values) | **4,100,000 ops/sec** |
+| KV delete | **27,600,000 ops/sec** |
+| Atomic fund transfer (read + verify + debit + credit) | **971,000 TPS** |
 
 ### vs SpacetimeDB
 
+The transfer benchmark does the **full transactional work** SpacetimeDB's reducer
+does — read both balances, verify funds, then debit + credit atomically under a
+single held write lock — a like-for-like comparison (both in-process, in-memory).
+
 | Workload | Aegis-DB | SpacetimeDB | |
 |----------|----------|-------------|---|
-| Fund transfer, 0% contention | **758,000 TPS** | 107,850 TPS | **7x faster** |
-| Fund transfer, high contention | **2,496,000 TPS** | 103,590 TPS | **24x faster** |
+| Fund transfer, 0% contention | **971,000 TPS** | 107,850 TPS | **9.0x faster** |
+| Fund transfer, high contention | **2,542,000 TPS** | 103,590 TPS | **24.5x faster** |
 
 ### HTTP API (50 concurrent connections)
 
 | Endpoint | Throughput | Avg Latency |
 |----------|-----------|-------------|
-| SQL Insert | 80,450 ops/sec | 620 μs |
-| SQL Read | 40,496 ops/sec | 1.2 ms |
-| KV Get | 203,117 ops/sec | 245 μs |
+| SQL Insert | 72,441 ops/sec | 689 μs |
+| SQL Read | 71,587 ops/sec | 697 μs |
+| KV Get | 76,523 ops/sec | 652 μs |
 
 Full results: [benchmarks/RESULTS.md](benchmarks/RESULTS.md)
 
@@ -177,6 +181,15 @@ curl -X POST localhost:9090/api/v1/query \
 ```
 
 Bind `$1, $2, ...` placeholders to prevent SQL injection and enable plan reuse.
+
+For repeated execution, **prepare once and bind many times** (parsed and planned
+once server-side):
+
+```bash
+# Returns { "statement_id": "stmt_1" }
+curl -X POST localhost:9090/api/v1/prepare -d '{"sql": "SELECT * FROM users WHERE id = $1"}'
+curl -X POST localhost:9090/api/v1/prepared/execute -d '{"statement_id": "stmt_1", "params": [42]}'
+```
 
 ### Distributed Clustering
 
@@ -273,6 +286,8 @@ Built-in support for HIPAA, GDPR, CCPA, SOC 2, and FERPA:
 ### Streaming
 
 - Pub/sub channels with persistent history
+- **Live SSE subscription** — `GET /api/v1/streaming/channels/:channel/sse` streams
+  events to a client in real time (`text/event-stream`)
 - **Consumer groups** with offset tracking and member management
 - **Acknowledgment enforcement** (Auto, AtLeastOnce, ExactlyOnce)
 - Event filtering, windowed aggregation, CDC
@@ -353,15 +368,22 @@ See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for full configuration options.
 
 ## SDKs
 
+The Rust, Python, and JavaScript/TypeScript clients all cover the full surface —
+SQL (positional `$1` params), prepared statements, KV (+ batch), document CRUD +
+cursor-paginated query (+ bulk), time series, graph (+ mutations), schema, health,
+metrics, and live SSE channel subscription.
+
 ### Python
 
 ```python
-from aegisdb import AegisClient
+from aegis_db import AegisClient
 
-client = AegisClient("http://localhost:9090")
-client.query("CREATE TABLE users (id INT, name TEXT)")
-client.query("INSERT INTO users VALUES (1, 'Alice')")
-results = client.query("SELECT * FROM users")
+async with AegisClient("http://localhost:9090") as client:
+    await client.query("INSERT INTO users VALUES ($1, $2)", [1, "Alice"])
+    sid = await client.prepare("SELECT * FROM users WHERE id = $1")
+    rows = await client.execute_prepared(sid, [1])
+    async for event in client.subscribe_channel("orders"):  # live SSE
+        ...
 ```
 
 ### JavaScript/TypeScript
@@ -369,10 +391,21 @@ results = client.query("SELECT * FROM users")
 ```javascript
 import { AegisClient } from '@aegis-db/client';
 
-const client = new AegisClient('http://localhost:9090');
-await client.query('CREATE TABLE users (id INT, name TEXT)');
-await client.query("INSERT INTO users VALUES (1, 'Alice')");
-const results = await client.query('SELECT * FROM users');
+const client = new AegisClient({ url: 'http://localhost:9090' });
+await client.connect();
+await client.query('INSERT INTO users VALUES ($1, $2)', [1, 'Alice']);
+for await (const event of client.subscribeChannel('orders')) { /* live SSE */ }
+```
+
+### Rust
+
+```rust
+use aegis_client::AegisClient;
+
+let client = AegisClient::connect("aegis://localhost:9090/default").await?;
+client.query_with_params("INSERT INTO users VALUES ($1, $2)", vec![1.into(), "Alice".into()]).await?;
+let id = client.prepare("SELECT * FROM users WHERE id = $1").await?;
+let rows = client.execute_prepared(&id, vec![1.into()]).await?;
 ```
 
 ---
@@ -394,7 +427,7 @@ aegis-server (REST API - Axum)
         └── aegis-common (shared types, errors)
 ```
 
-13 crates, ~60,000 lines of Rust code, 686 tests.
+16 crates, ~65,000 lines of Rust code, 808 tests.
 
 ---
 
@@ -403,17 +436,21 @@ aegis-server (REST API - Axum)
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/api/v1/query` | POST | Execute SQL queries |
+| `/api/v1/query` | POST | Execute SQL queries (positional `$1` params) |
+| `/api/v1/prepare` · `/prepared/execute` · `/prepared/:id` | POST/POST/DELETE | Prepared statements (prepare / execute / deallocate) |
 | `/api/v1/tables` | GET | List all tables |
 | `/api/v1/kv/keys` | GET/POST | List or set key-value pairs |
 | `/api/v1/kv/keys/:key` | GET/DELETE | Get or delete a key |
+| `/api/v1/kv/batch/{get,set,delete}` | POST | Batch KV operations |
 | `/api/v1/documents/collections` | GET/POST | List or create collections |
-| `/api/v1/documents/collections/:name/documents` | GET/POST | List or insert documents |
-| `/api/v1/timeseries/write` | POST | Write time series data |
-| `/api/v1/timeseries/query` | POST | Query time series data |
-| `/api/v1/graph/nodes` | POST | Create graph nodes |
-| `/api/v1/graph/edges` | POST | Create graph edges |
+| `/api/v1/documents/collections/:name/documents` | GET/POST/PUT/PATCH/DELETE | Document CRUD |
+| `/api/v1/documents/collections/:name/query` | POST | Query (filter, sort, `cursor`/`next_cursor` pagination) |
+| `/api/v1/documents/collections/:name/batch-{insert,delete}` | POST | Bulk document insert/delete |
+| `/api/v1/timeseries/write` · `/query` | POST | Write / query time series |
+| `/api/v1/graph/nodes` · `/nodes/:id` | POST/PUT/DELETE | Create / update / delete graph nodes |
+| `/api/v1/graph/edges` · `/edges/:id` | POST/PUT/DELETE | Create / update / delete graph edges |
 | `/api/v1/streaming/publish` | POST | Publish events |
+| `/api/v1/streaming/channels/:channel/sse` | GET | Live SSE event stream |
 | `/api/v1/auth/login` | POST | Authenticate |
 | `/api/v1/admin/*` | GET | Admin/monitoring endpoints |
 | `/api/v1/import/sql` | POST | Bulk import CSV/JSON data |
