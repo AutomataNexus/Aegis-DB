@@ -9,6 +9,13 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ### Added
 - (none yet)
 
+## [0.4.3]
+
+### Security
+- Bumped `reqwest` 0.11 → 0.12 across all crates, eliminating the transitive
+  `rustls` 0.21 / `rustls-webpki` 0.101 (name-constraint advisories). TLS stack
+  unified on `rustls` 0.23.
+
 ## [0.4.2]
 
 ### Security
