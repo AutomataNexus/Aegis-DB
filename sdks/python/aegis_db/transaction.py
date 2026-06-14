@@ -103,7 +103,7 @@ class Transaction:
     async def execute(
         self,
         sql: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Optional[List[Any]] = None,
     ) -> int:
         """Execute a statement within the transaction."""
         if not self._active:
@@ -115,7 +115,7 @@ class Transaction:
     async def query(
         self,
         sql: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Optional[List[Any]] = None,
     ) -> "QueryResult":
         """Execute a query within the transaction."""
         if not self._active:

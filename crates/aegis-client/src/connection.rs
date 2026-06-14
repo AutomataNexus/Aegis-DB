@@ -206,43 +206,7 @@ impl Connection {
             return Err(ClientError::QueryFailed(error.to_string()));
         }
 
-        // Parse the response into QueryResult
-        let data = response_body.get("data");
-
-        let columns: Vec<Column> = data
-            .and_then(|d| d.get("columns"))
-            .and_then(|c| c.as_array())
-            .map(|cols| {
-                cols.iter()
-                    .map(|c| {
-                        Column::new(
-                            c.as_str().unwrap_or(""),
-                            DataType::Text, // Default to text, server doesn't send types
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let column_names: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
-
-        let rows: Vec<Row> = data
-            .and_then(|d| d.get("rows"))
-            .and_then(|r| r.as_array())
-            .map(|rows| {
-                rows.iter()
-                    .map(|row| {
-                        let values: Vec<Value> = row
-                            .as_array()
-                            .map(|arr| arr.iter().map(json_to_value).collect())
-                            .unwrap_or_default();
-                        Row::new(column_names.clone(), values)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok(QueryResult::new(columns, rows))
+        Ok(parse_query_result(&response_body))
     }
 
     /// Execute a statement (INSERT, UPDATE, DELETE).
@@ -876,11 +840,94 @@ impl Connection {
         self.send_json(reqwest::Method::GET, "/api/v1/metrics", None)
             .await
     }
+
+    // ---- Prepared statements ------------------------------------------------
+
+    /// Prepare a statement (parsed and planned once server-side). Returns the
+    /// statement id to use with [`Connection::execute_prepared`].
+    pub async fn prepare(&self, sql: &str) -> Result<String, ClientError> {
+        let body = serde_json::json!({ "database": &self.config.database, "sql": sql });
+        let response = self
+            .send_json(reqwest::Method::POST, "/api/v1/prepare", Some(body))
+            .await?;
+        response
+            .get("statement_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| ClientError::QueryFailed("no statement_id in response".to_string()))
+    }
+
+    /// Execute a prepared statement with bound parameters.
+    pub async fn execute_prepared(
+        &self,
+        statement_id: &str,
+        params: Vec<Value>,
+    ) -> Result<QueryResult, ClientError> {
+        let body = serde_json::json!({
+            "statement_id": statement_id,
+            "params": params.iter().map(value_to_json).collect::<Vec<_>>(),
+        });
+        let response = self
+            .send_json(
+                reqwest::Method::POST,
+                "/api/v1/prepared/execute",
+                Some(body),
+            )
+            .await?;
+        Ok(parse_query_result(&response))
+    }
+
+    /// Deallocate a prepared statement.
+    pub async fn deallocate(&self, statement_id: &str) -> Result<(), ClientError> {
+        self.send_json(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/prepared/{}", statement_id),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 // =============================================================================
 // Value Conversion
 // =============================================================================
+
+/// Parse a `{ "data": { columns, rows } }` query response body into a typed
+/// [`QueryResult`]. Shared by `query` and `execute_prepared`.
+fn parse_query_result(response_body: &serde_json::Value) -> QueryResult {
+    let data = response_body.get("data");
+
+    let columns: Vec<Column> = data
+        .and_then(|d| d.get("columns"))
+        .and_then(|c| c.as_array())
+        .map(|cols| {
+            cols.iter()
+                .map(|c| Column::new(c.as_str().unwrap_or(""), DataType::Text))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let column_names: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
+
+    let rows: Vec<Row> = data
+        .and_then(|d| d.get("rows"))
+        .and_then(|r| r.as_array())
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    let values: Vec<Value> = row
+                        .as_array()
+                        .map(|arr| arr.iter().map(json_to_value).collect())
+                        .unwrap_or_default();
+                    Row::new(column_names.clone(), values)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    QueryResult::new(columns, rows)
+}
 
 fn value_to_json(value: &Value) -> serde_json::Value {
     match value {

@@ -164,6 +164,100 @@ pub async fn execute_query(
 }
 
 // =============================================================================
+// Prepared Statements
+// =============================================================================
+
+/// Prepare-statement request.
+#[derive(Debug, Deserialize)]
+pub struct PrepareRequest {
+    #[serde(default)]
+    pub database: Option<String>,
+    pub sql: String,
+}
+
+/// Execute-prepared request.
+#[derive(Debug, Deserialize)]
+pub struct ExecutePreparedRequest {
+    pub statement_id: String,
+    #[serde(default)]
+    pub params: Vec<serde_json::Value>,
+}
+
+/// Parse + plan a statement once and return an id for repeated execution.
+pub async fn prepare_statement(
+    State(state): State<AppState>,
+    Json(request): Json<PrepareRequest>,
+) -> impl IntoResponse {
+    match state
+        .query_engine
+        .prepare(&request.sql, request.database.as_deref())
+    {
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "success": true, "statement_id": id })),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "success": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+/// Execute a previously prepared statement with bound parameters.
+pub async fn execute_prepared(
+    State(state): State<AppState>,
+    Json(request): Json<ExecutePreparedRequest>,
+) -> impl IntoResponse {
+    let start = Instant::now();
+    let result = state
+        .query_engine
+        .execute_prepared(&request.statement_id, &request.params);
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(data) => {
+            state.record_request(duration_ms, true).await;
+            (
+                StatusCode::OK,
+                Json(QueryResponse {
+                    success: true,
+                    data: Some(data),
+                    error: None,
+                    execution_time_ms: duration_ms,
+                }),
+            )
+        }
+        Err(e) => {
+            state.record_request(duration_ms, false).await;
+            (
+                StatusCode::BAD_REQUEST,
+                Json(QueryResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e.to_string()),
+                    execution_time_ms: duration_ms,
+                }),
+            )
+        }
+    }
+}
+
+/// Deallocate a prepared statement by id.
+pub async fn deallocate_prepared(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if state.query_engine.deallocate(&id) {
+        (StatusCode::OK, Json(serde_json::json!({ "success": true })))
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "success": false, "error": "unknown prepared statement" })),
+        )
+    }
+}
+
+// =============================================================================
 // Table Endpoints
 // =============================================================================
 

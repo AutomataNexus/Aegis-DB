@@ -395,8 +395,8 @@ impl AppState {
         // uses compact JSON as a consistency checkpoint
         let kv_path = dir.join("kv_store.json");
         let entries = self.kv_store.list(None, usize::MAX);
-        let json = serde_json::to_string(&entries)?;
-        std::fs::write(&kv_path, json)?;
+        let json = serde_json::to_vec(&entries)?;
+        std::fs::write(&kv_path, crate::compress::encode_blob(&json))?;
 
         let docs_dir = dir.join("documents");
         std::fs::create_dir_all(&docs_dir)?;
@@ -1090,6 +1090,14 @@ impl Default for GraphStore {
 // Query Engine Wrapper
 // =============================================================================
 
+/// A server-side prepared statement: SQL parsed and planned once, then executed
+/// many times with different bound parameters (skips re-parse and re-plan).
+struct PreparedStatement {
+    plan: aegis_query::QueryPlan,
+    database: String,
+    is_mutation: bool,
+}
+
 /// Query engine for executing SQL statements.
 /// Maintains separate ExecutionContexts per database for multi-tenancy.
 /// Now with disk persistence support for crash recovery.
@@ -1106,6 +1114,10 @@ pub struct QueryEngine {
     wal: Option<Arc<aegis_storage::wal::WriteAheadLog>>,
     /// Query plan cache: SQL string -> planned QueryPlan (LRU-style, max 1024 entries)
     plan_cache: std::sync::RwLock<HashMap<String, aegis_query::QueryPlan>>,
+    /// Server-side prepared statements: id -> pre-planned statement.
+    prepared: std::sync::RwLock<HashMap<String, PreparedStatement>>,
+    /// Monotonic counter for prepared-statement ids.
+    prepared_counter: AtomicU64,
 }
 
 impl QueryEngine {
@@ -1125,6 +1137,8 @@ impl QueryEngine {
             peers: Arc::new(std::sync::RwLock::new(Vec::new())),
             wal: None,
             plan_cache: std::sync::RwLock::new(HashMap::new()),
+            prepared: std::sync::RwLock::new(HashMap::new()),
+            prepared_counter: AtomicU64::new(1),
         }
     }
 
@@ -1206,6 +1220,8 @@ impl QueryEngine {
             peers: Arc::new(std::sync::RwLock::new(Vec::new())),
             wal,
             plan_cache: std::sync::RwLock::new(HashMap::new()),
+            prepared: std::sync::RwLock::new(HashMap::new()),
+            prepared_counter: AtomicU64::new(1),
         }
     }
 
@@ -1673,6 +1689,91 @@ impl QueryEngine {
         })
     }
 
+    /// Prepare a statement: parse and plan it once, store it, and return an id
+    /// the client can execute repeatedly with different bound parameters.
+    /// Skips re-parsing and re-planning on every execution.
+    ///
+    /// Note: prepared-statement mutations are persisted locally but are **not**
+    /// peer-replicated — use the regular query path for replicated writes.
+    pub fn prepare(&self, sql: &str, database: Option<&str>) -> Result<String, QueryError> {
+        let db_name = database.unwrap_or("default").to_string();
+        let statements = self
+            .parser
+            .parse(sql)
+            .map_err(|e| QueryError::Parse(e.to_string()))?;
+        let statement = statements
+            .first()
+            .ok_or_else(|| QueryError::Parse("empty statement".to_string()))?;
+        let plan = self
+            .planner
+            .plan(statement)
+            .map_err(|e| QueryError::Plan(e.to_string()))?;
+        let is_mutation = Self::is_mutation(sql);
+        let id = format!(
+            "stmt_{}",
+            self.prepared_counter.fetch_add(1, Ordering::SeqCst)
+        );
+        self.prepared.write().unwrap().insert(
+            id.clone(),
+            PreparedStatement {
+                plan,
+                database: db_name,
+                is_mutation,
+            },
+        );
+        Ok(id)
+    }
+
+    /// Execute a previously prepared statement with bound parameters.
+    pub fn execute_prepared(
+        &self,
+        id: &str,
+        params: &[serde_json::Value],
+    ) -> Result<QueryResult, QueryError> {
+        let (plan, db_name, is_mutation) = {
+            let map = self.prepared.read().unwrap();
+            let prepared = map.get(id).ok_or_else(|| {
+                QueryError::Execute(format!("unknown prepared statement '{}'", id))
+            })?;
+            (
+                prepared.plan.clone(),
+                prepared.database.clone(),
+                prepared.is_mutation,
+            )
+        };
+
+        let values: Vec<aegis_common::Value> = params.iter().map(json_param_to_value).collect();
+        let context = self.get_or_create_context(&db_name);
+        let executor = Executor::with_shared_context(context);
+        let result = executor
+            .execute_with_params(&plan, &values)
+            .map_err(|e| QueryError::Execute(e.to_string()))?;
+
+        if is_mutation {
+            self.persist(&db_name);
+        }
+
+        Ok(QueryResult {
+            columns: result.columns,
+            rows: result
+                .rows
+                .into_iter()
+                .map(|r| r.values.into_iter().map(value_to_json).collect())
+                .collect(),
+            rows_affected: result.rows_affected,
+        })
+    }
+
+    /// Deallocate a prepared statement. Returns true if it existed.
+    pub fn deallocate(&self, id: &str) -> bool {
+        self.prepared.write().unwrap().remove(id).is_some()
+    }
+
+    /// Number of currently prepared statements.
+    pub fn prepared_count(&self) -> usize {
+        self.prepared.read().map(|m| m.len()).unwrap_or(0)
+    }
+
     pub fn list_tables(&self, database: Option<&str>) -> Vec<String> {
         let db_name = database.unwrap_or("default");
         let contexts = self.contexts.read().unwrap();
@@ -1998,6 +2099,41 @@ fn doc_value_to_json(value: &aegis_document::Value) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_prepared_statements() {
+        let eng = QueryEngine::new();
+        eng.execute("CREATE TABLE t (id INT, name VARCHAR(50))", None)
+            .unwrap();
+        eng.execute("INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'a')", None)
+            .unwrap();
+
+        let id = eng
+            .prepare("SELECT * FROM t WHERE name = $1", None)
+            .unwrap();
+        // Same prepared statement, different bound params.
+        assert_eq!(
+            eng.execute_prepared(&id, &[serde_json::json!("a")])
+                .unwrap()
+                .rows
+                .len(),
+            2
+        );
+        assert_eq!(
+            eng.execute_prepared(&id, &[serde_json::json!("b")])
+                .unwrap()
+                .rows
+                .len(),
+            1
+        );
+        assert_eq!(eng.prepared_count(), 1);
+
+        assert!(eng.deallocate(&id));
+        assert_eq!(eng.prepared_count(), 0);
+        assert!(eng
+            .execute_prepared(&id, &[serde_json::json!("a")])
+            .is_err());
+    }
 
     #[test]
     fn test_graph_update_and_delete_edge() {
