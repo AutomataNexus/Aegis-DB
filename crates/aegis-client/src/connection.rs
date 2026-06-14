@@ -628,7 +628,7 @@ impl Connection {
                 "/api/v1/documents/collections/{}/documents/{}",
                 collection, id
             ),
-            Some(document),
+            Some(serde_json::json!({ "document": document })),
         )
         .await
     }
@@ -646,7 +646,7 @@ impl Connection {
                 "/api/v1/documents/collections/{}/documents/{}",
                 collection, id
             ),
-            Some(partial),
+            Some(serde_json::json!({ "document": partial })),
         )
         .await
     }

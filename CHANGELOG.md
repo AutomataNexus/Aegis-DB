@@ -20,8 +20,16 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 - **SDK bulk helpers**: `kvBatchGet/Set/Delete` and `bulkInsert/bulkDelete`
   (JavaScript) and `kv_batch_get/set/delete`, `bulk_insert/bulk_delete`
   (Python).
+- **JavaScript & Python SDK parity**: document CRUD + query
+  (create/insert/get/update/patch/delete/query), time series
+  (register_metric / write / query), and graph mutations
+  (create/update/delete nodes and edges) — the JS request layer also gained
+  `PUT`/`PATCH` support.
 
 ### Fixed
+- **Document update/patch body**: the Rust client sent the bare document on
+  `PUT`/`PATCH` instead of `{ "document": ... }`, so updates were rejected.
+  Corrected to match the server contract (verified end-to-end).
 - **HTTP benchmark KV path**: the load test hit `/api/v1/kv/:key` (no such
   route) instead of `/api/v1/kv/keys/:key`, so KV requests 404'd and the 404s
   were counted as successful ops. Corrected the paths and added
