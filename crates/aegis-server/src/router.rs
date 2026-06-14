@@ -212,6 +212,7 @@ pub fn create_router(state: AppState) -> Router {
     let doc_routes = Router::new()
         .route("/collections", get(handlers::list_collections))
         .route("/collections", post(handlers::create_collection))
+        .route("/collections/:name", delete(handlers::delete_collection))
         .route(
             "/collections/:name/batch-insert",
             post(handlers::bulk_insert_documents),
