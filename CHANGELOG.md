@@ -35,14 +35,14 @@ All notable changes to Aegis-DB are documented here. This project adheres to
   (Python).
 - **General blob compression** (`compress::encode_blob`/`decode_blob`): KV /
   graph / relational snapshots persist through a self-describing NexusCompress
-  blob frame (best of ANS / zstd_max / identity), with a legacy raw-bytes
-  fallback. Round-trip + fallback test added.
+  `Record`-domain blob frame (adaptive per-field entropy), with a transparent
+  legacy raw-JSON fallback. Round-trip + fallback tests added.
 
 ### Changed
-- Bumped the **NexusCompress** dependency `0.1.1 → 0.3.1`. The new release adds
-  adaptive entropy selection and per-field pipeline choice (every domain now
-  beats zstd-3) plus the `zstd_max`/`brotli_max` codec aliases, so document,
-  time-series, and blob frames get higher ratios transparently — no API change.
+- Bumped the **NexusCompress** dependency to the **v0.4.0** tag (from a pre-0.2
+  git rev). v0.4.0 adds adaptive entropy selection and per-field pipeline choice
+  (every domain now beats zstd-3) plus the `zstd_max`/`brotli_max` codec aliases,
+  so document, time-series, and blob frames get higher ratios transparently.
   Frames remain self-describing/plan-driven.
 - **JavaScript & Python SDK parity**: document CRUD + query
   (create/insert/get/update/patch/delete/query), time series
