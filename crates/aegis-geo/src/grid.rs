@@ -82,10 +82,24 @@ impl GridIndex {
         max_lon: f64,
         mut visit: F,
     ) {
-        let (c_lat0, c_lon0) = self.cell_of(min_lat, min_lon);
-        let (c_lat1, c_lon1) = self.cell_of(max_lat, max_lon);
+        // Longitude wraps at the antimeridian: each scanned column is mapped into
+        // the canonical column window, so a query straddling ±180° still finds
+        // points on the far side. Latitude does not wrap. The longitude span is
+        // capped at a full globe so wrapped columns are never visited twice.
+        let total_cols = (360.0 / self.cell_deg).round() as i32;
+        let half = total_cols / 2;
+        let c_lat0 = (min_lat / self.cell_deg).floor() as i32;
+        let c_lat1 = (max_lat / self.cell_deg).floor() as i32;
+        let c_lon0 = (min_lon / self.cell_deg).floor() as i32;
+        let c_lon1 = (max_lon / self.cell_deg).floor() as i32;
+        let span = (c_lon1 - c_lon0).clamp(0, total_cols.max(1) - 1);
         for cl in c_lat0..=c_lat1 {
-            for cn in c_lon0..=c_lon1 {
+            for k in 0..=span {
+                let cn = if total_cols > 0 {
+                    (c_lon0 + k + half).rem_euclid(total_cols) - half
+                } else {
+                    c_lon0 + k
+                };
                 if let Some(bucket) = self.cells.get(&(cl, cn)) {
                     for &id in bucket {
                         if let Some((lat, lon)) = self.coord(id) {
@@ -117,8 +131,14 @@ impl GridIndex {
         out
     }
 
-    /// All point ids inside the bounding box.
+    /// All point ids inside the bounding box. A box with `min_lon > max_lon` is
+    /// treated as crossing the antimeridian and split into two halves.
     pub fn within_bbox(&self, min_lat: f64, min_lon: f64, max_lat: f64, max_lon: f64) -> Vec<u32> {
+        if min_lon > max_lon {
+            let mut out = self.within_bbox(min_lat, min_lon, max_lat, 180.0);
+            out.extend(self.within_bbox(min_lat, -180.0, max_lat, max_lon));
+            return out;
+        }
         let mut out = Vec::new();
         self.scan_cells(min_lat, min_lon, max_lat, max_lon, |id, plat, plon| {
             if plat >= min_lat && plat <= max_lat && plon >= min_lon && plon <= max_lon {

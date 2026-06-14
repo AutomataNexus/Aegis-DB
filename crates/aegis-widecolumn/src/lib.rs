@@ -201,4 +201,174 @@ mod tests {
         let r = restored.get("users", "user:1", &[]).unwrap().unwrap();
         assert_eq!(r.columns["name"], serde_json::json!("Alice"));
     }
+
+    // ---- Timestamp semantics -----------------------------------------------
+
+    #[test]
+    fn equal_timestamp_keeps_existing() {
+        let e = WideColumnEngine::new();
+        e.create_table("t").unwrap();
+        e.put("t", "r", cols(&[("v", serde_json::json!("a"))]), Some(100))
+            .unwrap();
+        // Equal timestamp must NOT overwrite (ties keep the existing value).
+        e.put("t", "r", cols(&[("v", serde_json::json!("b"))]), Some(100))
+            .unwrap();
+        assert_eq!(
+            e.get_cell("t", "r", "v").unwrap().unwrap(),
+            serde_json::json!("a")
+        );
+    }
+
+    #[test]
+    fn auto_clock_is_monotonic() {
+        let e = WideColumnEngine::new();
+        e.create_table("t").unwrap();
+        e.put("t", "r", cols(&[("a", serde_json::json!(1))]), None)
+            .unwrap();
+        e.put("t", "r", cols(&[("b", serde_json::json!(2))]), None)
+            .unwrap();
+        let row = e.get("t", "r", &[]).unwrap().unwrap();
+        let ta = row.timestamps["a"].as_u64().unwrap();
+        let tb = row.timestamps["b"].as_u64().unwrap();
+        assert!(tb > ta, "auto timestamps must increase: {ta} !< {tb}");
+        // A later auto write overwrites an earlier auto write on the same column.
+        e.put("t", "r", cols(&[("a", serde_json::json!(99))]), None)
+            .unwrap();
+        assert_eq!(
+            e.get_cell("t", "r", "a").unwrap().unwrap(),
+            serde_json::json!(99)
+        );
+    }
+
+    #[test]
+    fn snapshot_preserves_clock_so_appends_keep_winning() {
+        let e = WideColumnEngine::new();
+        e.create_table("t").unwrap();
+        // burn the clock a bit
+        for i in 0..5 {
+            e.put("t", "r", cols(&[("v", serde_json::json!(i))]), None)
+                .unwrap();
+        }
+        let last = e.get("t", "r", &[]).unwrap().unwrap().timestamps["v"]
+            .as_u64()
+            .unwrap();
+        let restored = WideColumnEngine::new();
+        restored.load_snapshot(
+            serde_json::from_slice(&serde_json::to_vec(&e.snapshot()).unwrap()).unwrap(),
+        );
+        // A fresh auto-write after restore must out-rank the persisted cell.
+        restored
+            .put("t", "r", cols(&[("v", serde_json::json!("new"))]), None)
+            .unwrap();
+        let row = restored.get("t", "r", &[]).unwrap().unwrap();
+        assert_eq!(row.columns["v"], serde_json::json!("new"));
+        assert!(row.timestamps["v"].as_u64().unwrap() > last);
+    }
+
+    // ---- Scan boundaries ----------------------------------------------------
+
+    #[test]
+    fn scan_range_is_start_inclusive_end_exclusive() {
+        let e = WideColumnEngine::new();
+        e.create_table("t").unwrap();
+        for k in ["a", "b", "c", "d"] {
+            e.put("t", k, cols(&[("v", serde_json::json!(k))]), None)
+                .unwrap();
+        }
+        let keys =
+            |rows: Vec<RowResult>| -> Vec<String> { rows.into_iter().map(|r| r.key).collect() };
+        // [b, d) => b, c
+        assert_eq!(
+            keys(e.scan("t", Some("b"), Some("d"), None, &[], None).unwrap()),
+            vec!["b", "c"]
+        );
+        // open start, end exclusive at "c" => a, b
+        assert_eq!(
+            keys(e.scan("t", None, Some("c"), None, &[], None).unwrap()),
+            vec!["a", "b"]
+        );
+        // open end from "c" => c, d
+        assert_eq!(
+            keys(e.scan("t", Some("c"), None, None, &[], None).unwrap()),
+            vec!["c", "d"]
+        );
+        // limit
+        assert_eq!(
+            e.scan("t", None, None, None, &[], Some(2)).unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
+    fn scan_projects_columns() {
+        let e = seeded();
+        let rows = e
+            .scan(
+                "users",
+                None,
+                None,
+                Some("user:"),
+                &["name".to_string()],
+                None,
+            )
+            .unwrap();
+        assert!(rows
+            .iter()
+            .all(|r| r.columns.len() == 1 && r.columns.contains_key("name")));
+    }
+
+    // ---- Projection / missing-cell handling ---------------------------------
+
+    #[test]
+    fn projection_omits_absent_columns() {
+        let e = seeded();
+        // user:2 has only 'name'; projecting name+age yields just name.
+        let r = e
+            .get("users", "user:2", &["name".to_string(), "age".to_string()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.columns.len(), 1);
+        assert!(r.columns.contains_key("name"));
+        assert!(!r.columns.contains_key("age"));
+    }
+
+    #[test]
+    fn missing_lookups_are_none_not_error() {
+        let e = seeded();
+        assert!(e.get("users", "ghost", &[]).unwrap().is_none());
+        assert!(e.get_cell("users", "ghost", "name").unwrap().is_none());
+        assert!(e.get_cell("users", "user:1", "ghost").unwrap().is_none());
+        assert!(!e.delete_cell("users", "user:1", "ghost").unwrap());
+        assert!(!e.delete_cell("users", "ghost", "name").unwrap());
+        assert!(!e.delete_row("users", "ghost").unwrap());
+    }
+
+    #[test]
+    fn table_lifecycle_and_cell_count() {
+        let e = WideColumnEngine::new();
+        e.create_table("a").unwrap();
+        e.create_table("b").unwrap();
+        assert_eq!(e.list_tables(), vec!["a", "b"]);
+        e.put(
+            "a",
+            "r1",
+            cols(&[("x", serde_json::json!(1)), ("y", serde_json::json!(2))]),
+            None,
+        )
+        .unwrap();
+        e.put("a", "r2", cols(&[("x", serde_json::json!(3))]), None)
+            .unwrap();
+        let s = e.table_stats("a").unwrap();
+        assert_eq!(s.rows, 2);
+        assert_eq!(s.cells, 3); // 2 + 1
+        e.drop_table("a").unwrap();
+        assert!(matches!(
+            e.drop_table("a"),
+            Err(WideColumnError::TableNotFound(_))
+        ));
+        assert!(matches!(
+            e.scan("a", None, None, None, &[], None),
+            Err(WideColumnError::TableNotFound(_))
+        ));
+    }
 }

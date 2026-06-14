@@ -66,6 +66,27 @@ All notable changes to Aegis-DB are documented here. This project adheres to
   upsert, batch, get/delete, search); wrapped in the Rust/JS/Python SDKs.
   HNSW validated by a recall@10 > 0.90 test against exact brute force.
 
+### Fixed
+- **Geospatial antimeridian wrap** — `within_radius` / `nearest` near ±180°
+  longitude (and bounding boxes with `min_lon > max_lon`) now correctly find
+  points on the far side of the date line instead of silently missing them.
+- **Geospatial `nearest` with a metadata filter** could return fewer than `k`
+  matches when matching features were sparse and far from the query; it now
+  expands the candidate set until `k` matches are found (or the collection is
+  exhausted).
+- **Columnar global aggregate over an empty result** now returns exactly one row
+  (with `count = 0`) instead of zero rows, matching SQL semantics for an
+  un-grouped aggregate.
+
+### Tests
+- Greatly expanded the new-paradigm unit suites (geo, columnar, object,
+  wide-column, ledger) from 35 to 84 tests — antimeridian wrap, sparse-filter
+  nearest-k, a 400-point globe-wide nearest-vs-brute-force, every columnar
+  comparison operator + null/empty-set handling, object bucket-name validation +
+  binary/empty payloads + content-addressed ETags, wide-column timestamp-tie /
+  monotonic-clock semantics + scan boundaries, and ledger tamper-detection across
+  every chained field (payload / timestamp / hash / prev_hash).
+
 ## [0.4.4]
 
 ### Changed

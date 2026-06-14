@@ -274,17 +274,26 @@ impl GeoEngine {
             .get(collection)
             .ok_or_else(|| GeoError::CollectionNotFound(collection.to_string()))?;
         let hf = has_filter(filter);
-        // Over-fetch when filtering so we can still return k matches.
-        let fetch = if hf { (k * 10).max(k) } else { k };
-        let hits = c
-            .grid
-            .nearest(lat, lon, fetch)
-            .into_iter()
-            .filter(|(node, _)| c.passes(*node, hf, filter))
-            .filter_map(|(node, d)| c.hit(node, d))
-            .take(k)
-            .collect();
-        Ok(hits)
+        // Without a filter, k nearest is exactly k. With a filter, matches may be
+        // sparse and far away, so expand the candidate set geometrically until we
+        // have k matches or the whole collection has been scanned — otherwise a
+        // fixed over-fetch can silently return fewer than k.
+        let live = c.grid.len();
+        let mut fetch = if hf { (k * 4).max(k) } else { k };
+        loop {
+            let hits: Vec<GeoHit> = c
+                .grid
+                .nearest(lat, lon, fetch)
+                .into_iter()
+                .filter(|(node, _)| c.passes(*node, hf, filter))
+                .filter_map(|(node, d)| c.hit(node, d))
+                .take(k)
+                .collect();
+            if !hf || hits.len() >= k || fetch >= live {
+                return Ok(hits);
+            }
+            fetch = (fetch * 4).min(live);
+        }
     }
 
     // ---- Persistence ----------------------------------------------------

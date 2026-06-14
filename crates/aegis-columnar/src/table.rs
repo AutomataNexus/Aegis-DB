@@ -158,6 +158,17 @@ impl Table {
         // group key string -> (key values, accumulators)
         let mut groups: HashMap<String, (Vec<Value>, Vec<Acc>)> = HashMap::new();
         let mut order: Vec<String> = Vec::new();
+
+        // A global aggregate (no group-by) always returns exactly one row, even
+        // over an empty set — SQL semantics, where `count(*)` is then 0. Seed the
+        // single global group so it survives a zero-row result.
+        if gcols.is_empty() {
+            order.push(String::new());
+            groups.insert(
+                String::new(),
+                (Vec::new(), aggs.iter().map(|_| Acc::default()).collect()),
+            );
+        }
         for &r in &rows {
             let key_vals: Vec<Value> = gcols
                 .iter()
