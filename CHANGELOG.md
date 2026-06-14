@@ -7,6 +7,11 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- (none yet)
+
+## [0.4.0] - 2026-06-14
+
+### Added
 - **SSE streaming** for channels: `GET /api/v1/streaming/channels/:channel/sse`
   opens a `text/event-stream` and pushes every published event in real time
   (built on the engine's existing broadcast subscribe). Wrapped as async
