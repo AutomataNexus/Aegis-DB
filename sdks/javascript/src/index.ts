@@ -554,16 +554,20 @@ export class AegisClient {
     }
   }
 
-  /** Query documents with a MongoDB-style filter. */
+  /**
+   * Query documents with a MongoDB-style filter. Pass `options.cursor` (from a
+   * prior response's `next_cursor`) for pagination; the response includes
+   * `next_cursor` when more pages exist.
+   */
   async queryDocuments(
     collection: string,
     filter: Record<string, unknown> = {},
-    options: { limit?: number; skip?: number } = {}
+    options: { limit?: number; skip?: number; cursor?: string } = {}
   ): Promise<unknown> {
     return await this.request(
       'POST',
       `/api/v1/documents/collections/${collection}/query`,
-      { filter, limit: options.limit, skip: options.skip }
+      { filter, limit: options.limit, skip: options.skip, cursor: options.cursor }
     );
   }
 

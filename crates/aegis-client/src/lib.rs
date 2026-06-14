@@ -222,18 +222,19 @@ impl AegisClient {
         self.pool.get().await?.delete_document(collection, id).await
     }
 
-    /// Query documents with a MongoDB-style filter.
+    /// Query documents with a MongoDB-style filter and optional cursor pagination.
     pub async fn query_documents(
         &self,
         collection: &str,
         filter: serde_json::Value,
         limit: Option<usize>,
         skip: Option<usize>,
+        cursor: Option<&str>,
     ) -> Result<serde_json::Value, ClientError> {
         self.pool
             .get()
             .await?
-            .query_documents(collection, filter, limit, skip)
+            .query_documents(collection, filter, limit, skip, cursor)
             .await
     }
 

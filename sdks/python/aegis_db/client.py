@@ -563,12 +563,17 @@ class AegisClient:
         filter: Optional[Dict[str, Any]] = None,
         limit: Optional[int] = None,
         skip: Optional[int] = None,
+        cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Query documents with a MongoDB-style filter."""
+        """Query documents with a MongoDB-style filter.
+
+        Pass ``cursor`` (from a prior response's ``next_cursor``) for pagination;
+        the response includes ``next_cursor`` when more pages exist.
+        """
         return await self._request(
             "POST",
             f"/api/v1/documents/collections/{collection}/query",
-            {"filter": filter or {}, "limit": limit, "skip": skip},
+            {"filter": filter or {}, "limit": limit, "skip": skip, "cursor": cursor},
         )
 
     # =========================================================================

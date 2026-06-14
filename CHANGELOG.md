@@ -7,6 +7,9 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Cursor pagination** for document queries: `query`/`list` accept an opaque
+  `cursor` and return `next_cursor` when a full page was returned. Offset-backed
+  (stable with a `sort`). Threaded through all three SDK `query_documents` calls.
 - **Prepared statements**: `POST /api/v1/prepare` (parse + plan once, returns an
   id), `POST /api/v1/prepared/execute` (bind params, skips re-parse/plan), and
   `DELETE /api/v1/prepared/:id`. Wrapped in all three SDKs
