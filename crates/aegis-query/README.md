@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust"></a>
-  <img src="https://img.shields.io/badge/crate-0.2.6-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/crate-0.3.1-green.svg" alt="Version">
   <a href="../../README.md"><img src="https://img.shields.io/badge/part%20of-AegisDB-teal.svg" alt="AegisDB"></a>
 </p>
 
@@ -24,7 +24,7 @@ SQL query engine for the Aegis Database Platform.
 - **Query Planner** - Cost-based optimization with rule transformations
 - **Query Executor** - Vectorized execution engine
 - **Index Support** - B-tree and Hash index selection for predicates
-- **Direct Execution API** - `execute_update_direct` and `execute_update_indexed_fn` for bypassing the full pipeline
+- **Direct Execution API** - `execute_update_indexed_fn` (closure-based indexed UPDATE) and `execute_transfer_indexed` (atomic read-verify-debit-credit) for bypassing the full pipeline
 - **Plan Cache** - LRU-based plan cache (1024 entries) for repeated query patterns
 - **Query Limits** - `QueryLimits` with configurable `max_result_rows` and `query_timeout_secs`
 - **Data Classification** - `DataClassification` enum for column-level sensitivity tagging
@@ -144,7 +144,7 @@ The planner applies several optimization rules:
 cargo test -p aegis-query
 ```
 
-**Test count:** 634 tests (workspace total)
+**Test count:** 808 tests (workspace total)
 
 ## License
 
