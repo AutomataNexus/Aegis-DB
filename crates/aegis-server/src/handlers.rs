@@ -2471,8 +2471,15 @@ pub async fn cluster_shutdown(State(state): State<AppState>) -> impl IntoRespons
         .activity
         .log_node("Graceful shutdown initiated via cluster API");
 
-    // Flush timeseries data
+    // Flush timeseries data + checkpoint the full store to disk so a restart comes
+    // back FULLY INTACT (KV + documents already persist per-mutation; this is the
+    // belt-and-suspenders consistency checkpoint for a graceful bounce).
     state.timeseries_engine.flush();
+    if let Err(e) = state.save_to_disk() {
+        state
+            .activity
+            .log_node(&format!("save_to_disk on shutdown failed: {e}"));
+    }
 
     // Give a brief moment for the response to be sent
     tokio::spawn(async {
