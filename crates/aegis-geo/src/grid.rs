@@ -37,10 +37,17 @@ impl GridIndex {
 
     #[inline]
     fn cell_of(&self, lat: f64, lon: f64) -> (i32, i32) {
-        (
-            (lat / self.cell_deg).floor() as i32,
-            (lon / self.cell_deg).floor() as i32,
-        )
+        // Canonicalize the longitude column into the window the scan visits, so a
+        // point at lon == 180.0 lands in the same cell as -180.0 (the same
+        // meridian) rather than an out-of-window column that scans never reach.
+        let total = (360.0 / self.cell_deg).round() as i32;
+        let lon_raw = (lon / self.cell_deg).floor() as i32;
+        let lon_cell = if total > 0 {
+            (lon_raw + total / 2).rem_euclid(total) - total / 2
+        } else {
+            lon_raw
+        };
+        ((lat / self.cell_deg).floor() as i32, lon_cell)
     }
 
     pub fn coord(&self, id: u32) -> Option<(f64, f64)> {
@@ -114,7 +121,20 @@ impl GridIndex {
     /// All points within `radius_m` metres of `(lat, lon)`, as `(id, distance)`.
     pub fn within_radius(&self, lat: f64, lon: f64, radius_m: f64) -> Vec<(u32, f64)> {
         let dlat = radius_m / M_PER_DEG_LAT;
-        let dlon = radius_m / (M_PER_DEG_LAT * lat.to_radians().cos().abs().max(1e-9));
+        // The longitude half-width must be wide enough that the rectangular
+        // lat/lon scan band is a superset of the great-circle disk. Two effects:
+        // (1) the band is widest (smallest cos) at its edge nearest the pole, so
+        // size dlon from that extreme latitude, not the query latitude; (2) if the
+        // band reaches a pole, over-the-pole paths make *every* longitude reachable,
+        // so the band must span the whole globe.
+        let reaches_pole = (lat + dlat) >= 90.0 || (lat - dlat) <= -90.0;
+        let lat_extreme = (lat + dlat).abs().max((lat - dlat).abs()).min(90.0);
+        let cos_extreme = lat_extreme.to_radians().cos();
+        let dlon = if reaches_pole || cos_extreme < 1e-9 {
+            180.0
+        } else {
+            (radius_m / (M_PER_DEG_LAT * cos_extreme)).min(180.0)
+        };
         let mut out = Vec::new();
         self.scan_cells(
             lat - dlat,

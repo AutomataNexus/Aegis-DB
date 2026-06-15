@@ -226,6 +226,42 @@ mod tests {
         assert_eq!(ids, vec!["east", "west"]);
     }
 
+    #[test]
+    fn near_pole_query_finds_far_longitude_points() {
+        // Near a pole, points at very different longitudes are close via
+        // over-the-pole paths. The scan band must not miss them.
+        let e = GeoEngine::new();
+        e.create_collection("arctic").unwrap();
+        // All near the north pole but spread across longitudes.
+        e.upsert("arctic", "a", 89.5, 0.0, serde_json::Value::Null)
+            .unwrap();
+        e.upsert("arctic", "b", 89.5, 90.0, serde_json::Value::Null)
+            .unwrap();
+        e.upsert("arctic", "c", 89.5, 180.0, serde_json::Value::Null)
+            .unwrap();
+        e.upsert("arctic", "d", 89.5, -90.0, serde_json::Value::Null)
+            .unwrap();
+        e.upsert("arctic", "equator", 0.0, 0.0, serde_json::Value::Null)
+            .unwrap();
+        // Query at (89, -179): all four arctic points are within a few hundred km.
+        let hits = e
+            .within_radius("arctic", 89.0, -179.0, 400_000.0, &serde_json::Value::Null)
+            .unwrap();
+        let mut ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["a", "b", "c", "d"],
+            "near-pole radius missed far-longitude points"
+        );
+        // nearest-4 returns exactly the four arctic points (not the equator one).
+        let n = e
+            .nearest("arctic", 89.0, -179.0, 4, &serde_json::Value::Null)
+            .unwrap();
+        assert!(n.iter().all(|h| h.id != "equator"));
+        assert_eq!(n.len(), 4);
+    }
+
     // ---- nearest with a sparse filter (must still return k matches) ----------
 
     #[test]
@@ -406,15 +442,34 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             (s >> 33) as f64 / (1u64 << 31) as f64 // [0,1)
         };
-        let pts: Vec<(f64, f64)> = (0..400)
+        let mut pts: Vec<(f64, f64)> = (0..400)
             .map(|_| (next() * 180.0 - 90.0, next() * 360.0 - 180.0))
             .collect();
+        // Plus deliberate extremes: both poles and points on the ±180 meridian.
+        pts.extend([
+            (90.0, 0.0),
+            (-90.0, 0.0),
+            (89.7, 180.0),
+            (89.7, -180.0),
+            (88.0, 30.0),
+            (0.0, 180.0),
+            (0.0, -180.0),
+        ]);
         for (i, (lat, lon)) in pts.iter().enumerate() {
             e.upsert("pts", format!("p{i}"), *lat, *lon, serde_json::Value::Null)
                 .unwrap();
         }
         let z = &serde_json::Value::Null;
-        for q in [(0.0, 179.99), (89.0, -179.0), (-45.0, 0.0), (10.0, -179.5)] {
+        // Queries include both poles and the date line.
+        for q in [
+            (0.0, 179.99),
+            (89.0, -179.0),
+            (-45.0, 0.0),
+            (10.0, -179.5),
+            (89.9, 17.0),
+            (-89.5, -120.0),
+            (0.0, 180.0),
+        ] {
             let got: Vec<String> = e
                 .nearest("pts", q.0, q.1, 5, z)
                 .unwrap()

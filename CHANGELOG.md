@@ -77,15 +77,25 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 - **Columnar global aggregate over an empty result** now returns exactly one row
   (with `count = 0`) instead of zero rows, matching SQL semantics for an
   un-grouped aggregate.
+- **Geospatial near-pole queries** — `within_radius` / `nearest` near a pole now
+  find close points at far-apart longitudes (reachable via over-the-pole paths)
+  by widening the longitude scan band to the whole globe when the disk reaches a
+  pole, and a point at exactly `lon = 180.0` is no longer dropped (its grid cell
+  is canonicalized to the same meridian as `-180.0`).
 
 ### Tests
 - Greatly expanded the new-paradigm unit suites (geo, columnar, object,
-  wide-column, ledger) from 35 to 84 tests — antimeridian wrap, sparse-filter
-  nearest-k, a 400-point globe-wide nearest-vs-brute-force, every columnar
-  comparison operator + null/empty-set handling, object bucket-name validation +
+  wide-column, ledger) from 35 to 85 tests — antimeridian wrap, near-pole /
+  date-line correctness, sparse-filter nearest-k, a 400+-point globe-wide
+  nearest-vs-brute-force (incl. poles and ±180°), every columnar comparison
+  operator + null/empty-set handling, object bucket-name validation +
   binary/empty payloads + content-addressed ETags, wide-column timestamp-tie /
   monotonic-clock semantics + scan boundaries, and ledger tamper-detection across
   every chained field (payload / timestamp / hash / prev_hash).
+- Added an end-to-end integration test (`aegis-server/tests/paradigms.rs`) that
+  boots the real server binary and drives every new-paradigm HTTP endpoint —
+  happy paths, error status codes, auth enforcement, concurrent writes, and data
+  survival across a graceful restart.
 
 ## [0.4.4]
 
