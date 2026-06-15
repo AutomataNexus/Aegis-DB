@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/crate-0.4.4-green.svg" alt="Version">
+  <img src="https://img.shields.io/badge/crate-0.5.0-green.svg" alt="Version">
 </p>
 
 # aegis-widecolumn

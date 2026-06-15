@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-client"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "reqwest",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-columnar"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-common"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-db-vault"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "aes-gcm",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-document"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "aegis-storage",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-fulltext"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-geo"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-ledger"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-memory"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "criterion",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-monitoring"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "serde",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-object"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-query"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "aegis-memory",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-replication"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "aegis-storage",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-server"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-columnar",
  "aegis-common",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-shield"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "chrono",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-storage"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "aes-gcm",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-streaming"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "aegis-storage",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-timeseries"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "aegis-storage",
@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-updates"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-common",
  "chrono",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-vector"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "parking_lot",
  "rand 0.8.6",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-widecolumn"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "aegisdb-cli"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "aegis-client",
  "aegis-common",

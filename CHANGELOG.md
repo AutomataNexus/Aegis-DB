@@ -6,105 +6,25 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [0.5.0]
+
 ### Added
-- **Auto-create containers on first write** — writing to a collection / table /
-  bucket / index / ledger that does not exist now creates it on demand instead of
-  returning `not found`, matching how the SQL engine already auto-provisions
-  databases. Applies across documents, vector, full-text, geo, columnar, object,
-  wide-column, and ledger. Schemas are inferred where needed (columnar from the
-  first row's JSON types; vector dimension from the first vector, default cosine
-  metric). Reads on a missing container still error, and invalid inputs (bad
-  coordinate, invalid bucket name, empty write) are rejected without creating an
-  empty container.
-- **Ledger / append-only paradigm** (`aegis-ledger`, the 13th engine) — named
-  ledgers of immutable, **hash-chained** entries (QLDB-style audit logs). Each
-  entry's hash covers the previous entry's hash, so the log is tamper-evident:
-  any retroactive edit breaks every link after it and is caught by `verify`,
-  which walks the chain end to end and reports the first broken sequence.
-  Append-only (no entry update/delete), sequence + range reads, chain-tip hash in
-  stats, snapshot persistence (appends after a restore continue the chain). REST
-  under `/api/v1/ledger/*` (ledgers, entries, verify); wrapped in the
-  Rust/JS/Python SDKs. The chain hash is a fast 128-bit non-cryptographic digest
-  (detects corruption / naive tampering, not a forging adversary). Validated by
-  chaining, verification, and tamper-detection tests.
-- **Wide-column paradigm** (`aegis-widecolumn`, the 12th engine) — Cassandra /
-  Bigtable-style tables: rows keyed by a row key, each row a **sparse, dynamic**
-  set of columns (no fixed schema). Per-cell write timestamps with
-  **last-write-wins** conflict resolution, partial-update merges, ordered range /
-  prefix scans (with projection + limit), single-cell and whole-row deletes, and
-  snapshot persistence (including the logical clock). REST under
-  `/api/v1/widecolumn/*` (tables, rows, cells, scan); wrapped in the
-  Rust/JS/Python SDKs. Validated by LWW, sparse-column, and ordered-scan tests.
-- **Object / blob paradigm** (`aegis-object`, the 11th engine) — S3-style
-  **buckets** of binary objects, each with a content type, a content-addressed
-  **ETag** (FNV-1a fingerprint), and JSON metadata. put / get / head / delete and
-  lexical prefix listing (range scan + limit), with snapshot persistence. REST
-  under `/api/v1/objects/*` — the raw request body is the object content; object
-  keys may contain slashes (`*key` wildcard); `GET` returns bytes with the stored
-  `Content-Type` + `ETag` (or `?meta=1` for metadata). Wrapped in the
-  Rust/JS/Python SDKs (binary-safe put/get). Validated by round-trip + ETag,
-  overwrite, prefix-listing, and snapshot tests.
-- **Columnar / OLAP paradigm** (`aegis-columnar`, the 10th engine) — named tables
-  with a typed schema (`int`/`float`/`text`/`bool`), stored **column-major** (one
-  vector per column) so analytical queries touch only the referenced columns.
-  Predicate scans (`{column, op, value}` conditions, ANDed) with projection +
-  limit, group-by aggregation (`count`/`sum`/`min`/`max`/`avg`), distinct, and
-  snapshot persistence. REST under `/api/v1/columnar/*` (tables, rows, scan,
-  aggregate, distinct); wrapped in the Rust/JS/Python SDKs. Validated by global +
-  grouped aggregation and filtered range-predicate tests.
-- **Geospatial paradigm** (`aegis-geo`, the 9th engine) — named collections of
-  `{id, lat, lon, metadata}` features on a uniform grid spatial index, with
-  radius / bounding-box / nearest-k queries over great-circle (**Haversine**)
-  distance. Exact nearest-k (expanding-radius), exact-match metadata filtering,
-  and snapshot persistence (grid rebuilt on load). REST under `/api/v1/geo/*`
-  (collections, feature upsert/get/delete, radius/bbox/nearest); wrapped in the
-  Rust/JS/Python SDKs. Validated by Haversine-accuracy and nearest-k-vs-brute-force
-  tests.
-- **Full-text search paradigm** (`aegis-fulltext`, the 8th engine) — named
-  indexes of `{id, text, metadata}` documents with an inverted index and Okapi
-  **BM25** ranking (the model behind Elasticsearch/Lucene). Tokenizer with
-  stopword removal, exact deletes (no tombstones), exact-match metadata
-  filtering, snapshot persistence. REST under `/api/v1/fts/*` (indexes, document
-  upsert/get/delete, search); wrapped in the Rust/JS/Python SDKs. Validated by a
-  BM25 relevance-ranking test.
-- **Vector / KNN paradigm** (`aegis-vector`, the 7th engine) — dense-embedding
-  collections with approximate nearest-neighbor search backed by a from-scratch
-  **HNSW** index (cosine / squared-L2 / inner-product metrics), per-record JSON
-  metadata with exact-match filtering, soft deletes, and snapshot persistence
-  (rebuilt into HNSW on load). REST under `/api/v1/vector/*` (collections,
-  upsert, batch, get/delete, search); wrapped in the Rust/JS/Python SDKs.
-  HNSW validated by a recall@10 > 0.90 test against exact brute force.
+- Seven new data paradigms (13 total): vector/KNN (`/api/v1/vector`),
+  full-text/BM25 (`/api/v1/fts`), geospatial (`/api/v1/geo`), columnar/OLAP
+  (`/api/v1/columnar`), object/blob store (`/api/v1/objects`), wide-column
+  (`/api/v1/widecolumn`), and ledger/append-only (`/api/v1/ledger`). Each has
+  REST endpoints, Rust/JS/Python SDK methods, and snapshot persistence.
+- Auto-create on first write — collections, tables, buckets, indexes, and ledgers
+  are created on demand (schemas inferred where needed). Reads on a missing
+  container still error.
 
 ### Fixed
-- **Geospatial antimeridian wrap** — `within_radius` / `nearest` near ±180°
-  longitude (and bounding boxes with `min_lon > max_lon`) now correctly find
-  points on the far side of the date line instead of silently missing them.
-- **Geospatial `nearest` with a metadata filter** could return fewer than `k`
-  matches when matching features were sparse and far from the query; it now
-  expands the candidate set until `k` matches are found (or the collection is
-  exhausted).
-- **Columnar global aggregate over an empty result** now returns exactly one row
-  (with `count = 0`) instead of zero rows, matching SQL semantics for an
-  un-grouped aggregate.
-- **Geospatial near-pole queries** — `within_radius` / `nearest` near a pole now
-  find close points at far-apart longitudes (reachable via over-the-pole paths)
-  by widening the longitude scan band to the whole globe when the disk reaches a
-  pole, and a point at exactly `lon = 180.0` is no longer dropped (its grid cell
-  is canonicalized to the same meridian as `-180.0`).
-
-### Tests
-- Greatly expanded the new-paradigm unit suites (geo, columnar, object,
-  wide-column, ledger) from 35 to 85 tests — antimeridian wrap, near-pole /
-  date-line correctness, sparse-filter nearest-k, a 400+-point globe-wide
-  nearest-vs-brute-force (incl. poles and ±180°), every columnar comparison
-  operator + null/empty-set handling, object bucket-name validation +
-  binary/empty payloads + content-addressed ETags, wide-column timestamp-tie /
-  monotonic-clock semantics + scan boundaries, and ledger tamper-detection across
-  every chained field (payload / timestamp / hash / prev_hash).
-- Added an end-to-end integration test (`aegis-server/tests/paradigms.rs`) that
-  boots the real server binary and drives every new-paradigm HTTP endpoint —
-  happy paths, error status codes, auth enforcement, concurrent writes, and data
-  survival across a graceful restart.
+- Geospatial: correct results near the antimeridian and the poles, including
+  points at exactly ±180° longitude.
+- Geospatial: `nearest` with a metadata filter no longer returns fewer than `k`
+  matches.
+- Columnar: an un-grouped aggregate over an empty result returns one row
+  (`count = 0`).
 
 ## [0.4.4]
 
