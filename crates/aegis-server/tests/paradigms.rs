@@ -176,6 +176,7 @@ fn all_new_paradigms_operational_over_http() {
     object(&server.base, &api.token);
     widecolumn(&api);
     ledger(&api);
+    auto_create(&api);
 
     // ---- Persistence: graceful restart on the same data dir ----------------
     graceful_stop(server);
@@ -496,6 +497,69 @@ fn ledger(api: &Api) {
     let (_, v) = api.get("/api/v1/ledger/ledgers/audit/verify");
     assert_eq!(v["entries"], 43, "concurrent appends lost entries");
     assert_eq!(v["valid"], true, "concurrent appends corrupted the chain");
+}
+
+/// Writing to a never-created container must auto-create it (no 404) across the
+/// paradigms — the usability win, exercised end to end over HTTP.
+fn auto_create(api: &Api) {
+    // geo: upsert a feature into a collection that was never created
+    assert_eq!(
+        api.post(
+            "/api/v1/geo/collections/autogeo/features",
+            json!({"id":"p","lat":1.0,"lon":2.0})
+        )
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(api.get("/api/v1/geo/collections/autogeo").1["count"], 1);
+    // columnar: insert with inferred schema
+    assert_eq!(
+        api.post(
+            "/api/v1/columnar/tables/autocol/rows",
+            json!({"rows":[{"k":"a","n":5}]})
+        )
+        .1["inserted"],
+        1
+    );
+    assert_eq!(api.get("/api/v1/columnar/tables/autocol").1["rows"], 1);
+    // object: PUT into a never-created bucket
+    let put = Client::new()
+        .put(format!(
+            "{}/api/v1/objects/buckets/autobucket/object/k",
+            api.base
+        ))
+        .bearer_auth(&api.token)
+        .body("x")
+        .send()
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::OK);
+    assert_eq!(
+        api.get("/api/v1/objects/buckets/autobucket").1["objects"],
+        1
+    );
+    // widecolumn: put a row into a never-created table
+    assert_eq!(
+        api.put(
+            "/api/v1/widecolumn/tables/autowc/rows/r1",
+            json!({"columns":{"v":1}})
+        )
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(api.get("/api/v1/widecolumn/tables/autowc").1["rows"], 1);
+    // ledger: append to a never-created ledger
+    assert_eq!(
+        api.post(
+            "/api/v1/ledger/ledgers/autoledger/entries",
+            json!({"payload":{"x":1}})
+        )
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        api.get("/api/v1/ledger/ledgers/autoledger/verify").1["valid"],
+        true
+    );
 }
 
 /// After a graceful restart, all five engines must have reloaded their data.

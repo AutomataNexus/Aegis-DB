@@ -7,6 +7,15 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 ## [Unreleased]
 
 ### Added
+- **Auto-create containers on first write** — writing to a collection / table /
+  bucket / index / ledger that does not exist now creates it on demand instead of
+  returning `not found`, matching how the SQL engine already auto-provisions
+  databases. Applies across documents, vector, full-text, geo, columnar, object,
+  wide-column, and ledger. Schemas are inferred where needed (columnar from the
+  first row's JSON types; vector dimension from the first vector, default cosine
+  metric). Reads on a missing container still error, and invalid inputs (bad
+  coordinate, invalid bucket name, empty write) are rejected without creating an
+  empty container.
 - **Ledger / append-only paradigm** (`aegis-ledger`, the 13th engine) — named
   ledgers of immutable, **hash-chained** entries (QLDB-style audit logs). Each
   entry's hash covers the previous entry's hash, so the log is tamper-evident:

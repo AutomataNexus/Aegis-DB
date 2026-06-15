@@ -254,6 +254,9 @@ impl VectorEngine {
         })
     }
 
+    /// Upsert a vector. The collection is created on demand if it does not yet
+    /// exist, with its dimension inferred from the vector and the default cosine
+    /// metric.
     pub fn upsert(
         &self,
         collection: &str,
@@ -262,21 +265,55 @@ impl VectorEngine {
         metadata: serde_json::Value,
     ) -> Result<(), VectorError> {
         let mut cols = self.collections.write();
+        if !cols.contains_key(collection) {
+            if vector.is_empty() {
+                return Err(VectorError::InvalidDimension);
+            }
+            cols.insert(
+                collection.to_string(),
+                Collection::new(
+                    CollectionConfig {
+                        dim: vector.len(),
+                        metric: Metric::Cosine,
+                    },
+                    self.hnsw,
+                ),
+            );
+        }
         let c = cols
             .get_mut(collection)
-            .ok_or_else(|| VectorError::CollectionNotFound(collection.to_string()))?;
+            .expect("collection present after auto-create");
         c.upsert(id.into(), vector, metadata)
     }
 
+    /// Upsert many vectors. A missing collection is created on demand, with its
+    /// dimension inferred from the first record and the default cosine metric.
     pub fn upsert_many(
         &self,
         collection: &str,
         records: Vec<VectorRecord>,
     ) -> Result<usize, VectorError> {
         let mut cols = self.collections.write();
+        if !cols.contains_key(collection) {
+            match records.first().map(|r| r.vector.len()) {
+                Some(dim) if dim > 0 => {
+                    cols.insert(
+                        collection.to_string(),
+                        Collection::new(
+                            CollectionConfig {
+                                dim,
+                                metric: Metric::Cosine,
+                            },
+                            self.hnsw,
+                        ),
+                    );
+                }
+                _ => return Err(VectorError::CollectionNotFound(collection.to_string())),
+            }
+        }
         let c = cols
             .get_mut(collection)
-            .ok_or_else(|| VectorError::CollectionNotFound(collection.to_string()))?;
+            .expect("collection present after auto-create");
         let mut n = 0;
         for r in records {
             c.upsert(r.id, &r.vector, r.metadata)?;

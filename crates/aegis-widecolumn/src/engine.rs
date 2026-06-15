@@ -100,9 +100,8 @@ impl WideColumnEngine {
         }
         let ts = timestamp.unwrap_or_else(|| self.next_ts());
         let mut tables = self.tables.write();
-        let t = tables
-            .get_mut(table)
-            .ok_or_else(|| WideColumnError::TableNotFound(table.to_string()))?;
+        // Auto-create the table on first write.
+        let t = tables.entry(table.to_string()).or_default();
         let row = t.rows.entry(row_key.into()).or_default();
         for (col, value) in columns {
             match row.get(&col) {

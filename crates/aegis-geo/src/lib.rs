@@ -172,6 +172,22 @@ mod tests {
         assert_eq!(hits[0].id, "nyc");
     }
 
+    #[test]
+    fn upsert_auto_creates_collection() {
+        let e = GeoEngine::new();
+        // No create_collection — the first upsert makes the collection.
+        e.upsert("auto", "p", 1.0, 2.0, serde_json::Value::Null)
+            .unwrap();
+        assert_eq!(e.list_collections(), vec!["auto"]);
+        assert_eq!(e.collection_stats("auto").unwrap().count, 1);
+        // A bad coordinate must NOT leave an empty collection behind.
+        assert!(matches!(
+            e.upsert("never", "x", 200.0, 0.0, serde_json::Value::Null),
+            Err(GeoError::InvalidCoordinate)
+        ));
+        assert!(!e.collection_exists("never"));
+    }
+
     // ---- Antimeridian (±180° longitude wrap) --------------------------------
 
     fn pacific() -> GeoEngine {

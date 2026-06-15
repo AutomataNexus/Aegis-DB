@@ -160,8 +160,34 @@ impl DocumentEngine {
     // Document Operations
     // -------------------------------------------------------------------------
 
-    /// Insert a document into a collection.
+    /// Ensure a collection exists, creating an empty one on demand. Used so that
+    /// writes auto-create their collection instead of erroring.
+    fn ensure_collection(&self, name: &str) -> Result<(), EngineError> {
+        {
+            let collections = self
+                .collections
+                .read()
+                .expect("collections RwLock poisoned");
+            if collections.contains_key(name) {
+                return Ok(());
+            }
+        }
+        let mut collections = self
+            .collections
+            .write()
+            .expect("collections RwLock poisoned");
+        if !collections.contains_key(name) {
+            if collections.len() >= self.config.max_collections {
+                return Err(EngineError::TooManyCollections);
+            }
+            collections.insert(name.to_string(), Collection::new(name.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Insert a document into a collection (created on demand if missing).
     pub fn insert(&self, collection: &str, doc: Document) -> Result<DocumentId, EngineError> {
+        self.ensure_collection(collection)?;
         let collections = self
             .collections
             .read()
@@ -182,12 +208,13 @@ impl DocumentEngine {
         Ok(id)
     }
 
-    /// Insert multiple documents.
+    /// Insert multiple documents (collection created on demand if missing).
     pub fn insert_many(
         &self,
         collection: &str,
         docs: Vec<Document>,
     ) -> Result<Vec<DocumentId>, EngineError> {
+        self.ensure_collection(collection)?;
         let collections = self
             .collections
             .read()
@@ -477,6 +504,18 @@ mod tests {
 
         engine.drop_collection("users").unwrap();
         assert!(!engine.collection_exists("users"));
+    }
+
+    #[test]
+    fn test_insert_auto_creates_collection() {
+        let engine = DocumentEngine::new();
+        // No create_collection — the first insert makes the collection.
+        let mut doc = Document::with_id("d1");
+        doc.set("name", "Auto");
+        let id = engine.insert("auto", doc).unwrap();
+        assert!(engine.collection_exists("auto"));
+        let got = engine.get("auto", &id).unwrap().unwrap();
+        assert_eq!(got.get("name").and_then(|v| v.as_str()), Some("Auto"));
     }
 
     #[test]

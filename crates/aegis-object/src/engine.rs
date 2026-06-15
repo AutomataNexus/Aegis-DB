@@ -107,9 +107,16 @@ impl ObjectEngine {
     ) -> Result<ObjectMeta, ObjectError> {
         let key = key.into();
         let mut buckets = self.buckets.write();
+        // Auto-create the bucket on first write (its name must still be valid).
+        if !buckets.contains_key(bucket) {
+            if !valid_bucket_name(bucket) {
+                return Err(ObjectError::InvalidBucketName(bucket.to_string()));
+            }
+            buckets.insert(bucket.to_string(), Bucket::default());
+        }
         let b = buckets
             .get_mut(bucket)
-            .ok_or_else(|| ObjectError::BucketNotFound(bucket.to_string()))?;
+            .expect("bucket present after auto-create");
         let obj = StoredObject {
             etag: etag_of(&data),
             content_type: content_type.unwrap_or_else(|| DEFAULT_CONTENT_TYPE.to_string()),

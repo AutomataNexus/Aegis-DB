@@ -175,6 +175,9 @@ impl GeoEngine {
         })
     }
 
+    /// Upsert a feature. The collection is created on demand if it does not yet
+    /// exist (the coordinate is validated first, so a bad write never creates an
+    /// empty collection).
     pub fn upsert(
         &self,
         collection: &str,
@@ -183,10 +186,13 @@ impl GeoEngine {
         lon: f64,
         metadata: serde_json::Value,
     ) -> Result<(), GeoError> {
+        if !valid_coord(lat, lon) {
+            return Err(GeoError::InvalidCoordinate);
+        }
         let mut cols = self.collections.write();
         let c = cols
-            .get_mut(collection)
-            .ok_or_else(|| GeoError::CollectionNotFound(collection.to_string()))?;
+            .entry(collection.to_string())
+            .or_insert_with(|| Collection::new(self.cell_deg));
         c.upsert(id.into(), lat, lon, metadata)
     }
 

@@ -18,6 +18,19 @@ pub use types::{FtsDocument, FtsError, SearchHit};
 mod tests {
     use super::*;
 
+    #[test]
+    fn upsert_auto_creates_index() {
+        let e = FullTextEngine::new();
+        // No create_index — the first upsert makes the index.
+        e.upsert("auto", "d1", "hello world", serde_json::Value::Null)
+            .unwrap();
+        assert_eq!(e.list_indexes(), vec!["auto"]);
+        let hits = e
+            .search("auto", "hello", 10, &serde_json::Value::Null)
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
     fn engine_with_docs() -> FullTextEngine {
         let e = FullTextEngine::new();
         e.create_index("docs").unwrap();

@@ -202,6 +202,22 @@ mod tests {
         assert_eq!(r.columns["name"], serde_json::json!("Alice"));
     }
 
+    #[test]
+    fn put_auto_creates_table() {
+        let e = WideColumnEngine::new();
+        // No create_table — the first put makes the table.
+        e.put("auto", "r", cols(&[("v", serde_json::json!(1))]), None)
+            .unwrap();
+        assert_eq!(e.list_tables(), vec!["auto"]);
+        assert_eq!(e.table_stats("auto").unwrap().rows, 1);
+        // An empty write is still rejected (no implicit creation).
+        assert!(matches!(
+            e.put("never", "r", serde_json::Map::new(), None),
+            Err(WideColumnError::EmptyWrite)
+        ));
+        assert!(e.table_stats("never").is_none());
+    }
+
     // ---- Timestamp semantics -----------------------------------------------
 
     #[test]

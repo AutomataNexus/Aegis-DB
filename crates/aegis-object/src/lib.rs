@@ -125,8 +125,13 @@ mod tests {
             e.create_bucket("ok"),
             Err(ObjectError::BucketExists(_))
         ));
+        // Reads on a missing bucket still error (no implicit creation).
         assert!(matches!(
-            e.put("nope", "k", vec![], None, serde_json::Value::Null),
+            e.get("nope", "k"),
+            Err(ObjectError::BucketNotFound(_))
+        ));
+        assert!(matches!(
+            e.list("nope", "", None),
             Err(ObjectError::BucketNotFound(_))
         ));
     }
@@ -141,6 +146,22 @@ mod tests {
         assert_eq!(data, b"\x89PNG\x01");
         assert_eq!(meta.etag, etag_of(b"\x89PNG\x01"));
         assert_eq!(restored.bucket_stats("media").unwrap().objects, 3);
+    }
+
+    #[test]
+    fn put_auto_creates_bucket() {
+        let e = ObjectEngine::new();
+        // No create_bucket — the first put makes the bucket.
+        e.put("auto", "k", b"hi".to_vec(), None, serde_json::Value::Null)
+            .unwrap();
+        assert_eq!(e.list_buckets(), vec!["auto"]);
+        assert_eq!(e.get("auto", "k").unwrap().unwrap().0, b"hi");
+        // An invalid bucket name is still rejected (no implicit creation).
+        assert!(matches!(
+            e.put("BAD NAME", "k", vec![], None, serde_json::Value::Null),
+            Err(ObjectError::InvalidBucketName(_))
+        ));
+        assert!(e.bucket_stats("BAD NAME").is_none());
     }
 
     // ---- Bucket-name validation --------------------------------------------

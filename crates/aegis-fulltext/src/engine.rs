@@ -171,7 +171,8 @@ impl FullTextEngine {
         })
     }
 
-    /// Index (insert or replace) a document.
+    /// Index (insert or replace) a document. The index is created on demand if
+    /// it does not yet exist.
     pub fn upsert(
         &self,
         index: &str,
@@ -180,9 +181,7 @@ impl FullTextEngine {
         metadata: serde_json::Value,
     ) -> Result<(), FtsError> {
         let mut idx = self.indexes.write();
-        let i = idx
-            .get_mut(index)
-            .ok_or_else(|| FtsError::IndexNotFound(index.to_string()))?;
+        let i = idx.entry(index.to_string()).or_default();
         i.upsert(id.into(), text.into(), metadata);
         Ok(())
     }

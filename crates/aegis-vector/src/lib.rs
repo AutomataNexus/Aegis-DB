@@ -29,6 +29,23 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn upsert_auto_creates_collection() {
+        let e = VectorEngine::new();
+        // No create_collection — dimension is inferred from the first vector,
+        // metric defaults to cosine.
+        e.upsert("auto", "v1", &[0.1, 0.2, 0.3], serde_json::Value::Null)
+            .unwrap();
+        let stats = e.collection_stats("auto").unwrap();
+        assert_eq!(stats.dim, 3);
+        assert_eq!(stats.metric, Metric::Cosine);
+        assert_eq!(stats.count, 1);
+        // A subsequent vector of the wrong dimension is still rejected.
+        assert!(e
+            .upsert("auto", "v2", &[0.1, 0.2], serde_json::Value::Null)
+            .is_err());
+    }
+
     /// Exact KNN by linear scan (ground truth).
     fn brute_force(data: &[Vec<f32>], q: &[f32], k: usize, metric: Metric) -> Vec<usize> {
         let mut scored: Vec<(usize, f32)> = data

@@ -197,6 +197,39 @@ mod tests {
         assert_eq!(rows[0].values[0], Value::Float(450.0));
     }
 
+    #[test]
+    fn insert_auto_creates_table_with_inferred_schema() {
+        let e = ColumnarEngine::new();
+        // No create_table — the schema is inferred from the first rows.
+        let n = e
+            .insert_many(
+                "auto",
+                &[
+                    serde_json::json!({"region":"east","amount":10.5,"qty":2,"active":true}),
+                    serde_json::json!({"region":"west","amount":20.0,"qty":3,"active":false}),
+                ],
+            )
+            .unwrap();
+        assert_eq!(n, 2);
+        let stats = e.table_stats("auto").unwrap();
+        assert_eq!(stats.rows, 2);
+        // Inferred types: text / float / int / bool.
+        let ty = |name: &str| stats.columns.iter().find(|c| c.name == name).unwrap().ty;
+        assert_eq!(ty("region"), ColumnType::Text);
+        assert_eq!(ty("amount"), ColumnType::Float);
+        assert_eq!(ty("qty"), ColumnType::Int);
+        assert_eq!(ty("active"), ColumnType::Bool);
+        // The inferred table is immediately queryable.
+        let g = e
+            .aggregate("auto", &[], &[agg(AggFunc::Sum, "amount")], &[])
+            .unwrap();
+        assert_eq!(g[0].values[0], Value::Float(30.5));
+        // Single-row insert also auto-creates.
+        e.insert("solo", serde_json::json!({"x": 1}).as_object().unwrap())
+            .unwrap();
+        assert_eq!(e.table_stats("solo").unwrap().rows, 1);
+    }
+
     // ---- Comparison operators ----------------------------------------------
 
     #[test]

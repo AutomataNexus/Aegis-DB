@@ -196,6 +196,20 @@ Each application gets its own isolated database:
 
 Different apps, different schemas, same server. Databases are auto-provisioned on first query.
 
+### Auto-Created Containers
+
+You never have to create a container before writing to it. The first write to a
+collection, table, bucket, index, or ledger creates it on demand — across
+documents, vector, full-text, geo, columnar, object, wide-column, and ledger
+(schemas are inferred where needed). Reads on something that doesn't exist still
+return a clear error, so typos aren't masked.
+
+```bash
+# No setup — this single call both creates the ledger and appends to it
+curl -X POST localhost:9090/api/v1/ledger/ledgers/audit/entries \
+  -d '{"payload": {"event": "login"}}'
+```
+
 ### Transactions
 
 ```sql

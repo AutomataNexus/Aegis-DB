@@ -100,9 +100,8 @@ impl LedgerEngine {
     ) -> Result<LedgerEntry, LedgerError> {
         let ts = timestamp.unwrap_or_else(|| self.next_ts());
         let mut ledgers = self.ledgers.write();
-        let l = ledgers
-            .get_mut(ledger)
-            .ok_or_else(|| LedgerError::LedgerNotFound(ledger.to_string()))?;
+        // Auto-create the ledger on first append.
+        let l = ledgers.entry(ledger.to_string()).or_default();
         let seq = l.entries.len() as u64;
         let prev_hash = l.tip().to_string();
         let hash = chain_hash(&prev_hash, seq, ts, &payload);

@@ -2,10 +2,30 @@
 //! and group-by aggregation, plus snapshot persistence.
 
 use crate::table::Table;
-use crate::types::{AggSpec, ColumnDef, ColumnarError, Condition, GroupRow};
+use crate::types::{AggSpec, ColumnDef, ColumnType, ColumnarError, Condition, GroupRow};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Infer a table schema from a JSON row, used when a table is auto-created on
+/// first insert. Booleans → `bool`, integers → `int`, other numbers → `float`,
+/// everything else (strings, and null/array/object as a fallback) → `text`.
+fn infer_schema(row: &serde_json::Map<String, serde_json::Value>) -> Vec<ColumnDef> {
+    row.iter()
+        .map(|(name, value)| {
+            let ty = match value {
+                serde_json::Value::Bool(_) => ColumnType::Bool,
+                serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => ColumnType::Int,
+                serde_json::Value::Number(_) => ColumnType::Float,
+                _ => ColumnType::Text,
+            };
+            ColumnDef {
+                name: name.clone(),
+                ty,
+            }
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TableStats {
@@ -71,30 +91,53 @@ impl ColumnarEngine {
         })
     }
 
-    /// Append a single row (JSON object) to a table.
+    /// Append a single row (JSON object) to a table. If the table does not yet
+    /// exist it is created on demand, with its schema inferred from the row's
+    /// JSON value types (`int` / `float` / `bool` / `text`).
     pub fn insert(
         &self,
         table: &str,
         row: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<(), ColumnarError> {
         let mut tables = self.tables.write();
+        if !tables.contains_key(table) {
+            let schema = infer_schema(row);
+            if schema.is_empty() {
+                return Err(ColumnarError::EmptySchema);
+            }
+            tables.insert(table.to_string(), Table::new(schema)?);
+        }
         let t = tables
             .get_mut(table)
-            .ok_or_else(|| ColumnarError::TableNotFound(table.to_string()))?;
+            .expect("table present after auto-create");
         t.insert_row(row)
     }
 
     /// Append many rows; returns the number inserted. Stops at the first bad
-    /// row (rows before it are kept).
+    /// row (rows before it are kept). A missing table is created on demand with
+    /// its schema inferred from the first row.
     pub fn insert_many(
         &self,
         table: &str,
         rows: &[serde_json::Value],
     ) -> Result<usize, ColumnarError> {
         let mut tables = self.tables.write();
+        if !tables.contains_key(table) {
+            let first = rows.first().and_then(|r| r.as_object());
+            match first {
+                Some(obj) => {
+                    let schema = infer_schema(obj);
+                    if schema.is_empty() {
+                        return Err(ColumnarError::EmptySchema);
+                    }
+                    tables.insert(table.to_string(), Table::new(schema)?);
+                }
+                None => return Err(ColumnarError::TableNotFound(table.to_string())),
+            }
+        }
         let t = tables
             .get_mut(table)
-            .ok_or_else(|| ColumnarError::TableNotFound(table.to_string()))?;
+            .expect("table present after auto-create");
         let mut n = 0;
         for row in rows {
             let obj = row.as_object().ok_or(ColumnarError::TypeMismatch)?;

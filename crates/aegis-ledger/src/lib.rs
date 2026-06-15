@@ -101,10 +101,10 @@ mod tests {
             e.create_ledger("l"),
             Err(LedgerError::LedgerExists(_))
         ));
-        assert!(matches!(
-            e.append("nope", serde_json::json!({}), None),
-            Err(LedgerError::LedgerNotFound(_))
-        ));
+        // Appending to a never-created ledger auto-creates it.
+        e.append("fresh", serde_json::json!({"x": 1}), None)
+            .unwrap();
+        assert_eq!(e.ledger_stats("fresh").unwrap().entries, 1);
         assert!(e.get("l", 99).unwrap().is_none());
     }
 
@@ -122,6 +122,19 @@ mod tests {
             .unwrap();
         assert_eq!(e3.seq, 3);
         assert!(restored.verify("audit").unwrap().valid);
+    }
+
+    #[test]
+    fn append_auto_creates_ledger() {
+        let e = LedgerEngine::new();
+        // No create_ledger call — the first append makes the ledger.
+        let entry = e
+            .append("auto", serde_json::json!({"hi": 1}), None)
+            .unwrap();
+        assert_eq!(entry.seq, 0);
+        assert_eq!(entry.prev_hash, GENESIS_HASH);
+        assert_eq!(e.list_ledgers(), vec!["auto"]);
+        assert!(e.verify("auto").unwrap().valid);
     }
 
     // ---- Empty / isolation / lifecycle -------------------------------------
@@ -173,10 +186,7 @@ mod tests {
             e.drop_ledger("a"),
             Err(LedgerError::LedgerNotFound(_))
         ));
-        assert!(matches!(
-            e.append("a", serde_json::json!({}), None),
-            Err(LedgerError::LedgerNotFound(_))
-        ));
+        // Reads on a missing ledger still error (no implicit creation).
         assert!(matches!(e.verify("a"), Err(LedgerError::LedgerNotFound(_))));
         assert!(matches!(e.get("a", 0), Err(LedgerError::LedgerNotFound(_))));
     }
