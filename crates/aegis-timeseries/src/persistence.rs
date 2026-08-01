@@ -96,15 +96,22 @@ impl PersistenceManager {
 
     /// Save state to disk using atomic write (write to temp, then rename).
     pub fn save(&self, state: &PersistedState) -> Result<(), PersistenceError> {
-        let encoded = bincode::serialize(state)
-            .map_err(|e| PersistenceError::SerializationError(e.to_string()))?;
-
         let temp_path = self.temp_file();
         let data_path = self.data_file();
 
-        // Write to temp file first
-        std::fs::write(&temp_path, &encoded)
-            .map_err(|e| PersistenceError::IoError(e.to_string()))?;
+        // Stream the encoding straight to the temp file rather than building a full
+        // in-memory `Vec<u8>` first. For a multi-GB timeseries that intermediate
+        // buffer — on top of the flush-time clone — was the memory spike that
+        // OOM-killed the server on every 30s save.
+        {
+            let file = std::fs::File::create(&temp_path)
+                .map_err(|e| PersistenceError::IoError(e.to_string()))?;
+            let mut writer = std::io::BufWriter::new(file);
+            bincode::serialize_into(&mut writer, state)
+                .map_err(|e| PersistenceError::SerializationError(e.to_string()))?;
+            std::io::Write::flush(&mut writer)
+                .map_err(|e| PersistenceError::IoError(e.to_string()))?;
+        }
 
         // Atomic rename
         std::fs::rename(&temp_path, &data_path)

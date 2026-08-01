@@ -245,11 +245,56 @@ async fn main() {
     let state_for_save = state_for_shutdown.clone();
     if args.data_dir.is_some() {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            // 120s (was 30s): each checkpoint clones the timeseries for the flush, a
+            // transient memory spike; a calmer cadence keeps that under the cgroup cap.
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(120));
             loop {
                 interval.tick().await;
                 if let Err(e) = state_for_save.save_to_disk() {
                     tracing::error!("Failed to save data: {}", e);
+                }
+                // Return the flush clone's freed pages to the OS so RSS settles back to
+                // the resident working set between checkpoints instead of ratcheting up.
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    libc::malloc_trim(0);
+                }
+            }
+        });
+    }
+
+    // Periodic timeseries retention — prune the resident series map to
+    // `retention_days` so it can't grow unbounded into the memory cap. The
+    // machinery existed but was never applied (that was the OOM root cause).
+    if args.data_dir.is_some() {
+        let state_for_retention = state_for_shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                // Keep 7 days of raw metrics resident (the Console shows recent trends;
+                // older history lives in the on-disk backups). Decoupled from the
+                // 30-day backup retention so trimming RAM doesn't shrink backups.
+                const TS_RETENTION_DAYS: i64 = 7;
+                let cutoff = chrono::Utc::now() - chrono::Duration::days(TS_RETENTION_DAYS);
+                let (blocks, series) = state_for_retention
+                    .timeseries_engine
+                    .enforce_retention(cutoff);
+                if blocks > 0 || series > 0 {
+                    let _ = state_for_retention.save_to_disk();
+                    // Return the pruned pages to the OS (glibc otherwise parks them in
+                    // its arenas and RSS wouldn't drop after the prune).
+                    #[cfg(target_os = "linux")]
+                    unsafe {
+                        libc::malloc_trim(0);
+                    }
+                    tracing::info!(
+                        "Timeseries retention ({}d): dropped {} blocks, removed {} empty series",
+                        TS_RETENTION_DAYS,
+                        blocks,
+                        series
+                    );
                 }
             }
         });

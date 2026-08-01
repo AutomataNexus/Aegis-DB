@@ -50,6 +50,7 @@ uuid = { workspace = true }
 thiserror = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { workspace = true }
+libc = "0.2"
 # LDAP authentication
 ldap3 = "0.11"
 # OAuth2 HTTP requests and webhook notifications

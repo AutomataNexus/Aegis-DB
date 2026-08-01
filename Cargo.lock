@@ -228,6 +228,7 @@ dependencies = [
  "hex",
  "hmac",
  "ldap3",
+ "libc",
  "nexuscompress",
  "openssl-sys",
  "parking_lot",

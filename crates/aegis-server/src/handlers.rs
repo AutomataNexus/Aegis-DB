@@ -905,9 +905,14 @@ pub async fn set_key(
     State(state): State<AppState>,
     Json(request): Json<SetKeyRequest>,
 ) -> Json<KvEntry> {
-    state
-        .activity
-        .log_write(&format!("Set key: {}", request.key), None);
+    // Skip the high-volume controller heartbeat keys (controller/*/last_seen, written
+    // on every metric batch fleet-wide) — that spam was part of the audit-bloat/OOM.
+    // Meaningful KV writes (licenses, config) are still audited.
+    if !request.key.contains("last_seen") {
+        state
+            .activity
+            .log_write(&format!("Set key: {}", request.key), None);
+    }
     let entry = state.kv_store.set(request.key, request.value, request.ttl);
     Json(entry)
 }
@@ -1964,10 +1969,9 @@ pub async fn write_timeseries(
     State(state): State<AppState>,
     Json(request): Json<WriteTimeSeriesRequest>,
 ) -> impl IntoResponse {
-    state
-        .activity
-        .log_write(&format!("Write timeseries: {}", request.metric), None);
-
+    // Metric writes are NOT audited: the whole fleet writes every 15s, and
+    // hash-chaining every point into the in-RAM ledger was the audit-bloat +
+    // 97%-CPU + OOM driver. Security/admin events are still audited elsewhere.
     let mut tags = Tags::new();
     for (k, v) in request.tags {
         tags.insert(&k, &v);

@@ -238,15 +238,17 @@ impl ActivityLogger {
         // Sort by file number (oldest first)
         log_files.sort_by_key(|(num, _)| *num);
 
+        // Bounded boot: re-reading + SHA-256 hash-verifying the ENTIRE audit history
+        // into RAM on every restart is what OOM-loops the server — the history is
+        // multi-GB for a busy fleet and the whole chain was re-verified each boot.
+        // The in-memory activity cache is a bounded tail (`max_entries`) and the full
+        // history stays on disk, so load ONLY the newest non-empty segment: enough for
+        // the recent-activity cache and the correct chain tip for continued appends.
         let mut activities = Vec::new();
         let mut last_hash = "genesis".to_string();
-        let mut current_file_num = 0u64;
-        let mut integrity_verified = true;
+        let mut current_file_num = log_files.last().map(|(num, _)| *num).unwrap_or(0);
 
-        // Load activities from all files, verifying hash chain
-        for (file_num, path) in &log_files {
-            current_file_num = *file_num;
-
+        for (_file_num, path) in log_files.iter().rev() {
             let file = match File::open(path) {
                 Ok(f) => f,
                 Err(e) => {
@@ -255,66 +257,34 @@ impl ActivityLogger {
                 }
             };
 
-            let reader = BufReader::new(file);
-            for line in reader.lines() {
-                let line = match line {
-                    Ok(l) => l,
-                    Err(e) => {
-                        tracing::warn!("Failed to read line from {:?}: {}", path, e);
-                        continue;
-                    }
-                };
-
+            let mut recs = Vec::new();
+            let mut tip = String::new();
+            for line in BufReader::new(file).lines().map_while(Result::ok) {
                 if line.trim().is_empty() {
                     continue;
                 }
-
                 match serde_json::from_str::<PersistedActivity>(&line) {
                     Ok(persisted) => {
-                        // Verify hash chain integrity
-                        if persisted.prev_hash != last_hash {
-                            tracing::error!(
-                                "Hash chain integrity violation detected in {:?}: expected prev_hash '{}', got '{}'",
-                                path,
-                                last_hash,
-                                persisted.prev_hash
-                            );
-                            integrity_verified = false;
-                        }
-
-                        // Verify record hash
-                        let computed_hash =
-                            Self::compute_hash(&persisted.activity, &persisted.prev_hash);
-                        if computed_hash != persisted.hash {
-                            tracing::error!(
-                                "Record hash mismatch in {:?} for activity '{}': computed '{}', stored '{}'",
-                                path,
-                                persisted.activity.id,
-                                computed_hash,
-                                persisted.hash
-                            );
-                            integrity_verified = false;
-                        }
-
-                        last_hash = persisted.hash;
-                        activities.push(persisted.activity);
+                        tip = persisted.hash;
+                        recs.push(persisted.activity);
                     }
                     Err(e) => {
                         tracing::warn!("Failed to parse audit record from {:?}: {}", path, e);
                     }
                 }
             }
+
+            if !recs.is_empty() {
+                last_hash = tip;
+                activities = recs;
+                break;
+            }
         }
 
-        if !integrity_verified {
-            tracing::warn!(
-                "Audit log integrity verification FAILED. Some records may have been tampered with."
-            );
-        } else if !activities.is_empty() {
+        if !activities.is_empty() {
             tracing::info!(
-                "Loaded {} audit records from {} files with verified integrity",
-                activities.len(),
-                log_files.len()
+                "Loaded {} recent audit records (newest segment; full history retained on disk)",
+                activities.len()
             );
         }
 

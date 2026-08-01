@@ -516,6 +516,27 @@ impl TimeSeriesEngine {
         stats.last_flush = Some(Utc::now());
     }
 
+    /// Age-based retention on the resident series map: drop every point/block older
+    /// than `cutoff`, removing series that become empty. This is what was never
+    /// applied — the map grew unbounded until the memory cap OOM-killed the process.
+    /// Returns (compressed_blocks_dropped, series_removed).
+    pub fn enforce_retention(&self, cutoff: DateTime<Utc>) -> (usize, usize) {
+        let cutoff_ms = cutoff.timestamp_millis();
+        let mut data = self.series_data.write();
+        let mut blocks_dropped = 0usize;
+        let mut series_removed = 0usize;
+        data.retain(|_id, buf| {
+            blocks_dropped += buf.prune_before(cutoff_ms, cutoff);
+            if buf.points.is_empty() && buf.compressed_blocks.is_empty() {
+                series_removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        (blocks_dropped, series_removed)
+    }
+
     /// Load persisted data from disk.
     fn load_from_disk(&mut self) {
         let Some(ref pm) = self.persistence else {
@@ -608,6 +629,17 @@ impl SeriesBuffer {
         let block = compressor.finish();
         self.compressed_blocks.push(block);
         self.points.clear();
+    }
+
+    /// Drop all data older than `cutoff`: whole compressed blocks whose newest
+    /// point predates it, plus any uncompressed tail points before it. Returns the
+    /// number of compressed blocks dropped.
+    fn prune_before(&mut self, cutoff_ms: i64, cutoff: DateTime<Utc>) -> usize {
+        let before = self.compressed_blocks.len();
+        self.compressed_blocks
+            .retain(|b| b.last_timestamp >= cutoff_ms);
+        self.points.retain(|p| p.timestamp >= cutoff);
+        before - self.compressed_blocks.len()
     }
 
     fn to_series(&self) -> Series {
