@@ -433,10 +433,9 @@ impl KeyExtractor {
         } else {
             let mut keys = Vec::new();
             for col in &self.columns {
-                if let Some(v) = values.get(col) {
+                {
+                    let v = values.get(col)?;
                     keys.push(PartitionKey::String(v.clone()));
-                } else {
-                    return None;
                 }
             }
             Some(PartitionKey::Composite(keys))

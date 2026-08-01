@@ -99,7 +99,7 @@ impl HashRing {
         }
 
         // Wrap around
-        for (_, vnode) in self.ring.iter() {
+        for vnode in self.ring.values() {
             if seen.insert(&vnode.node_id) {
                 result.push(&vnode.node_id);
                 if result.len() >= count {

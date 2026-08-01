@@ -234,7 +234,7 @@ impl DeletionCertificate {
                 .chars()
                 .take(14)
                 .collect::<String>(),
-            &subject_id.chars().take(8).collect::<String>()
+            subject_id.chars().take(8).collect::<String>()
         );
 
         let mut cert = Self {
@@ -1347,7 +1347,7 @@ impl GdprService {
         let export_id = format!(
             "EXP-{}-{}",
             timestamp.format("%Y%m%d%H%M%S"),
-            &request.subject_id.chars().take(8).collect::<String>()
+            request.subject_id.chars().take(8).collect::<String>()
         );
 
         // Log export request received

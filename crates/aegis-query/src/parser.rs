@@ -71,9 +71,7 @@ impl Parser {
             sp::Statement::Update {
                 table,
                 assignments,
-                from: _,
                 selection,
-                returning: _,
                 ..
             } => {
                 let update_stmt = self.convert_update(table, assignments, selection)?;
