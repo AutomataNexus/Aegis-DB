@@ -384,8 +384,19 @@ impl AppState {
             query_engine,
             document_engine,
             timeseries_engine: Arc::new({
+                // Hot window (RAM) + cold tier (disk) lengths; AEGIS_TS_COLD_DAYS=0 disables
+                // the cold tier (evicted blocks are discarded, the pre-0.5.1 behaviour).
+                let env_days = |k: &str, default: i64| {
+                    std::env::var(k)
+                        .ok()
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .unwrap_or(default)
+                };
                 let ts_config = aegis_timeseries::engine::EngineConfig {
                     data_path: data_dir.as_ref().map(|d| d.join("timeseries")),
+                    hot_retention_days: env_days("AEGIS_TS_HOT_DAYS", 7).max(1),
+                    cold_retention_days: Some(env_days("AEGIS_TS_COLD_DAYS", 365))
+                        .filter(|d| *d > 0),
                     ..Default::default()
                 };
                 TimeSeriesEngine::with_config(ts_config)

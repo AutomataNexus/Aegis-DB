@@ -7,6 +7,7 @@
 //! @author AutomataNexus Development Team
 
 use crate::aggregation::AggregateFunction;
+use crate::cold::{ColdCompactReport, ColdStore};
 use crate::compression::{
     compress_points_nexus, decode_block, is_nexus_block, CompressedBlock, Compressor,
 };
@@ -34,6 +35,12 @@ pub struct EngineConfig {
     pub max_series_per_metric: usize,
     pub write_buffer_size: usize,
     pub data_path: Option<PathBuf>,
+    /// Days of raw data kept resident in RAM (the "hot" window). Older blocks are
+    /// evicted by `enforce_retention` — into the cold tier when it is enabled.
+    pub hot_retention_days: i64,
+    /// Days to keep evicted blocks on disk in the cold tier (`None` = no cold tier:
+    /// evicted data is discarded, the pre-cold-tier behaviour). Requires `data_path`.
+    pub cold_retention_days: Option<i64>,
 }
 
 impl Default for EngineConfig {
@@ -45,6 +52,8 @@ impl Default for EngineConfig {
             max_series_per_metric: 100_000,
             write_buffer_size: 10_000,
             data_path: None,
+            hot_retention_days: 7,
+            cold_retention_days: None,
         }
     }
 }
@@ -73,6 +82,7 @@ pub struct TimeSeriesEngine {
     metrics: RwLock<HashMap<String, Metric>>,
     stats: RwLock<EngineStats>,
     persistence: Option<PersistenceManager>,
+    cold: Option<ColdStore>,
 }
 
 impl TimeSeriesEngine {
@@ -97,6 +107,17 @@ impl TimeSeriesEngine {
                 }
             });
 
+        let cold = match (&config.data_path, config.cold_retention_days) {
+            (Some(path), Some(days)) if days > 0 => match ColdStore::open(path.join("cold")) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    eprintln!("Failed to open timeseries cold tier at {:?}: {}", path, e);
+                    None
+                }
+            },
+            _ => None,
+        };
+
         let mut engine = Self {
             partition_manager: PartitionManager::new(config.partition_config.clone()),
             config,
@@ -106,10 +127,17 @@ impl TimeSeriesEngine {
             metrics: RwLock::new(HashMap::new()),
             stats: RwLock::new(EngineStats::default()),
             persistence,
+            cold,
         };
 
         // Load persisted data if available
         engine.load_from_disk();
+        // Cold-only series (evicted from the hot map entirely) must stay discoverable.
+        if let Some(cold) = &engine.cold {
+            for (_id, meta) in cold.series() {
+                engine.index.register(&meta.metric, &meta.tags);
+            }
+        }
         engine
     }
 
@@ -234,12 +262,51 @@ impl TimeSeriesEngine {
             self.index.find_by_metric(&query.metric)
         };
 
+        let hot_cutoff = Utc::now() - Duration::days(self.config.hot_retention_days);
+        let reach_cold = self.cold.as_ref().filter(|_| query.start < hot_cutoff);
+
         let series: Vec<Series> = {
             let data = self.series_data.read();
             series_ids
                 .iter()
-                .filter_map(|id| data.get(id))
-                .map(|buffer| buffer.to_series_in_range(query.start, query.end))
+                .filter_map(|id| {
+                    let hot = data
+                        .get(id)
+                        .map(|buffer| buffer.to_series_in_range(query.start, query.end));
+                    let Some(cold) = reach_cold else { return hot };
+                    let blocks = cold.read_range(
+                        id,
+                        query.start.timestamp_millis(),
+                        query.end.timestamp_millis(),
+                    );
+                    if blocks.is_empty() {
+                        return hot;
+                    }
+                    let mut points: Vec<DataPoint> = blocks
+                        .iter()
+                        .flat_map(decode_block)
+                        .filter(|p| p.timestamp >= query.start && p.timestamp < query.end)
+                        .collect();
+                    match hot {
+                        Some(mut s) => {
+                            points.append(&mut s.points);
+                            points.sort_by_key(|p| p.timestamp);
+                            points.dedup_by_key(|p| p.timestamp);
+                            Some(Series::with_points(s.metric, s.tags, points))
+                        }
+                        None => {
+                            points.sort_by_key(|p| p.timestamp);
+                            let meta = self.index.get(id)?;
+                            let metric = self
+                                .metrics
+                                .read()
+                                .get(&meta.metric_name)
+                                .cloned()
+                                .unwrap_or_else(|| Metric::gauge(&meta.metric_name));
+                            Some(Series::with_points(metric, meta.tags, points))
+                        }
+                    }
+                })
                 .collect()
         };
 
@@ -522,19 +589,69 @@ impl TimeSeriesEngine {
     /// Returns (compressed_blocks_dropped, series_removed).
     pub fn enforce_retention(&self, cutoff: DateTime<Utc>) -> (usize, usize) {
         let cutoff_ms = cutoff.timestamp_millis();
-        let mut data = self.series_data.write();
         let mut blocks_dropped = 0usize;
         let mut series_removed = 0usize;
-        data.retain(|_id, buf| {
-            blocks_dropped += buf.prune_before(cutoff_ms, cutoff);
-            if buf.points.is_empty() && buf.compressed_blocks.is_empty() {
-                series_removed += 1;
-                false
-            } else {
-                true
+        // Evicted blocks are collected under the lock and written to the cold tier
+        // after it is released, so a slow disk never stalls ingestion.
+        let mut evicted: Vec<(String, Metric, Tags, Vec<CompressedBlock>)> = Vec::new();
+        {
+            let mut data = self.series_data.write();
+            data.retain(|id, buf| {
+                let blocks = buf.prune_before(cutoff_ms, cutoff);
+                blocks_dropped += blocks.len();
+                if self.cold.is_some() && !blocks.is_empty() {
+                    evicted.push((id.clone(), buf.metric.clone(), buf.tags.clone(), blocks));
+                }
+                if buf.points.is_empty() && buf.compressed_blocks.is_empty() {
+                    series_removed += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        if let Some(cold) = &self.cold {
+            for (id, metric, tags, blocks) in evicted {
+                if let Err(e) = cold.append(&id, &metric, &tags, &blocks) {
+                    eprintln!(
+                        "cold tier: failed to append {} blocks for {}: {}",
+                        blocks.len(),
+                        id,
+                        e
+                    );
+                }
             }
-        });
+        }
         (blocks_dropped, series_removed)
+    }
+
+    /// Enforce cold-tier retention (`cold_retention_days`): drop cold frames older than
+    /// the cutoff and rewrite/remove the affected files. No-op without a cold tier.
+    pub fn compact_cold(&self, now: DateTime<Utc>) -> Option<ColdCompactReport> {
+        let cold = self.cold.as_ref()?;
+        let days = self.config.cold_retention_days?;
+        let cutoff = (now - Duration::days(days)).timestamp_millis();
+        let report = cold.compact(cutoff);
+        // Series that are now gone from both tiers should stop resolving in queries.
+        if report.files_removed > 0 {
+            let data = self.series_data.read();
+            for id in self.index.all_series_ids() {
+                if !data.contains_key(&id) && !cold.contains(&id) {
+                    self.index.remove(&id);
+                }
+            }
+        }
+        Some(report)
+    }
+
+    /// Cold-tier summary: (series with cold data, bytes on disk). `None` if disabled.
+    pub fn cold_stats(&self) -> Option<(usize, u64)> {
+        self.cold.as_ref().map(|c| (c.len(), c.disk_bytes()))
+    }
+
+    /// Hot window length in days (what `enforce_retention` callers should use).
+    pub fn hot_retention_days(&self) -> i64 {
+        self.config.hot_retention_days
     }
 
     /// Load persisted data from disk.
@@ -632,14 +749,29 @@ impl SeriesBuffer {
     }
 
     /// Drop all data older than `cutoff`: whole compressed blocks whose newest
-    /// point predates it, plus any uncompressed tail points before it. Returns the
-    /// number of compressed blocks dropped.
-    fn prune_before(&mut self, cutoff_ms: i64, cutoff: DateTime<Utc>) -> usize {
-        let before = self.compressed_blocks.len();
-        self.compressed_blocks
-            .retain(|b| b.last_timestamp >= cutoff_ms);
-        self.points.retain(|p| p.timestamp >= cutoff);
-        before - self.compressed_blocks.len()
+    /// point predates it, plus any uncompressed tail points before it (those are
+    /// compressed into one block so nothing is lost). Returns the evicted blocks,
+    /// oldest first, for the caller to hand to the cold tier or discard.
+    fn prune_before(&mut self, cutoff_ms: i64, cutoff: DateTime<Utc>) -> Vec<CompressedBlock> {
+        let mut evicted = Vec::new();
+        let (old, keep): (Vec<CompressedBlock>, Vec<CompressedBlock>) = self
+            .compressed_blocks
+            .drain(..)
+            .partition(|b| b.last_timestamp < cutoff_ms);
+        self.compressed_blocks = keep;
+        evicted.extend(old);
+
+        let (old_pts, keep_pts): (Vec<DataPoint>, Vec<DataPoint>) =
+            self.points.drain(..).partition(|p| p.timestamp < cutoff);
+        self.points = keep_pts;
+        if !old_pts.is_empty() {
+            let mut c = Compressor::new();
+            for p in &old_pts {
+                c.compress(p);
+            }
+            evicted.push(c.finish());
+        }
+        evicted
     }
 
     fn to_series(&self) -> Series {
@@ -962,5 +1094,94 @@ mod tests {
         // proving the NexusCompress blocks survived the bincode persistence cycle.
         let reloaded = TimeSeriesEngine::with_config(config);
         assert_eq!(baseline, snapshot(&reloaded, "metric_x"));
+    }
+}
+
+#[cfg(test)]
+mod cold_tier_tests {
+    use super::*;
+
+    #[test]
+    fn retention_evicts_to_cold_and_queries_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = EngineConfig {
+            data_path: Some(dir.path().to_path_buf()),
+            hot_retention_days: 7,
+            cold_retention_days: Some(365),
+            compression_threshold: 5,
+            ..Default::default()
+        };
+        let engine = TimeSeriesEngine::with_config(cfg.clone());
+        let mut tags = Tags::default();
+        tags.0.insert("unit".into(), "ahu1".into());
+        let now = Utc::now();
+        // 30 old points (10 days back, 1/min) → compressed into blocks + 30 recent.
+        let old: Vec<DataPoint> = (0..30)
+            .map(|i| DataPoint {
+                timestamp: now - Duration::days(10) + Duration::minutes(i),
+                value: i as f64,
+            })
+            .collect();
+        let recent: Vec<DataPoint> = (0..30)
+            .map(|i| DataPoint {
+                timestamp: now - Duration::hours(1) + Duration::minutes(i),
+                value: 100.0 + i as f64,
+            })
+            .collect();
+        engine
+            .write_batch("supply_temp", tags.clone(), old)
+            .unwrap();
+        engine
+            .write_batch("supply_temp", tags.clone(), recent)
+            .unwrap();
+
+        let (evicted, removed) = engine.enforce_retention(now - Duration::days(7));
+        assert!(evicted >= 1, "old blocks should be evicted");
+        assert_eq!(removed, 0);
+        let (cold_series, bytes) = engine.cold_stats().unwrap();
+        assert_eq!(cold_series, 1);
+        assert!(bytes > 0);
+
+        // Recent-only query never touches cold.
+        let q = TimeSeriesQuery::new(
+            "supply_temp",
+            now - Duration::days(1),
+            now + Duration::minutes(1),
+        );
+        let r = engine.query(&q);
+        assert_eq!(r.series[0].points.len(), 30);
+
+        // Long-range query merges hot + cold: all 60 points, ordered.
+        let q = TimeSeriesQuery::new(
+            "supply_temp",
+            now - Duration::days(20),
+            now + Duration::minutes(1),
+        );
+        let r = engine.query(&q);
+        assert_eq!(r.series.len(), 1);
+        let pts = &r.series[0].points;
+        assert_eq!(pts.len(), 60);
+        assert!(pts.windows(2).all(|w| w[0].timestamp < w[1].timestamp));
+        assert_eq!(pts[0].value, 0.0);
+        assert_eq!(pts[59].value, 129.0);
+
+        // Evict everything hot → series is cold-only, still discoverable after a restart.
+        let (_, removed) = engine.enforce_retention(now + Duration::days(1));
+        assert_eq!(removed, 1);
+        drop(engine);
+        let engine = TimeSeriesEngine::with_config(cfg);
+        let q = TimeSeriesQuery::new(
+            "supply_temp",
+            now - Duration::days(20),
+            now + Duration::days(2),
+        );
+        let r = engine.query(&q);
+        assert_eq!(r.series.len(), 1);
+        assert_eq!(r.series[0].points.len(), 60);
+
+        // Cold compaction past everything removes the series entirely.
+        let rep = engine.compact_cold(now + Duration::days(400)).unwrap();
+        assert_eq!(rep.files_removed, 1);
+        assert_eq!(engine.series_count(), 0);
     }
 }

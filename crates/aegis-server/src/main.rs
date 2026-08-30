@@ -271,13 +271,14 @@ async fn main() {
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
+            let mut ticks: u64 = 0;
             loop {
                 interval.tick().await;
-                // Keep 7 days of raw metrics resident (the Console shows recent trends;
-                // older history lives in the on-disk backups). Decoupled from the
-                // 30-day backup retention so trimming RAM doesn't shrink backups.
-                const TS_RETENTION_DAYS: i64 = 7;
-                let cutoff = chrono::Utc::now() - chrono::Duration::days(TS_RETENTION_DAYS);
+                ticks += 1;
+                // Keep `hot_retention_days` of raw metrics resident; evicted blocks go to
+                // the on-disk cold tier (when enabled) so long-range queries still work.
+                let ts_retention_days = state_for_retention.timeseries_engine.hot_retention_days();
+                let cutoff = chrono::Utc::now() - chrono::Duration::days(ts_retention_days);
                 let (blocks, series) = state_for_retention
                     .timeseries_engine
                     .enforce_retention(cutoff);
@@ -290,11 +291,27 @@ async fn main() {
                         libc::malloc_trim(0);
                     }
                     tracing::info!(
-                        "Timeseries retention ({}d): dropped {} blocks, removed {} empty series",
-                        TS_RETENTION_DAYS,
+                        "Timeseries retention ({}d): evicted {} blocks, removed {} empty series",
+                        ts_retention_days,
                         blocks,
                         series
                     );
+                }
+                // Cold-tier retention once a day (first pass on the first tick).
+                if ticks == 1 || ticks % 24 == 0 {
+                    if let Some(r) = state_for_retention
+                        .timeseries_engine
+                        .compact_cold(chrono::Utc::now())
+                    {
+                        if r.frames_dropped > 0 {
+                            tracing::info!(
+                                "Timeseries cold compaction: {} frames dropped, {} files rewritten, {} removed",
+                                r.frames_dropped,
+                                r.files_rewritten,
+                                r.files_removed
+                            );
+                        }
+                    }
                 }
             }
         });

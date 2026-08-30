@@ -6,6 +6,14 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+- Time-series **cold tier**: blocks aged out of the resident hot window (default
+  7 days, `AEGIS_TS_HOT_DAYS`) are appended to per-series compressed files under
+  `<data-dir>/timeseries/cold/` and kept for `AEGIS_TS_COLD_DAYS` (default 365;
+  `0` disables). Queries that reach past the hot window merge cold blocks in
+  transparently; cold-only series stay discoverable across restarts. Daily cold
+  compaction enforces the cold retention. RAM stays bounded by the hot window.
+
 ## [0.5.0]
 
 ### Added

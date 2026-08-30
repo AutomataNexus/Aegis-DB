@@ -86,6 +86,11 @@ impl TimeSeriesIndex {
         series_id
     }
 
+    /// Every registered series id.
+    pub fn all_series_ids(&self) -> Vec<String> {
+        self.series_by_id.read().keys().cloned().collect()
+    }
+
     /// Get series metadata by ID.
     pub fn get(&self, series_id: &str) -> Option<SeriesMetadata> {
         let by_id = self.series_by_id.read();

@@ -14,6 +14,7 @@
 //! @author AutomataNexus Development Team
 
 pub mod aggregation;
+pub mod cold;
 pub mod compression;
 pub mod engine;
 pub mod index;
@@ -24,6 +25,7 @@ pub mod retention;
 pub mod types;
 
 pub use aggregation::{AggregateFunction, Aggregator, Downsampler};
+pub use cold::{ColdCompactReport, ColdStore};
 pub use compression::{Compressor, Decompressor};
 pub use engine::TimeSeriesEngine;
 pub use index::TimeSeriesIndex;
