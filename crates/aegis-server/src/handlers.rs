@@ -2007,6 +2007,9 @@ pub struct QueryTimeSeriesRequest {
     pub start: Option<i64>,
     pub end: Option<i64>,
     pub limit: Option<usize>,
+    /// Optional downsample bucket in seconds (mean per bucket) for long windows.
+    #[serde(default)]
+    pub step: Option<i64>,
 }
 
 /// Time series data response.
@@ -2040,8 +2043,27 @@ pub async fn query_timeseries(
         &format!("Query timeseries: {}", request.metric),
     );
 
-    let duration = Duration::hours(24); // Default 24h lookback
-    let mut query = TimeSeriesQuery::last(&request.metric, duration);
+    // Honour the requested window (epoch seconds; millisecond stamps are accepted
+    // too). Default: the last 24h. Previously start/end were parsed but ignored, so
+    // no client could ever read past a day regardless of retention.
+    let to_dt = |v: i64| {
+        let secs = if v > 10_000_000_000 { v / 1000 } else { v };
+        chrono::TimeZone::timestamp_opt(&Utc, secs, 0).single()
+    };
+    let end = request.end.and_then(to_dt).unwrap_or_else(Utc::now);
+    let start = request
+        .start
+        .and_then(to_dt)
+        .filter(|s| *s < end)
+        .unwrap_or_else(|| end - Duration::hours(24));
+    let mut query = TimeSeriesQuery::new(&request.metric, start, end);
+
+    if let Some(step) = request.step.filter(|s| *s > 0) {
+        query = query.downsample(
+            Duration::seconds(step),
+            aegis_timeseries::AggregateFunction::Avg,
+        );
+    }
 
     if let Some(limit) = request.limit {
         query = query.with_limit(limit);

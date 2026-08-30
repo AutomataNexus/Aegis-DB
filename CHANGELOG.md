@@ -14,6 +14,10 @@ All notable changes to Aegis-DB are documented here. This project adheres to
   transparently; cold-only series stay discoverable across restarts. Daily cold
   compaction enforces the cold retention. RAM stays bounded by the hot window.
 
+### Fixed
+- `POST /api/v1/timeseries/query` now honours `start`/`end` (epoch seconds; ms
+  accepted). They were parsed but ignored, so every query returned the last 24h.
+
 ## [0.5.0]
 
 ### Added
