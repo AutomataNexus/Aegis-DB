@@ -250,8 +250,14 @@ async fn main() {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(120));
             loop {
                 interval.tick().await;
-                if let Err(e) = state_for_save.save_to_disk() {
-                    tracing::error!("Failed to save data: {}", e);
+                // Off the async workers: a checkpoint serialises hundreds of MB and
+                // must never stall request handling (accept backlog filled up on
+                // 2026-09-06 while three save paths overlapped on the runtime).
+                let st = state_for_save.clone();
+                match tokio::task::spawn_blocking(move || st.save_to_disk()).await {
+                    Ok(Err(e)) => tracing::error!("Failed to save data: {}", e),
+                    Err(e) => tracing::error!("Save task panicked: {}", e),
+                    Ok(Ok(())) => {}
                 }
                 // Return the flush clone's freed pages to the OS so RSS settles back to
                 // the resident working set between checkpoints instead of ratcheting up.
@@ -279,11 +285,15 @@ async fn main() {
                 // the on-disk cold tier (when enabled) so long-range queries still work.
                 let ts_retention_days = state_for_retention.timeseries_engine.hot_retention_days();
                 let cutoff = chrono::Utc::now() - chrono::Duration::days(ts_retention_days);
-                let (blocks, series) = state_for_retention
-                    .timeseries_engine
-                    .enforce_retention(cutoff);
+                let st = state_for_retention.clone();
+                let (blocks, series) = tokio::task::spawn_blocking(move || {
+                    st.timeseries_engine.enforce_retention(cutoff)
+                })
+                .await
+                .unwrap_or((0, 0));
                 if blocks > 0 || series > 0 {
-                    let _ = state_for_retention.save_to_disk();
+                    let st = state_for_retention.clone();
+                    let _ = tokio::task::spawn_blocking(move || st.save_to_disk()).await;
                     // Return the pruned pages to the OS (glibc otherwise parks them in
                     // its arenas and RSS wouldn't drop after the prune).
                     #[cfg(target_os = "linux")]
@@ -339,7 +349,11 @@ async fn main() {
 
                 // Flush all in-memory state to disk for a consistent backup checkpoint
                 tracing::info!("Creating backup checkpoint...");
-                if let Err(e) = state_for_backup.save_to_disk() {
+                let st = state_for_backup.clone();
+                if let Ok(Err(e)) | Err(e) = tokio::task::spawn_blocking(move || st.save_to_disk())
+                    .await
+                    .map_err(|e| std::io::Error::other(e.to_string()))
+                {
                     tracing::warn!("Pre-backup save failed: {}", e);
                     continue; // Skip backup if save fails
                 }

@@ -74,6 +74,13 @@ impl From<PersistedBlock> for CompressedBlock {
 /// Manages reading and writing time series data to disk.
 pub struct PersistenceManager {
     data_path: PathBuf,
+    /// Serialises `save()`. Three server tasks (periodic checkpoint, hourly
+    /// retention, backup) can call it at the same instant; without this they
+    /// raced on ONE temp file and the loser's rename failed with ENOENT
+    /// ("Failed to flush timeseries data: I/O error: No such file or directory").
+    save_lock: parking_lot::Mutex<()>,
+    save_seq: std::sync::atomic::AtomicU64,
+    last_save_ms: std::sync::atomic::AtomicI64,
 }
 
 impl PersistenceManager {
@@ -81,7 +88,30 @@ impl PersistenceManager {
     pub fn new(data_path: impl Into<PathBuf>) -> std::io::Result<Self> {
         let data_path = data_path.into();
         std::fs::create_dir_all(&data_path)?;
-        Ok(Self { data_path })
+        // A crash mid-save can leave temp files behind; they are never valid input.
+        if let Ok(rd) = std::fs::read_dir(&data_path) {
+            for e in rd.flatten() {
+                let n = e.file_name();
+                if n.to_string_lossy().starts_with("timeseries.bin.tmp") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        Ok(Self {
+            data_path,
+            save_lock: parking_lot::Mutex::new(()),
+            save_seq: std::sync::atomic::AtomicU64::new(0),
+            last_save_ms: std::sync::atomic::AtomicI64::new(0),
+        })
+    }
+
+    /// Milliseconds since the last successful `save()` (i64::MAX if never).
+    pub fn since_last_save_ms(&self) -> i64 {
+        let last = self.last_save_ms.load(std::sync::atomic::Ordering::Relaxed);
+        if last == 0 {
+            return i64::MAX;
+        }
+        now_ms() - last
     }
 
     /// Path to the main data file.
@@ -89,13 +119,19 @@ impl PersistenceManager {
         self.data_path.join("timeseries.bin")
     }
 
-    /// Path to the temporary write file (for atomic writes).
+    /// Path to a temporary write file (unique per save, for atomic writes).
     fn temp_file(&self) -> PathBuf {
-        self.data_path.join("timeseries.bin.tmp")
+        let seq = self
+            .save_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.data_path
+            .join(format!("timeseries.bin.tmp.{}.{}", std::process::id(), seq))
     }
 
     /// Save state to disk using atomic write (write to temp, then rename).
+    /// Saves are serialised; concurrent callers wait their turn.
     pub fn save(&self, state: &PersistedState) -> Result<(), PersistenceError> {
+        let _guard = self.save_lock.lock();
         let temp_path = self.temp_file();
         let data_path = self.data_file();
 
@@ -114,8 +150,12 @@ impl PersistenceManager {
         }
 
         // Atomic rename
-        std::fs::rename(&temp_path, &data_path)
-            .map_err(|e| PersistenceError::IoError(e.to_string()))?;
+        if let Err(e) = std::fs::rename(&temp_path, &data_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(PersistenceError::IoError(e.to_string()));
+        }
+        self.last_save_ms
+            .store(now_ms(), std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }
@@ -179,6 +219,13 @@ impl std::error::Error for PersistenceError {}
 // =============================================================================
 // Tests
 // =============================================================================
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 #[cfg(test)]
 mod tests {
