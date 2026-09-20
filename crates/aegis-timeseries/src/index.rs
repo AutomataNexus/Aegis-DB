@@ -98,6 +98,25 @@ impl TimeSeriesIndex {
     }
 
     /// Find series by metric name.
+    /// Does this series already exist? O(1) — the hot path asks this on every write, and
+    /// materialising `find_by_metric` there cloned every series id of the metric per point.
+    pub fn contains(&self, series_id: &str) -> bool {
+        self.series_by_id.read().contains_key(series_id)
+    }
+
+    /// How many series this metric has, without building a Vec of them.
+    pub fn count_for_metric(&self, metric_name: &str) -> usize {
+        self.series_by_metric
+            .read()
+            .get(metric_name)
+            .map_or(0, std::collections::HashSet::len)
+    }
+
+    /// The id `register` would assign, without registering.
+    pub fn series_id_for(metric_name: &str, tags: &Tags) -> String {
+        format!("{}:{}", metric_name, tags.series_key())
+    }
+
     pub fn find_by_metric(&self, metric_name: &str) -> Vec<String> {
         let by_metric = self.series_by_metric.read();
         by_metric

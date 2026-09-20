@@ -201,17 +201,23 @@ impl TimeSeriesEngine {
 
         let metric = metric.unwrap_or_else(|| Metric::gauge(metric_name));
 
-        // Enforce cardinality limit before registering new series
-        let existing_series = self.index.find_by_metric(metric_name);
-        let series_id = self.index.register(&metric, &tags);
-        if !existing_series.contains(&series_id)
-            && existing_series.len() >= self.config.max_series_per_metric
-        {
+        // Enforce the cardinality limit before registering a NEW series.
+        //
+        // This used to call `find_by_metric` on every single write, which clones every series id
+        // of that metric into a Vec and then scans it. The whole fleet writes under one metric
+        // name, so that was tens of thousands of string clones PER POINT, and it got worse as
+        // series accumulated: ingest that ran in 0.01 s on a fresh store took 19.6 s on a live
+        // one, controllers timed out mid-post and their payloads lost the tail. Both checks are
+        // O(1) now and only run when the series is actually new.
+        let candidate_id = TimeSeriesIndex::series_id_for(metric_name, &tags);
+        let is_new = !self.index.contains(&candidate_id);
+        if is_new && self.index.count_for_metric(metric_name) >= self.config.max_series_per_metric {
             return Err(EngineError::StorageError(format!(
                 "Metric '{}' exceeds max_series_per_metric limit of {}",
                 metric_name, self.config.max_series_per_metric
             )));
         }
+        let series_id = self.index.register(&metric, &tags);
 
         {
             let mut data = self.series_data.write();
