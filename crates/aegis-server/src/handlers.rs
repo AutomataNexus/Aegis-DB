@@ -1964,6 +1964,58 @@ pub struct WriteTimeSeriesRequest {
     pub timestamp: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WriteTimeSeriesBatchRequest {
+    pub points: Vec<WriteTimeSeriesRequest>,
+}
+
+/// Write many points in ONE request.
+///
+/// The fleet's ingest path was posting a point at a time: 600 points in a controller's push meant
+/// 600 HTTP round trips, each running the auth middleware, at ~2.7 ms apiece. That put ingest
+/// capacity near 350 points/s against a fleet asking for ~1,160, so controllers hit their 10 s
+/// timeout mid-post and every payload lost its tail — which is site.toml order, so the same
+/// equipment vanished from the Console every time while the box held it locally.
+pub async fn write_timeseries_batch(
+    State(state): State<AppState>,
+    Json(request): Json<WriteTimeSeriesBatchRequest>,
+) -> impl IntoResponse {
+    let mut written = 0usize;
+    let mut failed = 0usize;
+    let mut first_error: Option<String> = None;
+    for req in request.points {
+        let mut tags = Tags::new();
+        for (k, v) in req.tags {
+            tags.insert(&k, &v);
+        }
+        let point = DataPoint {
+            timestamp: req
+                .timestamp
+                .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                .unwrap_or_else(Utc::now),
+            value: req.value,
+        };
+        match state.timeseries_engine.write(&req.metric, tags, point) {
+            Ok(()) => written += 1,
+            Err(e) => {
+                failed += 1;
+                if first_error.is_none() {
+                    first_error = Some(e.to_string());
+                }
+            }
+        }
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": failed == 0,
+            "written": written,
+            "failed": failed,
+            "error": first_error,
+        })),
+    )
+}
+
 /// Write time series data.
 pub async fn write_timeseries(
     State(state): State<AppState>,

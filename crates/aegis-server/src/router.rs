@@ -263,6 +263,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/metrics", get(handlers::list_metrics))
         .route("/metrics", post(handlers::register_metric))
         .route("/write", post(handlers::write_timeseries))
+        .route("/write/batch", post(handlers::write_timeseries_batch))
         .route("/query", post(handlers::query_timeseries))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
