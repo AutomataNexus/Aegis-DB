@@ -397,6 +397,8 @@ impl AppState {
                     hot_retention_days: env_days("AEGIS_TS_HOT_DAYS", 7).max(1),
                     cold_retention_days: Some(env_days("AEGIS_TS_COLD_DAYS", 365))
                         .filter(|d| *d > 0),
+                    max_query_points: env_days("AEGIS_TS_MAX_QUERY_POINTS", 2_000_000).max(10_000)
+                        as usize,
                     ..Default::default()
                 };
                 TimeSeriesEngine::with_config(ts_config)

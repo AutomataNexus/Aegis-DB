@@ -101,6 +101,9 @@ pub struct QueryResult {
     pub query_time_ms: u64,
     pub points_scanned: usize,
     pub points_returned: usize,
+    /// The query hit the engine's `max_query_points` ceiling and was cut short —
+    /// the caller must narrow it (tags, window, step) rather than read a partial set.
+    pub over_limit: bool,
 }
 
 impl QueryResult {
@@ -110,6 +113,7 @@ impl QueryResult {
             query_time_ms: 0,
             points_scanned: 0,
             points_returned: 0,
+            over_limit: false,
         }
     }
 
@@ -120,6 +124,7 @@ impl QueryResult {
             query_time_ms: 0,
             points_scanned: 0,
             points_returned,
+            over_limit: false,
         }
     }
 
@@ -191,6 +196,7 @@ impl QueryExecutor {
             query_time_ms,
             points_scanned,
             points_returned,
+            over_limit: false,
         }
     }
 

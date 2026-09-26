@@ -110,8 +110,7 @@ impl ColdStore {
         {
             let f = File::create(&tmp)?;
             let mut w = BufWriter::new(f);
-            bincode::serialize_into(&mut w, &*self.index.read())
-                .map_err(io::Error::other)?;
+            bincode::serialize_into(&mut w, &*self.index.read()).map_err(io::Error::other)?;
             w.flush()?;
         }
         fs::rename(tmp, self.dir.join(INDEX_FILE))

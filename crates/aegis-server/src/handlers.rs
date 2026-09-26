@@ -2130,15 +2130,32 @@ pub async fn query_timeseries(
     }
 
     let result = state.timeseries_engine.query(&query);
+    if result.over_limit {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!(
+                    "query for '{}' exceeds {} points — narrow it with tags, a shorter window \
+                     (start/end), a per-series limit or a step",
+                    request.metric, result.points_returned
+                ),
+            })),
+        )
+            .into_response();
+    }
 
+    // Consume the engine result (no second copy of every point before serialising).
+    let points_returned = result.points_returned;
+    let query_time_ms = result.query_time_ms;
     let series: Vec<SeriesResponse> = result
         .series
-        .iter()
+        .into_iter()
         .map(|s| SeriesResponse {
             tags: s.tags.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
             points: s
                 .points
-                .iter()
+                .into_iter()
                 .map(|p| PointResponse {
                     timestamp: p.timestamp.timestamp(),
                     value: p.value,
@@ -2150,11 +2167,11 @@ pub async fn query_timeseries(
     let response = TimeSeriesResponse {
         metric: request.metric,
         series,
-        points_returned: result.points_returned,
-        query_time_ms: result.query_time_ms,
+        points_returned,
+        query_time_ms,
     };
 
-    (StatusCode::OK, Json(response))
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 /// Metric info response with full type information.

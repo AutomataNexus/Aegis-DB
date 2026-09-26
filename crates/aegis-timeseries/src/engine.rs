@@ -41,6 +41,10 @@ pub struct EngineConfig {
     /// Days to keep evicted blocks on disk in the cold tier (`None` = no cold tier:
     /// evicted data is discarded, the pre-cold-tier behaviour). Requires `data_path`.
     pub cold_retention_days: Option<i64>,
+    /// Ceiling on points one query may return. Past it the query stops and reports
+    /// `over_limit` instead of materialising an unbounded result — an unscoped read of
+    /// a busy metric can be tens of millions of points and exhaust the process.
+    pub max_query_points: usize,
 }
 
 impl Default for EngineConfig {
@@ -54,6 +58,7 @@ impl Default for EngineConfig {
             data_path: None,
             hot_retention_days: 7,
             cold_retention_days: None,
+            max_query_points: 2_000_000,
         }
     }
 }
@@ -270,61 +275,100 @@ impl TimeSeriesEngine {
 
         let hot_cutoff = Utc::now() - Duration::days(self.config.hot_retention_days);
         let reach_cold = self.cold.as_ref().filter(|_| query.start < hot_cutoff);
+        let (start_ms, end_ms) = (query.start.timestamp_millis(), query.end.timestamp_millis());
 
-        let series: Vec<Series> = {
+        // 1. Under the read lock take only what overlaps the window — the compressed
+        //    blocks (still compressed) and the unflushed points — then let go. Decoding
+        //    used to run under this lock, so one wide query stalled every writer until
+        //    the accept queue filled.
+        let snaps: Vec<(String, Option<RangeSnapshot>)> = {
             let data = self.series_data.read();
             series_ids
                 .iter()
-                .filter_map(|id| {
-                    let hot = data
-                        .get(id)
-                        .map(|buffer| buffer.to_series_in_range(query.start, query.end));
-                    let Some(cold) = reach_cold else { return hot };
-                    let blocks = cold.read_range(
-                        id,
-                        query.start.timestamp_millis(),
-                        query.end.timestamp_millis(),
-                    );
-                    if blocks.is_empty() {
-                        return hot;
-                    }
-                    let mut points: Vec<DataPoint> = blocks
-                        .iter()
-                        .flat_map(decode_block)
-                        .filter(|p| p.timestamp >= query.start && p.timestamp < query.end)
-                        .collect();
-                    match hot {
-                        Some(mut s) => {
-                            points.append(&mut s.points);
-                            points.sort_by_key(|p| p.timestamp);
-                            points.dedup_by_key(|p| p.timestamp);
-                            Some(Series::with_points(s.metric, s.tags, points))
-                        }
-                        None => {
-                            points.sort_by_key(|p| p.timestamp);
-                            let meta = self.index.get(id)?;
-                            let metric = self
-                                .metrics
-                                .read()
-                                .get(&meta.metric_name)
-                                .cloned()
-                                .unwrap_or_else(|| Metric::gauge(&meta.metric_name));
-                            Some(Series::with_points(metric, meta.tags, points))
-                        }
-                    }
+                .map(|id| {
+                    (
+                        id.clone(),
+                        data.get(id).map(|b| b.snapshot_range(start_ms, end_ms)),
+                    )
                 })
                 .collect()
         };
 
-        let mut result = QueryExecutor::execute(query, series);
-        result.query_time_ms = start_time.elapsed().as_millis() as u64;
+        // 2. Decode one series at a time, outside the lock. A per-series `limit` with no
+        //    aggregation decodes newest-first and stops as soon as it has enough; the
+        //    whole result is capped at `max_query_points`.
+        let early_limit = query.limit.filter(|_| query.aggregation.is_none());
+        let cap = self.config.max_query_points;
+        let mut out: Vec<Series> = Vec::new();
+        let (mut returned, mut scanned, mut over_limit) = (0usize, 0usize, false);
+        for (id, hot) in snaps {
+            let mut blocks: Vec<CompressedBlock> = Vec::new();
+            let mut tail: Vec<DataPoint> = Vec::new();
+            let mut ident: Option<(Metric, Tags)> = None;
+            if let Some(h) = hot {
+                blocks = h.blocks;
+                tail = h.points;
+                ident = Some((h.metric, h.tags));
+            }
+            if let Some(cold) = reach_cold {
+                blocks.extend(cold.read_range(&id, start_ms, end_ms));
+            }
+            if blocks.is_empty() && tail.is_empty() {
+                continue;
+            }
+            let ident = match ident {
+                Some(i) => i,
+                None => {
+                    let Some(meta) = self.index.get(&id) else {
+                        continue;
+                    };
+                    let metric = self
+                        .metrics
+                        .read()
+                        .get(&meta.metric_name)
+                        .cloned()
+                        .unwrap_or_else(|| Metric::gauge(&meta.metric_name));
+                    (metric, meta.tags)
+                }
+            };
+            // Newest data first: unflushed points, then blocks by end time descending.
+            blocks.sort_by_key(|b| std::cmp::Reverse(b.last_timestamp));
+            let in_range = |p: &DataPoint| p.timestamp >= query.start && p.timestamp < query.end;
+            let mut points: Vec<DataPoint> = tail.into_iter().filter(in_range).collect();
+            for block in &blocks {
+                if early_limit.is_some_and(|l| points.len() >= l) {
+                    break;
+                }
+                points.extend(decode_block(block).into_iter().filter(in_range));
+            }
+            points.sort_by_key(|p| p.timestamp);
+            points.dedup_by_key(|p| p.timestamp);
 
+            let r =
+                QueryExecutor::execute(query, vec![Series::with_points(ident.0, ident.1, points)]);
+            scanned += r.points_scanned;
+            for s in r.series {
+                returned += s.points.len();
+                out.push(s);
+            }
+            if returned > cap {
+                over_limit = true;
+                break;
+            }
+        }
+
+        let result = QueryResult {
+            series: out,
+            query_time_ms: start_time.elapsed().as_millis() as u64,
+            points_scanned: scanned,
+            points_returned: returned,
+            over_limit,
+        };
         {
             let mut stats = self.stats.write();
             stats.queries_executed += 1;
             stats.points_scanned += result.points_scanned as u64;
         }
-
         result
     }
 
@@ -718,6 +762,14 @@ impl Default for TimeSeriesEngine {
 // =============================================================================
 
 /// Buffer for a single time series.
+/// One series' in-window data, copied out from under the lock (see `snapshot_range`).
+struct RangeSnapshot {
+    metric: Metric,
+    tags: Tags,
+    blocks: Vec<CompressedBlock>,
+    points: Vec<DataPoint>,
+}
+
 struct SeriesBuffer {
     metric: Metric,
     tags: Tags,
@@ -793,34 +845,29 @@ impl SeriesBuffer {
         Series::with_points(self.metric.clone(), self.tags.clone(), all_points)
     }
 
-    /// Query-optimized version that skips blocks outside the time range.
-    fn to_series_in_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Series {
-        let mut all_points = Vec::new();
-        let start_ms = start.timestamp_millis();
-        let end_ms = end.timestamp_millis();
-
-        for block in &self.compressed_blocks {
-            // Skip blocks entirely outside the query range
-            if block.last_timestamp < start_ms || block.first_timestamp > end_ms {
-                continue;
-            }
-
-            all_points.extend(
-                decode_block(block)
-                    .into_iter()
-                    .filter(|p| p.timestamp >= start && p.timestamp < end),
-            );
-        }
-
-        all_points.extend(
-            self.points
+    /// The blocks and unflushed points that overlap `[start_ms, end_ms]`, still
+    /// compressed — taken under the engine's read lock so decoding can happen after it
+    /// is released.
+    fn snapshot_range(&self, start_ms: i64, end_ms: i64) -> RangeSnapshot {
+        RangeSnapshot {
+            metric: self.metric.clone(),
+            tags: self.tags.clone(),
+            blocks: self
+                .compressed_blocks
                 .iter()
-                .filter(|p| p.timestamp >= start && p.timestamp < end)
-                .cloned(),
-        );
-        all_points.sort_by_key(|p| p.timestamp);
-
-        Series::with_points(self.metric.clone(), self.tags.clone(), all_points)
+                .filter(|b| b.last_timestamp >= start_ms && b.first_timestamp <= end_ms)
+                .cloned()
+                .collect(),
+            points: self
+                .points
+                .iter()
+                .filter(|p| {
+                    let t = p.timestamp.timestamp_millis();
+                    t >= start_ms && t <= end_ms
+                })
+                .cloned()
+                .collect(),
+        }
     }
 
     fn memory_usage(&self) -> usize {
@@ -1009,6 +1056,75 @@ mod tests {
         let deleted = engine.delete_series(&series_ids[0]);
         assert!(deleted);
         assert_eq!(engine.series_count(), 0);
+    }
+
+    /// Points spread over compressed blocks AND the unflushed tail: a per-series limit
+    /// must return exactly the newest N, in ascending order, whichever store they live in.
+    #[test]
+    fn limit_returns_newest_points_across_blocks_and_tail() {
+        let engine = TimeSeriesEngine::with_config(EngineConfig {
+            compression_threshold: 10,
+            ..Default::default()
+        });
+        let mut tags = Tags::new();
+        tags.insert("host", "a");
+        let base = Utc::now() - Duration::minutes(200);
+        for i in 0..95 {
+            engine
+                .write(
+                    "m",
+                    tags.clone(),
+                    DataPoint {
+                        timestamp: base + Duration::minutes(i),
+                        value: i as f64,
+                    },
+                )
+                .unwrap();
+        }
+        let q = TimeSeriesQuery::last("m", Duration::hours(4)).with_limit(12);
+        let r = engine.query(&q);
+        let vals: Vec<f64> = r.series[0].points.iter().map(|p| p.value).collect();
+        assert_eq!(vals, (83..95).map(|v| v as f64).collect::<Vec<_>>());
+        assert!(!r.over_limit);
+        // No limit: everything, deduplicated and ordered.
+        let r = engine.query(&TimeSeriesQuery::last("m", Duration::hours(4)));
+        assert_eq!(r.points_returned, 95);
+        assert!(r.series[0]
+            .points
+            .windows(2)
+            .all(|w| w[0].timestamp < w[1].timestamp));
+    }
+
+    /// A query larger than `max_query_points` stops and says so instead of
+    /// materialising everything.
+    #[test]
+    fn oversized_query_reports_over_limit() {
+        let engine = TimeSeriesEngine::with_config(EngineConfig {
+            max_query_points: 150,
+            ..Default::default()
+        });
+        let base = Utc::now() - Duration::minutes(100);
+        for h in 0..5 {
+            let mut tags = Tags::new();
+            tags.insert("host", format!("h{h}"));
+            for i in 0..60 {
+                engine
+                    .write(
+                        "m",
+                        tags.clone(),
+                        DataPoint {
+                            timestamp: base + Duration::minutes(i),
+                            value: i as f64,
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        let r = engine.query(&TimeSeriesQuery::last("m", Duration::hours(2)));
+        assert!(r.over_limit, "300 points > cap 150");
+        let r = engine.query(&TimeSeriesQuery::last("m", Duration::hours(2)).with_limit(10));
+        assert!(!r.over_limit, "5 series x 10 = 50 fits");
+        assert_eq!(r.points_returned, 50);
     }
 
     #[test]
