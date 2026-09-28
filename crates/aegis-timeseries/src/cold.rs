@@ -88,12 +88,26 @@ impl ColdStore {
 
     /// Drop a series from the cold tier: its frame file and its index entry.
     pub fn remove_series(&self, series_id: &str) -> bool {
-        let had = self.index.write().remove(series_id).is_some();
-        if had {
-            let _ = fs::remove_file(self.file_for(series_id));
+        self.remove_many(std::slice::from_ref(&series_id.to_string())) == 1
+    }
+
+    /// Drop many series at once — one index rewrite for the whole batch, so purging a
+    /// metric with a hundred thousand dead series does not rewrite the index that many times.
+    pub fn remove_many(&self, series_ids: &[String]) -> usize {
+        let removed: Vec<&String> = {
+            let mut idx = self.index.write();
+            series_ids
+                .iter()
+                .filter(|id| idx.remove(id.as_str()).is_some())
+                .collect()
+        };
+        for id in &removed {
+            let _ = fs::remove_file(self.file_for(id));
+        }
+        if !removed.is_empty() {
             let _ = self.save_index();
         }
-        had
+        removed.len()
     }
 
     /// Whether this series has any cold data.

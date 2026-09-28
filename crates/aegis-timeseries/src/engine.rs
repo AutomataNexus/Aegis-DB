@@ -466,13 +466,24 @@ impl TimeSeriesEngine {
                 }
             }
         }
+        let ids: Vec<String> = ids.into_iter().collect();
         let mut n = 0;
-        for id in ids {
-            if self.delete_series(&id) {
-                n += 1;
+        {
+            let mut data = self.series_data.write();
+            for id in &ids {
+                if data.remove(id).is_some() {
+                    n += 1;
+                }
             }
         }
-        n
+        let mut indexed = 0;
+        for id in &ids {
+            if self.index.remove(id) {
+                indexed += 1;
+            }
+        }
+        let cold = self.cold.as_ref().map_or(0, |c| c.remove_many(&ids));
+        n.max(indexed).max(cold)
     }
 
     /// Get the number of active series.
