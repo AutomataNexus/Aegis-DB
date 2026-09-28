@@ -437,18 +437,42 @@ impl TimeSeriesEngine {
         data.get(series_id).map(|buffer| buffer.to_series())
     }
 
-    /// Delete a series.
+    /// Delete a series: its hot buffer, its index entry and any cold frames. A series that
+    /// aged out of the hot window entirely still counts against the metric until it is
+    /// removed here.
     pub fn delete_series(&self, series_id: &str) -> bool {
-        let removed = {
+        let hot = {
             let mut data = self.series_data.write();
             data.remove(series_id).is_some()
         };
+        let indexed = self.index.remove(series_id);
+        let cold = self
+            .cold
+            .as_ref()
+            .is_some_and(|c| c.remove_series(series_id));
+        hot || indexed || cold
+    }
 
-        if removed {
-            self.index.remove(series_id);
+    /// Delete every series of a metric (hot, index and cold). Returns how many were removed.
+    /// This is the way out when a metric's old series shape has filled `max_series_per_metric`
+    /// and every new series under that name is refused.
+    pub fn delete_metric(&self, metric_name: &str) -> usize {
+        let mut ids: std::collections::HashSet<String> =
+            self.index.find_by_metric(metric_name).into_iter().collect();
+        if let Some(cold) = self.cold.as_ref() {
+            for (id, meta) in cold.series() {
+                if meta.metric.name == metric_name {
+                    ids.insert(id);
+                }
+            }
         }
-
-        removed
+        let mut n = 0;
+        for id in ids {
+            if self.delete_series(&id) {
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Get the number of active series.
@@ -1083,6 +1107,37 @@ mod tests {
         // no metric named: tags alone still return every series on the tag set
         let q = TimeSeriesQuery::new("", start, end).with_tags(tags);
         assert_eq!(engine.query(&q).series.len(), 5);
+    }
+
+    #[test]
+    fn test_delete_metric_frees_the_name() {
+        let engine = TimeSeriesEngine::new();
+        for i in 0..5 {
+            let mut tags = Tags::new();
+            tags.insert("sample", i.to_string());
+            engine
+                .write_now("old_shape", tags, i as f64)
+                .expect("write_now should succeed");
+        }
+        let mut other = Tags::new();
+        other.insert("host", "a");
+        engine
+            .write_now("keep_me", other, 1.0)
+            .expect("write_now should succeed");
+        assert_eq!(engine.index.count_for_metric("old_shape"), 5);
+
+        assert_eq!(engine.delete_metric("old_shape"), 5);
+        assert_eq!(engine.index.count_for_metric("old_shape"), 0);
+        assert_eq!(engine.series_count(), 1);
+        assert_eq!(engine.delete_metric("old_shape"), 0);
+
+        // the name is usable again
+        let mut tags = Tags::new();
+        tags.insert("sample", "new");
+        engine
+            .write_now("old_shape", tags, 9.0)
+            .expect("write_now should succeed");
+        assert_eq!(engine.index.count_for_metric("old_shape"), 1);
     }
 
     #[test]

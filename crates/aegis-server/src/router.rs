@@ -269,6 +269,14 @@ pub fn create_router(state: AppState) -> Router {
             state.clone(),
             middleware::require_auth,
         ));
+    // Purging a metric's series is destructive: admin only.
+    let timeseries_admin_routes = Router::new()
+        .route("/metrics/:name", delete(handlers::delete_metric))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::require_admin,
+        ));
+    let timeseries_routes = timeseries_routes.merge(timeseries_admin_routes);
 
     // Streaming routes (require auth)
     let streaming_routes = Router::new()

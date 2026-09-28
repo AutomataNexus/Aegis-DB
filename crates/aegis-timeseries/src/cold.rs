@@ -86,6 +86,16 @@ impl ColdStore {
             .collect()
     }
 
+    /// Drop a series from the cold tier: its frame file and its index entry.
+    pub fn remove_series(&self, series_id: &str) -> bool {
+        let had = self.index.write().remove(series_id).is_some();
+        if had {
+            let _ = fs::remove_file(self.file_for(series_id));
+            let _ = self.save_index();
+        }
+        had
+    }
+
     /// Whether this series has any cold data.
     pub fn contains(&self, series_id: &str) -> bool {
         self.index.read().contains_key(series_id)

@@ -2200,6 +2200,25 @@ impl From<&Metric> for MetricInfoResponse {
 }
 
 /// List metrics with full type information.
+/// DELETE /api/v1/timeseries/metrics/:name (admin) — drop every series of a metric: hot
+/// buffers, index entries and cold frames. The way out when a metric's old series shape
+/// filled `max_series_per_metric` and every new series under that name is refused.
+pub async fn delete_metric(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let removed = state.timeseries_engine.delete_metric(&name);
+    state.activity.log(
+        ActivityType::Delete,
+        &format!("Delete metric series: {name} ({removed} removed)"),
+    );
+    Json(serde_json::json!({
+        "success": true,
+        "metric": name,
+        "series_removed": removed,
+    }))
+}
+
 pub async fn list_metrics(State(state): State<AppState>) -> Json<Vec<MetricInfoResponse>> {
     state.activity.log(ActivityType::Query, "Listed metrics");
     let metrics = state.timeseries_engine.list_metrics();
