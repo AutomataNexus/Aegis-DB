@@ -267,8 +267,19 @@ impl TimeSeriesEngine {
     pub fn query(&self, query: &TimeSeriesQuery) -> QueryResult {
         let start_time = std::time::Instant::now();
 
+        // Tags narrow the metric, they never replace it: several metrics can share one tag
+        // set (a detector's health with its anomaly / latency / fps companions), and a query
+        // that names one of them must not hand back the others.
         let series_ids = if let Some(ref tags) = query.tags {
-            self.index.find_by_tags(tags)
+            let mut ids = self.index.find_by_tags(tags);
+            if !query.metric.is_empty() {
+                ids.retain(|id| {
+                    self.index
+                        .get(id)
+                        .is_some_and(|meta| meta.metric_name == query.metric)
+                });
+            }
+            ids
         } else {
             self.index.find_by_metric(&query.metric)
         };
@@ -1036,6 +1047,42 @@ mod tests {
         let regions = engine.tag_values("region");
         assert!(regions.contains(&"us-east".to_string()));
         assert!(regions.contains(&"us-west".to_string()));
+    }
+
+    #[test]
+    fn test_tag_query_keeps_the_metric() {
+        // Five metrics on ONE tag set (a detector's health + its companions). A query that
+        // names the metric and filters by tags must return only that metric's series.
+        let engine = TimeSeriesEngine::new();
+        let mut tags = Tags::new();
+        tags.insert("controller_id", "box-1");
+        tags.insert("model_name", "det/unit-1");
+        for (metric, v) in [
+            ("Inference", 97.0),
+            ("Inference_Anomaly", 0.12),
+            ("Inference_Confidence", 1.0),
+            ("Inference_Latency", 2.2),
+            ("Inference_Fps", 450.0),
+        ] {
+            engine
+                .write_now(metric, tags.clone(), v)
+                .expect("write_now should succeed");
+        }
+        let start = Utc::now() - Duration::hours(1);
+        let end = Utc::now() + Duration::hours(1);
+        let q = TimeSeriesQuery::new("Inference_Anomaly", start, end).with_tags(tags.clone());
+        let result = engine.query(&q);
+        assert_eq!(
+            result.series.len(),
+            1,
+            "tags must narrow the metric, not replace it"
+        );
+        assert_eq!(result.series[0].metric.name, "Inference_Anomaly");
+        assert_eq!(result.series[0].points[0].value, 0.12);
+
+        // no metric named: tags alone still return every series on the tag set
+        let q = TimeSeriesQuery::new("", start, end).with_tags(tags);
+        assert_eq!(engine.query(&q).series.len(), 5);
     }
 
     #[test]
