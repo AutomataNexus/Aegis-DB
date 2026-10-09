@@ -192,7 +192,6 @@ impl StorageBackend for MemoryBackend {
     }
 
     async fn commit_transaction(&self, tx_id: TransactionId) -> Result<()> {
-        // Verify transaction is active
         {
             let transactions = self.transactions.read();
             match transactions.get(&tx_id) {
@@ -213,7 +212,6 @@ impl StorageBackend for MemoryBackend {
             }
         }
 
-        // Apply pending writes
         let pending = self
             .pending_writes
             .write()
@@ -233,7 +231,6 @@ impl StorageBackend for MemoryBackend {
             }
         }
 
-        // Apply pending deletes
         let deletes = self
             .pending_deletes
             .write()
@@ -250,7 +247,6 @@ impl StorageBackend for MemoryBackend {
             }
         }
 
-        // Mark transaction as committed
         self.transactions
             .write()
             .insert(tx_id, TransactionState::Committed);
@@ -258,7 +254,6 @@ impl StorageBackend for MemoryBackend {
     }
 
     async fn rollback_transaction(&self, tx_id: TransactionId) -> Result<()> {
-        // Verify transaction exists
         {
             let transactions = self.transactions.read();
             match transactions.get(&tx_id) {
@@ -269,7 +264,7 @@ impl StorageBackend for MemoryBackend {
                     ));
                 }
                 Some(TransactionState::RolledBack) => {
-                    return Ok(()); // Already rolled back, idempotent
+                    return Ok(());
                 }
                 None => {
                     return Err(AegisError::Transaction("Transaction not found".to_string()));
@@ -277,11 +272,9 @@ impl StorageBackend for MemoryBackend {
             }
         }
 
-        // Discard pending writes and deletes
         self.pending_writes.write().remove(&tx_id);
         self.pending_deletes.write().remove(&tx_id);
 
-        // Mark transaction as rolled back
         self.transactions
             .write()
             .insert(tx_id, TransactionState::RolledBack);
@@ -346,7 +339,6 @@ impl LocalBackend {
             tx_last_lsn: RwLock::new(HashMap::new()),
         };
 
-        // Scan existing blocks to set next_block_id correctly
         backend.recover_block_ids()?;
 
         Ok(backend)
@@ -385,7 +377,6 @@ impl LocalBackend {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name.starts_with("block_") && name.ends_with(".dat") {
-                        // Parse block ID from filename: block_0000000000000001.dat
                         if let Some(id_str) = name
                             .strip_prefix("block_")
                             .and_then(|s| s.strip_suffix(".dat"))
@@ -400,7 +391,6 @@ impl LocalBackend {
             }
         }
 
-        // Set next_block_id to one past the maximum found
         self.next_block_id.store(max_id + 1, Ordering::SeqCst);
         Ok(())
     }
@@ -414,7 +404,6 @@ impl LocalBackend {
 
     /// Sync the data directory to ensure directory entries are persisted.
     async fn sync_directory(&self) -> Result<()> {
-        // On Unix, we need to fsync the directory to ensure renames/creates are durable
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -433,7 +422,6 @@ impl LocalBackend {
         tx_id: TransactionId,
         mut block: Block,
     ) -> Result<BlockId> {
-        // Verify transaction is active
         {
             let transactions = self.transactions.read();
             match transactions.get(&tx_id) {
@@ -458,7 +446,6 @@ impl LocalBackend {
         block.header.block_id = block_id;
         let data = block.to_bytes()?;
 
-        // Add to pending operations
         let mut pending = self.pending_ops.write();
         let ops = pending.entry(tx_id).or_default();
         ops.push(PendingOperation::Write {
@@ -471,7 +458,6 @@ impl LocalBackend {
 
     /// Delete a block within a transaction context.
     pub async fn delete_block_in_tx(&self, tx_id: TransactionId, id: BlockId) -> Result<()> {
-        // Verify transaction is active
         {
             let transactions = self.transactions.read();
             match transactions.get(&tx_id) {
@@ -487,7 +473,6 @@ impl LocalBackend {
             }
         }
 
-        // Add to pending operations
         let mut pending = self.pending_ops.write();
         let ops = pending.entry(tx_id).or_default();
         ops.push(PendingOperation::Delete { block_id: id });
@@ -509,7 +494,6 @@ impl StorageBackend for LocalBackend {
         let path = self.block_path(block_id);
         let data = block.to_bytes()?;
 
-        // Write to a temporary file first, then rename for atomicity
         let temp_path = self.data_dir.join(format!("block_{:016x}.tmp", block_id.0));
         tokio::fs::write(&temp_path, &data).await?;
 
@@ -517,7 +501,6 @@ impl StorageBackend for LocalBackend {
             self.sync_file(&temp_path).await?;
         }
 
-        // Atomic rename
         tokio::fs::rename(&temp_path, &path).await?;
 
         if self.sync_writes {
@@ -539,14 +522,11 @@ impl StorageBackend for LocalBackend {
     }
 
     async fn read_block(&self, id: BlockId) -> Result<Block> {
-        // First check pending writes in any active transaction (read-your-writes)
         {
             let pending = self.pending_ops.read();
             for (tx_id, ops) in pending.iter() {
-                // Only consider active transactions
                 let transactions = self.transactions.read();
                 if transactions.get(tx_id) == Some(&TransactionState::Active) {
-                    // Find the last write to this block in this transaction
                     for op in ops.iter().rev() {
                         if let PendingOperation::Write { block_id, data } = op {
                             if *block_id == id {
@@ -599,7 +579,6 @@ impl StorageBackend for LocalBackend {
     }
 
     async fn block_exists(&self, id: BlockId) -> Result<bool> {
-        // Check pending operations first
         {
             let pending = self.pending_ops.read();
             for (tx_id, ops) in pending.iter() {
@@ -628,7 +607,6 @@ impl StorageBackend for LocalBackend {
     async fn begin_transaction(&self) -> Result<TransactionId> {
         let tx_id = self.allocate_tx_id();
 
-        // Initialize transaction state
         self.transactions
             .write()
             .insert(tx_id, TransactionState::Active);
@@ -639,7 +617,6 @@ impl StorageBackend for LocalBackend {
     }
 
     async fn commit_transaction(&self, tx_id: TransactionId) -> Result<()> {
-        // Verify transaction is active
         {
             let transactions = self.transactions.read();
             match transactions.get(&tx_id) {
@@ -660,11 +637,8 @@ impl StorageBackend for LocalBackend {
             }
         }
 
-        // Get pending operations for this transaction
         let operations = self.pending_ops.write().remove(&tx_id).unwrap_or_default();
 
-        // Apply all pending operations atomically
-        // First, write all blocks to temp files
         let mut temp_files: Vec<(BlockId, PathBuf, PathBuf, Vec<u8>)> = Vec::new();
         let mut deletes: Vec<BlockId> = Vec::new();
 
@@ -674,7 +648,6 @@ impl StorageBackend for LocalBackend {
                     let temp_path = self.data_dir.join(format!("block_{:016x}.tmp", block_id.0));
                     let final_path = self.block_path(block_id);
 
-                    // Write to temp file
                     tokio::fs::write(&temp_path, &data).await?;
 
                     if self.sync_writes {
@@ -689,12 +662,9 @@ impl StorageBackend for LocalBackend {
             }
         }
 
-        // Now atomically rename all temp files to final destinations
-        // This is the commit point - if we crash after all renames, data is committed
         for (block_id, temp_path, final_path, data) in temp_files {
             tokio::fs::rename(&temp_path, &final_path).await?;
 
-            // Update in-memory state
             let mut blocks = self.blocks.write();
             let is_new = !blocks.contains_key(&block_id);
             blocks.insert(block_id, final_path);
@@ -707,7 +677,6 @@ impl StorageBackend for LocalBackend {
             }
         }
 
-        // Process deletes
         for block_id in deletes {
             let path = self.block_path(block_id);
             if let Err(e) = tokio::fs::remove_file(&path).await {
@@ -722,12 +691,10 @@ impl StorageBackend for LocalBackend {
             stats.total_blocks = stats.total_blocks.saturating_sub(1);
         }
 
-        // Sync directory to ensure all renames are durable
         if self.sync_writes {
             self.sync_directory().await?;
         }
 
-        // Mark transaction as committed
         self.transactions
             .write()
             .insert(tx_id, TransactionState::Committed);
@@ -737,7 +704,6 @@ impl StorageBackend for LocalBackend {
     }
 
     async fn rollback_transaction(&self, tx_id: TransactionId) -> Result<()> {
-        // Verify transaction exists
         {
             let transactions = self.transactions.read();
             match transactions.get(&tx_id) {
@@ -748,7 +714,7 @@ impl StorageBackend for LocalBackend {
                     ));
                 }
                 Some(TransactionState::RolledBack) => {
-                    return Ok(()); // Already rolled back, idempotent
+                    return Ok(());
                 }
                 None => {
                     return Err(AegisError::Transaction("Transaction not found".to_string()));
@@ -756,10 +722,8 @@ impl StorageBackend for LocalBackend {
             }
         }
 
-        // Discard pending operations - nothing was written to disk yet
         self.pending_ops.write().remove(&tx_id);
 
-        // Clean up any temp files that might exist
         if let Ok(entries) = std::fs::read_dir(&self.data_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -771,7 +735,6 @@ impl StorageBackend for LocalBackend {
             }
         }
 
-        // Mark transaction as rolled back
         self.transactions
             .write()
             .insert(tx_id, TransactionState::RolledBack);
@@ -781,20 +744,17 @@ impl StorageBackend for LocalBackend {
     }
 
     async fn sync(&self) -> Result<()> {
-        // Collect paths to sync (release lock before async operations)
         let paths: Vec<PathBuf> = {
             let blocks = self.blocks.read();
             blocks.values().cloned().collect()
         };
 
-        // Sync all block files
         for path in paths {
             if path.exists() {
                 self.sync_file(&path).await?;
             }
         }
 
-        // Sync directory
         self.sync_directory().await?;
 
         Ok(())
@@ -884,13 +844,11 @@ mod tests {
         let backend = LocalBackend::new(temp_dir.path().to_path_buf(), true)
             .expect("LocalBackend::new should succeed");
 
-        // Begin transaction
         let tx_id = backend
             .begin_transaction()
             .await
             .expect("begin_transaction should succeed");
 
-        // Write block within transaction
         let data = Bytes::from("transactional data");
         let block = Block::new(BlockId(0), BlockType::TableData, data.clone());
         let block_id = backend
@@ -898,20 +856,16 @@ mod tests {
             .await
             .expect("write_block_in_tx should succeed");
 
-        // Block should not be on disk yet (only in pending)
         let path = backend.block_path(block_id);
         assert!(!path.exists());
 
-        // Commit transaction
         backend
             .commit_transaction(tx_id)
             .await
             .expect("commit_transaction should succeed");
 
-        // Now block should be on disk
         assert!(path.exists());
 
-        // Should be readable
         let read_block = backend
             .read_block(block_id)
             .await
@@ -925,13 +879,11 @@ mod tests {
         let backend = LocalBackend::new(temp_dir.path().to_path_buf(), false)
             .expect("LocalBackend::new should succeed");
 
-        // Begin transaction
         let tx_id = backend
             .begin_transaction()
             .await
             .expect("begin_transaction should succeed");
 
-        // Write block within transaction
         let data = Bytes::from("data to be rolled back");
         let block = Block::new(BlockId(0), BlockType::TableData, data);
         let block_id = backend
@@ -939,17 +891,14 @@ mod tests {
             .await
             .expect("write_block_in_tx should succeed");
 
-        // Rollback
         backend
             .rollback_transaction(tx_id)
             .await
             .expect("rollback_transaction should succeed");
 
-        // Block should not exist
         let path = backend.block_path(block_id);
         assert!(!path.exists());
 
-        // Reading should fail
         let result = backend.read_block(block_id).await;
         assert!(result.is_err());
     }
@@ -969,7 +918,6 @@ mod tests {
             .await
             .expect("first commit_transaction should succeed");
 
-        // Second commit should fail
         let result = backend.commit_transaction(tx_id).await;
         assert!(result.is_err());
     }
@@ -989,7 +937,6 @@ mod tests {
             .await
             .expect("rollback_transaction should succeed");
 
-        // Commit after rollback should fail
         let result = backend.commit_transaction(tx_id).await;
         assert!(result.is_err());
     }
@@ -1005,7 +952,6 @@ mod tests {
             .await
             .expect("begin_transaction should succeed");
 
-        // Write multiple blocks
         let block1 = Block::new(BlockId(0), BlockType::TableData, Bytes::from("block1"));
         let block2 = Block::new(BlockId(0), BlockType::TableData, Bytes::from("block2"));
         let block3 = Block::new(BlockId(0), BlockType::TableData, Bytes::from("block3"));
@@ -1023,23 +969,19 @@ mod tests {
             .await
             .expect("write_block_in_tx block3 should succeed");
 
-        // None should exist on disk yet
         assert!(!backend.block_path(id1).exists());
         assert!(!backend.block_path(id2).exists());
         assert!(!backend.block_path(id3).exists());
 
-        // Commit
         backend
             .commit_transaction(tx_id)
             .await
             .expect("commit_transaction should succeed");
 
-        // All should exist now
         assert!(backend.block_path(id1).exists());
         assert!(backend.block_path(id2).exists());
         assert!(backend.block_path(id3).exists());
 
-        // Verify data
         let read1 = backend
             .read_block(id1)
             .await
@@ -1063,7 +1005,6 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir should be created");
         let data_path = temp_dir.path().to_path_buf();
 
-        // Create backend and write some blocks
         {
             let backend = LocalBackend::new(data_path.clone(), true)
                 .expect("LocalBackend::new should succeed");
@@ -1080,16 +1021,13 @@ mod tests {
                 .expect("write_block block2 should succeed");
         }
 
-        // Create new backend - should recover existing blocks
         {
             let backend = LocalBackend::new(data_path, true)
                 .expect("LocalBackend::new should succeed on recovery");
 
-            // Next block ID should be 3 (after 1 and 2)
             let next_id = backend.next_block_id.load(Ordering::SeqCst);
             assert_eq!(next_id, 3);
 
-            // Should be able to read existing blocks
             let read1 = backend
                 .read_block(BlockId(1))
                 .await
@@ -1108,23 +1046,19 @@ mod tests {
     async fn test_transaction_commit_rollback_state() {
         let backend = MemoryBackend::new();
 
-        // Begin transaction
         let tx_id = backend
             .begin_transaction()
             .await
             .expect("begin_transaction should succeed");
 
-        // Commit should succeed
         backend
             .commit_transaction(tx_id)
             .await
             .expect("commit_transaction should succeed");
 
-        // Second commit should fail (already committed)
         let result = backend.commit_transaction(tx_id).await;
         assert!(result.is_err());
 
-        // Rollback should fail (already committed)
         let result = backend.rollback_transaction(tx_id).await;
         assert!(result.is_err());
     }
@@ -1133,25 +1067,21 @@ mod tests {
     async fn test_transaction_rollback() {
         let backend = MemoryBackend::new();
 
-        // Begin transaction
         let tx_id = backend
             .begin_transaction()
             .await
             .expect("begin_transaction should succeed");
 
-        // Rollback should succeed
         backend
             .rollback_transaction(tx_id)
             .await
             .expect("first rollback_transaction should succeed");
 
-        // Second rollback should be idempotent (succeed)
         backend
             .rollback_transaction(tx_id)
             .await
             .expect("second rollback_transaction should be idempotent");
 
-        // Commit should fail (already rolled back)
         let result = backend.commit_transaction(tx_id).await;
         assert!(result.is_err());
     }
@@ -1160,12 +1090,10 @@ mod tests {
     async fn test_transaction_not_found() {
         let backend = MemoryBackend::new();
 
-        // Try to commit a non-existent transaction
         let fake_tx_id = TransactionId(999);
         let result = backend.commit_transaction(fake_tx_id).await;
         assert!(result.is_err());
 
-        // Try to rollback a non-existent transaction
         let result = backend.rollback_transaction(fake_tx_id).await;
         assert!(result.is_err());
     }

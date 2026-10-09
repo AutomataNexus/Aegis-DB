@@ -42,7 +42,7 @@ impl Default for StorageConfig {
             compression: CompressionType::Lz4,
             encryption: EncryptionType::None,
             sync_writes: true,
-            max_file_size: 256 * 1024 * 1024, // 256 MB
+            max_file_size: 256 * 1024 * 1024,
         }
     }
 }
@@ -62,9 +62,9 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            buffer_pool_size: 1024 * 1024 * 1024,  // 1 GB
-            query_memory_limit: 256 * 1024 * 1024, // 256 MB
-            arena_block_size: 64 * 1024,           // 64 KB
+            buffer_pool_size: 1024 * 1024 * 1024,
+            query_memory_limit: 256 * 1024 * 1024,
+            arena_block_size: 64 * 1024,
         }
     }
 }
@@ -152,7 +152,7 @@ pub struct QueryConfig {
 impl Default for QueryConfig {
     fn default() -> Self {
         Self {
-            max_query_length: 1024 * 1024, // 1 MB
+            max_query_length: 1024 * 1024,
             default_limit: 10000,
             statement_timeout: Duration::from_secs(300),
             enable_query_cache: true,
@@ -197,7 +197,7 @@ impl ServerConfig {
                 ..Default::default()
             },
             memory: MemoryConfig {
-                buffer_pool_size: 256 * 1024 * 1024, // 256 MB
+                buffer_pool_size: 256 * 1024 * 1024,
                 ..Default::default()
             },
             network: NetworkConfig {

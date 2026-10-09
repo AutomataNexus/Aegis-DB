@@ -509,7 +509,6 @@ mod tests {
     #[test]
     fn test_insert_auto_creates_collection() {
         let engine = DocumentEngine::new();
-        // No create_collection — the first insert makes the collection.
         let mut doc = Document::with_id("d1");
         doc.set("name", "Auto");
         let id = engine.insert("auto", doc).unwrap();

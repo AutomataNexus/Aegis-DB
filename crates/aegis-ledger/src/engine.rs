@@ -1,7 +1,10 @@
 //! The ledger / append-only engine: named ledgers of immutable, hash-chained
 //! entries, with integrity verification and snapshot persistence.
 
-use crate::types::{chain_hash, LedgerEntry, LedgerError, VerifyResult, GENESIS_HASH};
+use crate::types::{
+    chain_hash_versioned, genesis_hash, LedgerEntry, LedgerError, VerifyResult, HASH_VERSION_FNV1A,
+    HASH_VERSION_SHA256,
+};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,9 +20,26 @@ pub struct LedgerStats {
 
 /// A single append-only ledger. Entries are stored in sequence order; `seq`
 /// equals the index.
-#[derive(Default, Clone, Serialize, Deserialize)]
+/// `hash_version` is absent from snapshots written before v0.6, so a missing
+/// field deserializes as the legacy FNV-1a version; new ledgers use SHA-256.
+#[derive(Clone, Serialize, Deserialize)]
 struct Ledger {
     entries: Vec<LedgerEntry>,
+    #[serde(default = "legacy_hash_version")]
+    hash_version: u8,
+}
+
+fn legacy_hash_version() -> u8 {
+    HASH_VERSION_FNV1A
+}
+
+impl Default for Ledger {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            hash_version: HASH_VERSION_SHA256,
+        }
+    }
 }
 
 impl Ledger {
@@ -27,7 +47,7 @@ impl Ledger {
         self.entries
             .last()
             .map(|e| e.hash.as_str())
-            .unwrap_or(GENESIS_HASH)
+            .unwrap_or_else(|| genesis_hash(self.hash_version))
     }
 }
 
@@ -100,11 +120,10 @@ impl LedgerEngine {
     ) -> Result<LedgerEntry, LedgerError> {
         let ts = timestamp.unwrap_or_else(|| self.next_ts());
         let mut ledgers = self.ledgers.write();
-        // Auto-create the ledger on first append.
         let l = ledgers.entry(ledger.to_string()).or_default();
         let seq = l.entries.len() as u64;
         let prev_hash = l.tip().to_string();
-        let hash = chain_hash(&prev_hash, seq, ts, &payload);
+        let hash = chain_hash_versioned(l.hash_version, &prev_hash, seq, ts, &payload);
         let entry = LedgerEntry {
             seq,
             timestamp: ts,
@@ -153,9 +172,10 @@ impl LedgerEngine {
         let l = ledgers
             .get(ledger)
             .ok_or_else(|| LedgerError::LedgerNotFound(ledger.to_string()))?;
-        let mut prev = GENESIS_HASH.to_string();
+        let mut prev = genesis_hash(l.hash_version).to_string();
         for (i, e) in l.entries.iter().enumerate() {
-            let expected = chain_hash(&e.prev_hash, e.seq, e.timestamp, &e.payload);
+            let expected =
+                chain_hash_versioned(l.hash_version, &e.prev_hash, e.seq, e.timestamp, &e.payload);
             let ok = e.seq == i as u64 && e.prev_hash == prev && e.hash == expected;
             if !ok {
                 return Ok(VerifyResult {

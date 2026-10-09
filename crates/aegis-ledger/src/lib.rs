@@ -10,7 +10,10 @@ pub mod engine;
 pub mod types;
 
 pub use engine::{EngineSnapshot, LedgerEngine, LedgerStats};
-pub use types::{chain_hash, LedgerEntry, LedgerError, VerifyResult, GENESIS_HASH};
+pub use types::{
+    chain_hash, chain_hash_fnv1a, chain_hash_versioned, genesis_hash, LedgerEntry, LedgerError,
+    VerifyResult, GENESIS_HASH, GENESIS_HASH_V1, HASH_VERSION_FNV1A, HASH_VERSION_SHA256,
+};
 
 #[cfg(test)]
 mod tests {
@@ -47,12 +50,10 @@ mod tests {
         let e1 = e.get("audit", 1).unwrap().unwrap();
         let e2 = e.get("audit", 2).unwrap().unwrap();
         assert_eq!((e0.seq, e1.seq, e2.seq), (0, 1, 2));
-        // Genesis link, then each prev_hash equals the prior entry's hash.
         assert_eq!(e0.prev_hash, GENESIS_HASH);
         assert_eq!(e1.prev_hash, e0.hash);
         assert_eq!(e2.prev_hash, e1.hash);
-        // Hashes are 128-bit (32 hex chars) and distinct.
-        assert_eq!(e0.hash.len(), 32);
+        assert_eq!(e0.hash.len(), 64);
         assert_ne!(e0.hash, e1.hash);
     }
 
@@ -68,8 +69,6 @@ mod tests {
     #[test]
     fn tampering_breaks_verification() {
         let e = seeded();
-        // Serialize the snapshot to JSON, retroactively edit entry 1's payload
-        // (without recomputing its hash), reload, and re-verify.
         let mut json: serde_json::Value = serde_json::to_value(e.snapshot()).unwrap();
         json["ledgers"]["audit"]["entries"][1]["payload"]["user"] = serde_json::json!("mallory");
         let doctored: EngineSnapshot = serde_json::from_value(json).unwrap();
@@ -101,7 +100,6 @@ mod tests {
             e.create_ledger("l"),
             Err(LedgerError::LedgerExists(_))
         ));
-        // Appending to a never-created ledger auto-creates it.
         e.append("fresh", serde_json::json!({"x": 1}), None)
             .unwrap();
         assert_eq!(e.ledger_stats("fresh").unwrap().entries, 1);
@@ -116,7 +114,6 @@ mod tests {
         restored.load_snapshot(serde_json::from_slice(&bytes).unwrap());
         assert_eq!(restored.ledger_stats("audit").unwrap().entries, 3);
         assert!(restored.verify("audit").unwrap().valid);
-        // Appending after restore continues the same chain.
         let e3 = restored
             .append("audit", serde_json::json!({"event": "read"}), Some(4))
             .unwrap();
@@ -127,7 +124,6 @@ mod tests {
     #[test]
     fn append_auto_creates_ledger() {
         let e = LedgerEngine::new();
-        // No create_ledger call — the first append makes the ledger.
         let entry = e
             .append("auto", serde_json::json!({"hi": 1}), None)
             .unwrap();
@@ -160,9 +156,7 @@ mod tests {
         let b0 = e
             .append("b", serde_json::json!({"x": 1}), Some(10))
             .unwrap();
-        // Same payload + timestamp + seq + genesis => identical hash across ledgers.
         assert_eq!(a0.hash, b0.hash);
-        // Diverge them; each still verifies on its own.
         e.append("a", serde_json::json!({"x": 2}), Some(11))
             .unwrap();
         assert!(e.verify("a").unwrap().valid);
@@ -186,7 +180,6 @@ mod tests {
             e.drop_ledger("a"),
             Err(LedgerError::LedgerNotFound(_))
         ));
-        // Reads on a missing ledger still error (no implicit creation).
         assert!(matches!(e.verify("a"), Err(LedgerError::LedgerNotFound(_))));
         assert!(matches!(e.get("a", 0), Err(LedgerError::LedgerNotFound(_))));
     }
@@ -200,7 +193,7 @@ mod tests {
         let page = e.range("audit", 1, Some(1)).unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].seq, 1);
-        assert!(e.range("audit", 99, None).unwrap().is_empty()); // past the end
+        assert!(e.range("audit", 99, None).unwrap().is_empty());
         assert!(e.get("audit", 99).unwrap().is_none());
     }
 
@@ -212,12 +205,11 @@ mod tests {
         assert_eq!(a.timestamp, 42);
         let b = e.append("l", serde_json::json!({}), None).unwrap();
         let c = e.append("l", serde_json::json!({}), None).unwrap();
-        assert!(c.timestamp > b.timestamp); // auto clock advances
+        assert!(c.timestamp > b.timestamp);
     }
 
     #[test]
     fn append_is_deterministic() {
-        // Same ledger contents (payloads + timestamps) => identical hashes.
         let build = || {
             let e = LedgerEngine::new();
             e.create_ledger("l").unwrap();
@@ -248,14 +240,11 @@ mod tests {
 
     #[test]
     fn tampering_any_field_breaks_chain() {
-        // Editing the payload of entry 1 breaks at 1.
         assert_eq!(
             tamper_at("payload", 1, serde_json::json!({"evil": true})),
             Some(1)
         );
-        // Editing the stored timestamp breaks (it's covered by the hash).
         assert_eq!(tamper_at("timestamp", 0, serde_json::json!(9999)), Some(0));
-        // Corrupting the stored hash itself breaks at that entry.
         assert_eq!(
             tamper_at(
                 "hash",
@@ -264,7 +253,6 @@ mod tests {
             ),
             Some(2)
         );
-        // Rewriting a prev_hash to break the link is caught.
         assert_eq!(
             tamper_at(
                 "prev_hash",
@@ -273,7 +261,43 @@ mod tests {
             ),
             Some(2)
         );
-        // A truthful intact chain still verifies (control).
         assert_eq!(seeded().verify("audit").unwrap().broken_at, None);
+    }
+
+    #[test]
+    fn legacy_fnv1a_snapshot_still_verifies_and_chains() {
+        let mut prev = GENESIS_HASH_V1.to_string();
+        let mut entries = Vec::new();
+        for seq in 0..3u64 {
+            let payload = serde_json::json!({ "event": seq });
+            let hash = chain_hash_fnv1a(&prev, seq, 100 + seq, &payload);
+            entries.push(serde_json::json!({
+                "seq": seq, "timestamp": 100 + seq, "payload": payload,
+                "prev_hash": prev, "hash": hash,
+            }));
+            prev = hash;
+        }
+        let legacy = serde_json::json!({
+            "ledgers": { "audit": { "entries": entries } },
+            "clock": 200,
+        });
+        let e = LedgerEngine::new();
+        e.load_snapshot(serde_json::from_value(legacy).unwrap());
+        let v = e.verify("audit").unwrap();
+        assert!(v.valid, "legacy ledger broke at {:?}", v.broken_at);
+        let next = e
+            .append("audit", serde_json::json!({"event": 3}), Some(103))
+            .unwrap();
+        assert_eq!(next.hash.len(), 32);
+        assert!(e.verify("audit").unwrap().valid);
+        let fresh = e.append("new", serde_json::json!({}), Some(1)).unwrap();
+        assert_eq!(fresh.prev_hash, GENESIS_HASH);
+        assert_eq!(fresh.hash.len(), 64);
+        let reloaded = LedgerEngine::new();
+        reloaded.load_snapshot(
+            serde_json::from_slice(&serde_json::to_vec(&e.snapshot()).unwrap()).unwrap(),
+        );
+        assert!(reloaded.verify("audit").unwrap().valid);
+        assert!(reloaded.verify("new").unwrap().valid);
     }
 }

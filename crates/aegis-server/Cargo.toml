@@ -52,7 +52,7 @@ parking_lot = { workspace = true }
 chrono = { workspace = true }
 libc = "0.2"
 # LDAP authentication
-ldap3 = "0.11"
+ldap3 = { version = "0.11", default-features = false, features = ["tls-rustls"] }
 # OAuth2 HTTP requests and webhook notifications
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 # TOTP verification
@@ -71,10 +71,10 @@ rand = "0.8"
 aes-gcm = { workspace = true }
 hex = "0.4"
 getrandom = "0.2"
-# TLS support
+# TLS support (rustls — no OpenSSL; a vendored openssl-sys was declared here but
+# never used in code and blocked windows-msvc cross-compilation, so it was removed).
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls-pemfile = "2.0"
-openssl-sys = { version = "0.9.111", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

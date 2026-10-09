@@ -48,7 +48,6 @@ fn memory_backend_read_benchmark(c: &mut Criterion) {
             let backend = Arc::new(MemoryBackend::new());
             let data = Bytes::from(vec![0u8; size]);
 
-            // Pre-populate blocks
             let block_ids: Vec<BlockId> = rt.block_on(async {
                 let mut ids = Vec::new();
                 for _ in 0..100 {
@@ -89,7 +88,6 @@ fn buffer_pool_benchmark(c: &mut Criterion) {
                 };
                 let pool = BufferPool::new(config);
 
-                // Pre-populate pool
                 for i in 0..(pool_size / 2) {
                     let _ = pool.new_page(PageId(i as u64), PageType::Data);
                 }

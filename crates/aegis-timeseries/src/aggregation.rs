@@ -258,7 +258,6 @@ impl RollingWindow {
         for (i, point) in points.iter().enumerate() {
             let window_start_time = point.timestamp - self.window_size;
 
-            // Advance the window start pointer forward (O(1) amortized)
             while window_start_idx < i && points[window_start_idx].timestamp < window_start_time {
                 window_start_idx += 1;
             }

@@ -22,7 +22,6 @@ use thiserror::Error;
 /// Unified error type for all Aegis operations.
 #[derive(Error, Debug)]
 pub enum AegisError {
-    // Storage errors
     #[error("storage error: {0}")]
     Storage(String),
 
@@ -35,7 +34,6 @@ pub enum AegisError {
     #[error("corruption detected: {0}")]
     Corruption(String),
 
-    // Transaction errors
     #[error("transaction error: {0}")]
     Transaction(String),
 
@@ -51,7 +49,6 @@ pub enum AegisError {
     #[error("serialization failure")]
     SerializationFailure,
 
-    // Query errors
     #[error("parse error: {0}")]
     Parse(String),
 
@@ -70,7 +67,6 @@ pub enum AegisError {
     #[error("index not found: {0}")]
     IndexNotFound(String),
 
-    // Constraint errors
     #[error("constraint violation: {0}")]
     ConstraintViolation(String),
 
@@ -83,7 +79,6 @@ pub enum AegisError {
     #[error("check constraint violation: {0}")]
     CheckViolation(String),
 
-    // Replication errors
     #[error("replication error: {0}")]
     Replication(String),
 
@@ -96,41 +91,33 @@ pub enum AegisError {
     #[error("leader not elected")]
     LeaderNotElected,
 
-    // Authentication/Authorization errors
     #[error("authentication failed: {0}")]
     AuthenticationFailed(String),
 
     #[error("authorization denied: {0}")]
     AuthorizationDenied(String),
 
-    // IO errors
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    // Serialization errors
     #[error("serialization error: {0}")]
     Serialization(String),
 
-    // Encryption errors
     #[error("encryption error: {0}")]
     Encryption(String),
 
-    // Configuration errors
     #[error("configuration error: {0}")]
     Configuration(String),
 
-    // Internal errors
     #[error("internal error: {0}")]
     Internal(String),
 
-    // Resource errors
     #[error("resource exhausted: {0}")]
     ResourceExhausted(String),
 
     #[error("memory limit exceeded")]
     MemoryLimitExceeded,
 
-    // Network errors
     #[error("network error: {0}")]
     Network(String),
 
@@ -140,11 +127,9 @@ pub enum AegisError {
     #[error("timeout: {0}")]
     Timeout(String),
 
-    // Vault errors
     #[error("vault error: {0}")]
     Vault(String),
 
-    // Shield errors
     #[error("shield error: {0}")]
     Shield(String),
 }

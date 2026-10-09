@@ -248,12 +248,8 @@ impl FieldSchema {
                     }
                 }
                 if let Some(ref pattern) = self.pattern {
-                    // Use RegexBuilder with size_limit to prevent ReDoS attacks
-                    // from catastrophic backtracking on malicious patterns.
-                    // 1MB compiled size limit is sufficient for legitimate patterns
-                    // while blocking pathological cases.
                     let re = regex::RegexBuilder::new(pattern)
-                        .size_limit(1024 * 1024) // 1MB compiled size limit
+                        .size_limit(1024 * 1024)
                         .build()
                         .map_err(|e| format!("Invalid regex pattern: {}", e))?;
                     if !re.is_match(s) {

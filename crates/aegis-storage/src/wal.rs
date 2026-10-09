@@ -139,7 +139,6 @@ impl LogRecord {
 
     /// Serialize the record to bytes.
     pub fn to_bytes(&self) -> Bytes {
-        // header(40) + data + checksum(4)
         let mut buf = BytesMut::with_capacity(WAL_RECORD_HEADER_SIZE + self.data.len() + 4);
 
         buf.put_u64_le(self.lsn.0);
@@ -147,7 +146,7 @@ impl LogRecord {
         buf.put_u64_le(self.tx_id.0);
         buf.put_u8(self.record_type as u8);
         buf.put_u8(self.page_id.is_some() as u8);
-        buf.put_u16_le(0); // padding
+        buf.put_u16_le(0);
         buf.put_u64_le(self.page_id.map_or(0, |p| p.0));
         buf.put_u32_le(self.data.len() as u32);
         buf.put(self.data.clone());
@@ -160,7 +159,6 @@ impl LogRecord {
 
     /// Deserialize a record from bytes.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        // Minimum size: header(40) + checksum(4)
         if data.len() < WAL_RECORD_HEADER_SIZE + 4 {
             return Err(AegisError::Corruption("Log record too small".to_string()));
         }
@@ -279,7 +277,6 @@ impl WriteAheadLog {
     pub fn new(wal_dir: PathBuf, sync_on_commit: bool) -> Result<Self> {
         std::fs::create_dir_all(&wal_dir)?;
 
-        // Find the highest segment number
         let current_segment = Self::find_latest_segment(&wal_dir)?;
 
         let wal = Self {
@@ -308,10 +305,8 @@ impl WriteAheadLog {
     ) -> Result<(Self, RecoveryResult)> {
         std::fs::create_dir_all(&wal_dir)?;
 
-        // Perform recovery first
         let recovery = Self::recover_from_directory(&wal_dir)?;
 
-        // Create WAL starting from recovered LSN
         let current_segment = Self::find_latest_segment(&wal_dir)?;
         let next_lsn = recovery.max_lsn.0.saturating_add(1).max(1);
 
@@ -385,7 +380,6 @@ impl WriteAheadLog {
 
         let mut buffer = self.buffer.lock();
 
-        // Check if we need to rotate to a new segment
         if buffer.segment_offset + data_len > WAL_SEGMENT_SIZE {
             drop(buffer);
             self.rotate_segment()?;
@@ -407,7 +401,6 @@ impl WriteAheadLog {
     fn rotate_segment(&self) -> Result<()> {
         let mut buffer = self.buffer.lock();
 
-        // Flush current segment
         if let Some(ref mut writer) = buffer.writer {
             writer.flush()?;
             if self.sync_on_commit {
@@ -415,7 +408,6 @@ impl WriteAheadLog {
             }
         }
 
-        // Rename current segment to numbered segment
         let old_path = self.wal_dir.join("wal_current.log");
         let new_segment = buffer.current_segment + 1;
         let new_path = self
@@ -426,7 +418,6 @@ impl WriteAheadLog {
             std::fs::rename(&old_path, &new_path)?;
         }
 
-        // Open new segment
         buffer.current_segment = new_segment;
         let file = OpenOptions::new()
             .create(true)
@@ -556,7 +547,6 @@ impl WriteAheadLog {
         self.append(record)?;
         self.flush()?;
 
-        // Update checkpoint LSN
         self.checkpoint_lsn.store(lsn.0, Ordering::SeqCst);
 
         tracing::info!("Checkpoint created at LSN {}", lsn.0);
@@ -575,7 +565,6 @@ impl WriteAheadLog {
         let current_segment = buffer.current_segment;
         drop(buffer);
 
-        // Find and remove old segments
         if let Ok(entries) = std::fs::read_dir(&self.wal_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -585,7 +574,6 @@ impl WriteAheadLog {
                         .and_then(|s| s.strip_suffix(".log"))
                     {
                         if let Ok(num) = num_str.parse::<u64>() {
-                            // Keep at least the current segment and one before
                             if num + 2 < current_segment && std::fs::remove_file(&path).is_ok() {
                                 removed += 1;
                                 tracing::debug!("Removed old WAL segment: {}", name);
@@ -602,10 +590,9 @@ impl WriteAheadLog {
     /// Recover from WAL directory, returning records needed for redo/undo.
     fn recover_from_directory(wal_dir: &PathBuf) -> Result<RecoveryResult> {
         let mut result = RecoveryResult::default();
-        let mut tx_status: HashMap<TransactionId, bool> = HashMap::new(); // true = committed
+        let mut tx_status: HashMap<TransactionId, bool> = HashMap::new();
         let mut tx_records: HashMap<TransactionId, Vec<LogRecord>> = HashMap::new();
 
-        // Collect all segment files
         let mut segments: Vec<PathBuf> = Vec::new();
         if let Ok(entries) = std::fs::read_dir(wal_dir) {
             for entry in entries.flatten() {
@@ -618,10 +605,8 @@ impl WriteAheadLog {
             }
         }
 
-        // Sort segments by number
         segments.sort();
 
-        // Process each segment
         for segment_path in &segments {
             result.segments_scanned += 1;
             let records = Self::read_segment(segment_path)?;
@@ -639,7 +624,6 @@ impl WriteAheadLog {
                         tx_status.insert(record.tx_id, true);
                     }
                     LogRecordType::Abort => {
-                        // Mark as complete but not committed - remove from tracking
                         tx_status.remove(&record.tx_id);
                         tx_records.remove(&record.tx_id);
                     }
@@ -649,7 +633,6 @@ impl WriteAheadLog {
                         }
                     }
                     LogRecordType::Checkpoint => {
-                        // Parse checkpoint data to find active transactions
                         if let Ok(checkpoint) =
                             serde_json::from_slice::<CheckpointData>(&record.data)
                         {
@@ -658,14 +641,11 @@ impl WriteAheadLog {
                             }
                         }
                     }
-                    LogRecordType::CompensationLogRecord => {
-                        // CLRs are used during undo - skip for now
-                    }
+                    LogRecordType::CompensationLogRecord => {}
                 }
             }
         }
 
-        // Collect redo records for committed transactions
         for (tx_id, committed) in &tx_status {
             if *committed {
                 if let Some(records) = tx_records.remove(tx_id) {
@@ -676,7 +656,6 @@ impl WriteAheadLog {
             }
         }
 
-        // Sort redo records by LSN
         result.redo_records.sort_by_key(|r| r.lsn);
 
         tracing::info!(
@@ -695,17 +674,14 @@ impl WriteAheadLog {
         let mut records = Vec::new();
         let mut buffer = Vec::new();
 
-        // Read the entire file
         file.read_to_end(&mut buffer)?;
 
         let mut offset = 0;
         while offset < buffer.len() {
-            // Need at least header + checksum
             if buffer.len() - offset < WAL_RECORD_HEADER_SIZE + 4 {
                 break;
             }
 
-            // Read data length from header (at offset 36: after lsn, prev_lsn, tx_id, type, has_page, padding, page_id)
             let data_len_offset = offset + 36;
             if data_len_offset + 4 > buffer.len() {
                 break;
@@ -718,7 +694,7 @@ impl WriteAheadLog {
                 buffer[data_len_offset + 3],
             ]) as usize;
 
-            let total_record_len = WAL_RECORD_HEADER_SIZE + data_len + 4; // header + data + checksum
+            let total_record_len = WAL_RECORD_HEADER_SIZE + data_len + 4;
 
             if offset + total_record_len > buffer.len() {
                 break;
@@ -746,7 +722,6 @@ impl WriteAheadLog {
             .append(true)
             .open(&segment_path)?;
 
-        // Get current file size
         let metadata = file.metadata()?;
         let offset = metadata.len();
 
@@ -826,7 +801,6 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let wal_dir = temp_dir.path().to_path_buf();
 
-        // Create WAL and write a committed transaction
         {
             let wal = WriteAheadLog::new(wal_dir.clone(), true).expect("failed to create WAL");
             let tx_id = TransactionId(1);
@@ -839,15 +813,13 @@ mod tests {
                 .expect("failed to log commit");
         }
 
-        // Recover and verify
         let (wal, recovery) =
             WriteAheadLog::open_and_recover(wal_dir, true).expect("failed to recover WAL");
         assert_eq!(recovery.records_processed, 3);
-        assert_eq!(recovery.redo_records.len(), 1); // One insert record
+        assert_eq!(recovery.redo_records.len(), 1);
         assert!(recovery.incomplete_transactions.is_empty());
         assert_eq!(recovery.max_lsn, Lsn(3));
 
-        // Verify we can continue writing
         let next_lsn = wal.next_lsn();
         assert_eq!(next_lsn, Lsn(4));
     }
@@ -857,7 +829,6 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let wal_dir = temp_dir.path().to_path_buf();
 
-        // Create WAL with an incomplete transaction
         {
             let wal = WriteAheadLog::new(wal_dir.clone(), true).expect("failed to create WAL");
             let tx_id = TransactionId(1);
@@ -866,14 +837,12 @@ mod tests {
             wal.log_insert(tx_id, None, PageId(1), Bytes::from("uncommitted"))
                 .expect("failed to log insert");
             wal.flush().expect("failed to flush WAL");
-            // No commit - transaction is incomplete
         }
 
-        // Recover and verify
         let (_wal, recovery) =
             WriteAheadLog::open_and_recover(wal_dir, true).expect("failed to recover WAL");
         assert_eq!(recovery.records_processed, 2);
-        assert!(recovery.redo_records.is_empty()); // No redo for uncommitted
+        assert!(recovery.redo_records.is_empty());
         assert!(recovery.incomplete_transactions.contains(&TransactionId(1)));
     }
 
@@ -883,13 +852,11 @@ mod tests {
         let wal =
             WriteAheadLog::new(temp_dir.path().to_path_buf(), true).expect("failed to create WAL");
 
-        // Write some transactions
         let tx1 = TransactionId(1);
         let begin1 = wal.log_begin(tx1).expect("failed to log begin");
         wal.log_insert(tx1, Some(begin1), PageId(1), Bytes::from("data1"))
             .expect("failed to log insert");
 
-        // Create checkpoint
         let checkpoint_lsn = wal
             .log_checkpoint(vec![tx1], vec![PageId(1)])
             .expect("failed to log checkpoint");
@@ -903,11 +870,9 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let wal_dir = temp_dir.path().to_path_buf();
 
-        // Create WAL with checkpoint
         {
             let wal = WriteAheadLog::new(wal_dir.clone(), true).expect("failed to create WAL");
 
-            // Transaction 1 - committed before checkpoint
             let tx1 = TransactionId(1);
             let begin1 = wal.log_begin(tx1).expect("failed to log begin for tx1");
             let insert1 = wal
@@ -916,11 +881,9 @@ mod tests {
             wal.log_commit(tx1, insert1)
                 .expect("failed to log commit for tx1");
 
-            // Checkpoint
             wal.log_checkpoint(vec![], vec![])
                 .expect("failed to log checkpoint");
 
-            // Transaction 2 - committed after checkpoint
             let tx2 = TransactionId(2);
             let begin2 = wal.log_begin(tx2).expect("failed to log begin for tx2");
             let insert2 = wal
@@ -930,11 +893,9 @@ mod tests {
                 .expect("failed to log commit for tx2");
         }
 
-        // Recover
         let (_wal, recovery) =
             WriteAheadLog::open_and_recover(wal_dir, true).expect("failed to recover WAL");
 
-        // Both transactions should have redo records
         assert_eq!(recovery.redo_records.len(), 2);
         assert!(recovery.incomplete_transactions.is_empty());
     }
@@ -947,7 +908,6 @@ mod tests {
         {
             let wal = WriteAheadLog::new(wal_dir.clone(), true).expect("failed to create WAL");
 
-            // Transaction 1 - committed
             let tx1 = TransactionId(1);
             let begin1 = wal.log_begin(tx1).expect("failed to log begin for tx1");
             let insert1 = wal
@@ -956,7 +916,6 @@ mod tests {
             wal.log_commit(tx1, insert1)
                 .expect("failed to log commit for tx1");
 
-            // Transaction 2 - aborted
             let tx2 = TransactionId(2);
             let begin2 = wal.log_begin(tx2).expect("failed to log begin for tx2");
             let insert2 = wal
@@ -965,7 +924,6 @@ mod tests {
             wal.log_abort(tx2, insert2)
                 .expect("failed to log abort for tx2");
 
-            // Transaction 3 - committed
             let tx3 = TransactionId(3);
             let begin3 = wal.log_begin(tx3).expect("failed to log begin for tx3");
             let insert3 = wal
@@ -980,11 +938,9 @@ mod tests {
         let (_wal, recovery) =
             WriteAheadLog::open_and_recover(wal_dir, true).expect("failed to recover WAL");
 
-        // Only tx1 and tx3 should be in redo (tx2 was aborted)
         assert_eq!(recovery.redo_records.len(), 2);
         assert!(recovery.incomplete_transactions.is_empty());
 
-        // Verify the redo records are from correct transactions
         let tx_ids: std::collections::HashSet<_> =
             recovery.redo_records.iter().map(|r| r.tx_id).collect();
         assert!(tx_ids.contains(&TransactionId(1)));

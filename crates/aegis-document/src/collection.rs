@@ -185,12 +185,9 @@ impl Collection {
         let indexes = self.indexes.read().expect("indexes RwLock poisoned");
         let start = std::time::Instant::now();
 
-        // Try to find an Eq filter whose field has a hash/unique/btree index.
-        // We pick the first matching index we find and use it to get candidate IDs.
         let candidate_ids = self.find_indexed_candidates(&query.filters, &indexes);
 
         let (mut matching, total_scanned) = if let Some(ids) = candidate_ids {
-            // Index path: only scan the candidate documents
             let scanned = ids.len();
             let results: Vec<Document> = ids
                 .iter()
@@ -200,7 +197,6 @@ impl Collection {
                 .collect();
             (results, scanned)
         } else {
-            // Full scan fallback
             let results: Vec<Document> = docs
                 .values()
                 .filter(|doc| query.matches(doc))
@@ -209,7 +205,6 @@ impl Collection {
             (results, docs.len())
         };
 
-        // Apply sort
         if let Some(ref sort) = query.sort {
             matching.sort_by(|a, b| {
                 let va = a.get(&sort.field);
@@ -223,7 +218,6 @@ impl Collection {
             });
         }
 
-        // Apply skip
         if let Some(skip) = query.skip {
             if skip < matching.len() {
                 matching = matching.split_off(skip);
@@ -232,12 +226,10 @@ impl Collection {
             }
         }
 
-        // Apply limit
         if let Some(limit) = query.limit {
             matching.truncate(limit);
         }
 
-        // Apply projection
         if let Some(ref fields) = query.projection {
             for doc in &mut matching {
                 doc.data.retain(|key, _| fields.contains(key));
@@ -280,7 +272,6 @@ impl Collection {
 
         for filter in filters {
             if let Filter::Eq { field, value } = filter {
-                // Find an index on this field (Hash, Unique, or BTree all use hash_index)
                 if let Some(index) = indexes.iter().find(|idx| {
                     idx.field() == field.as_str()
                         && matches!(
@@ -498,7 +489,6 @@ mod tests {
     fn test_find_uses_index() {
         let collection = Collection::new("test");
 
-        // Insert 100 documents with a "status" field
         for i in 0..100 {
             let mut doc = Document::new();
             doc.set("status", if i % 10 == 0 { "active" } else { "inactive" });
@@ -506,16 +496,13 @@ mod tests {
             collection.insert(doc).unwrap();
         }
 
-        // Query without index => full scan
         let query = QueryBuilder::new().eq("status", "active").build();
         let result_no_index = collection.find(&query);
         assert_eq!(result_no_index.documents.len(), 10);
-        assert_eq!(result_no_index.total_scanned, 100); // full scan
+        assert_eq!(result_no_index.total_scanned, 100);
 
-        // Create index on "status"
         collection.create_index("status", IndexType::Hash);
 
-        // Query with index => should scan far fewer documents
         let result_with_index = collection.find(&query);
         assert_eq!(result_with_index.documents.len(), 10);
         assert!(
@@ -523,7 +510,6 @@ mod tests {
             "Expected index scan to examine fewer than 100 docs, got {}",
             result_with_index.total_scanned
         );
-        // The index should return exactly the 10 matching documents
         assert_eq!(result_with_index.total_scanned, 10);
     }
 
@@ -531,7 +517,6 @@ mod tests {
     fn test_find_index_with_additional_filters() {
         let collection = Collection::new("test");
 
-        // Insert docs: 50 active, 50 inactive; half of each have value > 25
         for i in 0..100 {
             let mut doc = Document::new();
             doc.set("status", if i < 50 { "active" } else { "inactive" });
@@ -541,7 +526,6 @@ mod tests {
 
         collection.create_index("status", IndexType::Hash);
 
-        // Eq filter on indexed field + Gt filter on non-indexed field
         let query = QueryBuilder::new()
             .eq("status", "active")
             .gt("value", 25i64)
@@ -549,9 +533,7 @@ mod tests {
 
         let result = collection.find(&query);
 
-        // active docs are i=0..50, value>25 means i=26..49 => 24 docs
         assert_eq!(result.documents.len(), 24);
-        // Should only scan the 50 "active" candidates from the index
         assert_eq!(result.total_scanned, 50);
     }
 
@@ -565,14 +547,12 @@ mod tests {
             collection.insert(doc).unwrap();
         }
 
-        // Index on a different field
         collection.create_index("y", IndexType::Hash);
 
         let query = QueryBuilder::new().eq("x", 5i64).build();
         let result = collection.find(&query);
 
         assert_eq!(result.documents.len(), 1);
-        // No index on "x", so full scan
         assert_eq!(result.total_scanned, 20);
     }
 }

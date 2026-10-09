@@ -3,6 +3,15 @@
 //! Gorilla-style compression for time series data using delta-of-delta
 //! encoding for timestamps and XOR-based encoding for values.
 //!
+//! Cold Gorilla blocks can be recompressed with NexusCompress for a higher ratio
+//! via the admin compress endpoint. The on-disk bincode format is positional, so
+//! adding a field to `CompressedBlock` / `PersistedBlock` would break loading of
+//! every existing `timeseries.bin`. The codec is therefore detected from the
+//! block bytes themselves: a NexusCompress frame always begins with the `NCZL`
+//! magic, while a Gorilla bitstream begins with the high byte of the first (ms)
+//! timestamp, which is `0x00` for any realistic timestamp. The two are
+//! unambiguous, and reads dispatch transparently through `decode_block`.
+//!
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
@@ -298,7 +307,6 @@ impl<'a> Decompressor<'a> {
     }
 
     /// Decompress the next data point.
-    // Intentionally a streaming reader, not an `Iterator` (no IntoIterator use).
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<DataPoint> {
         if self.remaining == 0 {
@@ -386,16 +394,6 @@ impl<'a> Decompressor<'a> {
 // =============================================================================
 // NexusCompress codec (high-ratio cold-block recompression)
 // =============================================================================
-//
-// Cold Gorilla blocks can be recompressed with NexusCompress for a higher ratio
-// via the admin compress endpoint. To avoid ANY change to the on-disk bincode
-// format — which is positional, so adding a field to `CompressedBlock` /
-// `PersistedBlock` would break loading of every existing `timeseries.bin` — the
-// codec is detected from the block bytes themselves: a NexusCompress frame
-// always begins with the `NCZL` magic, while a Gorilla bitstream begins with the
-// high byte of the first (ms) timestamp, which is `0x00` for any realistic
-// timestamp. The two are therefore unambiguous, and reads dispatch transparently
-// through `decode_block`.
 
 /// Leading bytes of a serialized NexusCompress frame (`NCZL`).
 const NCZL_MAGIC: [u8; 4] = [0x4E, 0x43, 0x5A, 0x4C];
@@ -432,7 +430,6 @@ pub fn compress_points_nexus(points: &[DataPoint]) -> Option<CompressedBlock> {
     let frame = compressor
         .compress_batch(&[ts_bytes, val_bytes], points.len() as u64)
         .ok()?;
-    // A real frame must lead with the magic, or decode dispatch would misread it.
     if frame.len() < 4 || frame[0..4] != NCZL_MAGIC {
         return None;
     }
@@ -552,7 +549,6 @@ mod tests {
             })
             .collect();
 
-        // A Gorilla block must NOT be misdetected as a NexusCompress frame.
         let mut g = Compressor::new();
         for p in &points {
             g.compress(p);
@@ -560,13 +556,11 @@ mod tests {
         let gblock = g.finish();
         assert!(!is_nexus_block(&gblock));
 
-        // A NexusCompress block is detected, verifies its checksum, round-trips.
         let nblock = compress_points_nexus(&points).expect("nexus block");
         assert!(is_nexus_block(&nblock));
         assert!(nblock.verify_checksum());
         assert_eq!(nblock.count, points.len());
 
-        // decode_block transparently decodes BOTH codecs to the original points.
         let from_gorilla = decode_block(&gblock);
         let from_nexus = decode_block(&nblock);
         assert_eq!(from_gorilla.len(), points.len());

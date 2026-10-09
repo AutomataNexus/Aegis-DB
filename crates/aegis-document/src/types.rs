@@ -51,13 +51,16 @@ impl From<&str> for DocumentId {
 }
 
 fn uuid() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let nanos = duration.as_nanos();
-    let random: u64 = (nanos as u64).wrapping_mul(0x5851_f42d_4c95_7f2d);
-    format!("{:016x}{:016x}", nanos as u64, random)
+    let nanos = duration.as_nanos() as u64;
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mixed = nanos.wrapping_mul(0x5851_f42d_4c95_7f2d) ^ seq.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    format!("{:016x}{:016x}", nanos, mixed)
 }
 
 // =============================================================================

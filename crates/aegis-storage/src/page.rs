@@ -170,7 +170,7 @@ impl Page {
         let mut buf = &mut data[..PAGE_HEADER_SIZE];
         buf.put_u64_le(header.page_id.0);
         buf.put_u8(header.page_type as u8);
-        buf.put_u8(0); // padding
+        buf.put_u8(0);
         buf.put_u16_le(header.num_slots);
         buf.put_u16_le(header.free_space_start);
         buf.put_u16_le(header.free_space_end);
