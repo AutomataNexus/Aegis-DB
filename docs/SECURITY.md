@@ -42,7 +42,7 @@ Security features, best practices, and configuration for production deployments
 
 ## Overview
 
-AegisDB v0.3.1 includes production-ready security features:
+AegisDB includes production-ready security features:
 
 | Feature | Implementation | Status |
 |---------|---------------|--------|
@@ -63,6 +63,9 @@ AegisDB v0.3.1 includes production-ready security features:
 | Breach Detection | Real-time monitoring and notification | ✅ Production Ready |
 | Consent Management | GDPR/CCPA consent tracking | ✅ Production Ready |
 | Compression | LZ4, Zstd, Snappy | ✅ Production Ready |
+| Tamper-Evident Ledger | SHA-256 hash chain with `verify` (legacy v1 FNV-1a ledgers still verify) | ✅ Production Ready |
+| OpenSSL-Free TLS Stack | All TLS (server, client, CLI, LDAP) on rustls; no `openssl-sys` / `native-tls` | ✅ Production Ready |
+| Signed Release Provenance | SLSA level 3 provenance + SHA-256 checksums on every release binary | ✅ Production Ready |
 
 **Test Coverage:** 808 tests passing across the workspace.
 
@@ -70,7 +73,7 @@ AegisDB v0.3.1 includes production-ready security features:
 
 ## Data Classification
 
-AegisDB v0.3.1 supports 6-level data classification for columns and fields, enabling fine-grained access control and compliance enforcement for PHI, PII, and other sensitive data categories.
+AegisDB supports 6-level data classification for columns and fields, enabling fine-grained access control and compliance enforcement for PHI, PII, and other sensitive data categories.
 
 ### Classification Levels
 
@@ -125,7 +128,7 @@ mask_phi_in_logs = true
 
 ## Query Safety Limits
 
-AegisDB v0.3.1 enforces query safety limits to prevent accidental resource exhaustion and protect against runaway queries.
+AegisDB enforces query safety limits to prevent accidental resource exhaustion and protect against runaway queries.
 
 ### Default Limits
 
@@ -133,6 +136,7 @@ AegisDB v0.3.1 enforces query safety limits to prevent accidental resource exhau
 |-----------|---------|-------------|
 | `max_result_rows` | 100,000 | Maximum rows returned by a single query |
 | `query_timeout_secs` | 30 | Maximum query execution time in seconds |
+| `AEGIS_TS_MAX_QUERY_POINTS` | 2,000,000 | Maximum points one time-series query may return; larger queries get `413` |
 
 ### Configuration
 
@@ -1217,6 +1221,6 @@ If you discover a security vulnerability in AegisDB, please report it responsibl
 
 ---
 
-**Document Version:** 2.0.0 (Aegis-DB v0.3.1)
-**Last Updated:** February 2026
+**Document Version:** 2.1.0 (Aegis-DB v0.6.0)
+**Last Updated:** October 2026
 **Maintainer:** AutomataNexus Security Team

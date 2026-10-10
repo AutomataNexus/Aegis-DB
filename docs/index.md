@@ -19,14 +19,17 @@ Multi-paradigm database built for regulated industries
 
 ## Overview
 
-Aegis-DB is a unified, multi-paradigm database platform built in Rust. It combines relational (SQL), time series, document, graph, and real-time streaming capabilities into a single system with enterprise-grade security and compliance features.
+Aegis-DB is a unified, multi-paradigm database platform built in Rust. It combines thirteen data paradigms (relational SQL, key-value, document, time series, graph, streaming, vector/KNN, full-text search, geospatial, columnar/OLAP, object/blob, wide-column and ledger) in a single system with enterprise-grade security and compliance features.
 
-**Version 0.3.1** -- 16 crates, 808 tests
+**Version 0.6.0** -- 23 crates, 933 tests
 {: .label .label-green }
 
 ### Key Features
 
-- **Multi-Paradigm** - SQL, Document, TimeSeries, Graph, and Streaming in one platform
+- **Multi-Paradigm** - SQL, KV, Document, TimeSeries, Graph and Streaming, plus Vector (HNSW), Full-Text (BM25), Geospatial, Columnar, Object, Wide-Column and Ledger, in one platform
+- **Auto-Create** - Collections, tables, buckets, indexes and ledgers are created on first write
+- **Tamper-Evident Ledger** - SHA-256 hash-chained append-only ledgers with verification
+- **Time-Series Tiering** - Bounded RAM hot window plus an on-disk compressed cold tier
 - **Multi-Database** - Isolated databases per application with shared infrastructure
 - **Enterprise Security** - TLS, MFA, RBAC, audit logging, encryption at rest
 - **Compliance Ready** - HIPAA, GDPR, CCPA, SOC 2, FERPA support with PHI tagging and query limits
@@ -54,6 +57,12 @@ Aegis-DB is a unified, multi-paradigm database platform built in Rust. It combin
 ├─────────────┬─────────────┬─────────────┬───────────────────────┤
 │  Document   │  TimeSeries │   Graph     │      Streaming        │
 │   Store     │    Engine   │   Engine    │       Engine          │
+├─────────────┼─────────────┼─────────────┼───────────────────────┤
+│   Vector    │  Full-Text  │ Geospatial  │      Columnar         │
+│   (HNSW)    │   (BM25)    │             │       (OLAP)          │
+├─────────────┼─────────────┼─────────────┼───────────────────────┤
+│   Object    │ Wide-Column │   Ledger    │     Key-Value         │
+│   Store     │    Store    │  (SHA-256)  │                       │
 └─────────────┴─────────────┴─────────────┴───────────────────────┘
                      │
 ┌────────────────────┴────────────────────────────────────────────┐

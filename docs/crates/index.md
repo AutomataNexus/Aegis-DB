@@ -9,7 +9,7 @@ description: "Rust crate architecture and documentation"
 # Crate Documentation
 {: .no_toc }
 
-Aegis-DB v0.3.1 is built as a Rust workspace with 18 specialized crates and 824 tests.
+Aegis-DB v0.6.0 is built as a Rust workspace with 23 specialized crates and 933 tests.
 
 ---
 
@@ -24,7 +24,11 @@ Aegis-DB v0.3.1 is built as a Rust workspace with 18 specialized crates and 824 
 ├──────────────┬──────────────┬──────────────┬────────────────────┤
 │ aegis-client │  aegis-query │ aegis-document│ aegis-timeseries   │
 ├──────────────┴──────────────┴──────────────┴────────────────────┤
-│              aegis-streaming, aegis-replication, aegis-updates    │
+│  aegis-vector, aegis-fulltext, aegis-geo, aegis-columnar,        │
+│  aegis-object, aegis-widecolumn, aegis-ledger                    │
+├─────────────────────────────────────────────────────────────────┤
+│  aegis-streaming, aegis-replication, aegis-updates, aegis-vault, │
+│  aegis-shield, aegis-monitoring                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                    aegis-storage (Backends, WAL, MVCC)           │
 ├─────────────────────────────────────────────────────────────────┤
@@ -51,6 +55,11 @@ Aegis-DB v0.3.1 is built as a Rust workspace with 18 specialized crates and 824 
 | [aegis-shield](aegis-shield.md) | Security shield: injection/anomaly detection, auto-blocking | — |
 | [aegis-vector](aegis-vector.md) | Vector / KNN engine (from-scratch HNSW index) | rand |
 | [aegis-fulltext](aegis-fulltext.md) | Full-text search (inverted index + BM25) | — |
+| [aegis-geo](aegis-geo.md) | Geospatial (grid index + Haversine): radius, bounding-box, nearest-k | — |
+| [aegis-columnar](aegis-columnar.md) | Columnar / OLAP tables with aggregates and group-by | — |
+| [aegis-object](aegis-object.md) | Object / blob store with content-addressed ETags | — |
+| [aegis-widecolumn](aegis-widecolumn.md) | Wide-column store (row-keyed sparse columns, per-cell timestamps, LWW) | — |
+| [aegis-ledger](aegis-ledger.md) | Append-only, SHA-256 hash-chained ledger | sha2 |
 | [aegis-client](aegis-client.md) | Client SDK | reqwest, tokio |
 | [aegis-updates](aegis-updates.md) | OTA rolling update system | reqwest, sha2, tokio |
 | [aegis-server](aegis-server.md) | REST API server | axum, tower |
@@ -67,9 +76,16 @@ aegis-server
 ├── aegis-document
 ├── aegis-timeseries
 ├── aegis-streaming
-├── aegis-replication
 ├── aegis-updates
-└── aegis-monitoring
+├── aegis-vault
+├── aegis-shield
+├── aegis-vector
+├── aegis-fulltext
+├── aegis-geo
+├── aegis-columnar
+├── aegis-object
+├── aegis-widecolumn
+└── aegis-ledger
 
 aegis-query
 ├── aegis-common
@@ -77,8 +93,7 @@ aegis-query
 └── aegis-memory
 
 aegis-storage
-├── aegis-common
-└── aegis-memory
+└── aegis-common
 
 aegis-replication
 ├── aegis-common

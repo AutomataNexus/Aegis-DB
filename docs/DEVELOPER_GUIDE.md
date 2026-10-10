@@ -93,7 +93,7 @@ AegisDB is written in Rust, leveraging its safety guarantees and performance cha
 
 | Component | Technology |
 |-----------|------------|
-| Language | Rust 1.75+ |
+| Language | Rust 1.85+ (edition 2021) |
 | Async Runtime | Tokio |
 | HTTP Framework | Axum |
 | Serialization | Serde |
@@ -2355,40 +2355,44 @@ fn debug_validate(&self) {
 
 ### Version Bumping
 
-```bash
-# Update version in all Cargo.toml files
-./scripts/bump-version.sh 0.3.1
-```
+All crates share one version. Edit the root `Cargo.toml`: `[workspace.package]
+version` and every `version = "..."` in `[workspace.dependencies]` for the
+internal `aegis-*` crates. Then refresh the lockfile with `cargo check --workspace`.
 
 ### Release Checklist
 
-1. **Code Quality:**
+1. **Code Quality** (the same gates CI runs):
    ```bash
-   cargo fmt --all --check
-   cargo clippy --workspace --all-targets -- -D warnings
+   cargo fmt --all -- --check
+   cargo clippy --workspace -- -D warnings \
+     -A clippy::type_complexity -A clippy::should_implement_trait \
+     -A clippy::new_without_default -A clippy::manual_checked_ops
    cargo test --workspace
-   cargo audit
    ```
+   Check the repository's Dependabot alerts and clear them before tagging.
 
 2. **Update Documentation:**
-   - Update CHANGELOG.md
-   - Update version in README badges
-   - Update API documentation
+   - Move `[Unreleased]` in `CHANGELOG.md` to a dated `[x.y.z]` section
+   - Update the version labels in `docs/index.md`, `docs/crates/index.md` and
+     the download commands in `docs/getting-started.md`
+   - Update API documentation for any new or changed endpoints
 
-3. **Create Release:**
+3. **Tag and Push:**
    ```bash
-   git tag -a v0.3.1 -m "Release v0.3.1"
-   git push origin v0.3.1
+   git tag -a v0.6.0 -m "v0.6.0"
+   git push origin main
+   git push origin v0.6.0
    ```
 
-4. **Build Artifacts:**
-   ```bash
-   ./scripts/release.sh
-   # Creates:
-   # - aegis-db-0.3.1-linux-x86_64.tar.gz
-   # - aegis-db-0.3.1-macos-x86_64.tar.gz
-   # - aegis-db-0.3.1-windows-x86_64.zip
-   ```
+4. **Automated Release:** pushing a `v*` tag runs
+   `.github/workflows/release.yml`, which runs the test suite, builds
+   `aegis-server` in release mode, generates SLSA level 3 provenance and
+   publishes a GitHub release with:
+   - `aegis-server-vX.Y.Z-linux-x86_64`
+   - `SHA256SUMS.txt`
+   - `aegis-server.intoto.jsonl` (verify with `slsa-verifier verify-artifact`)
+
+   Never move or re-point a published tag; cut a new version instead.
 
 5. **Publish to crates.io (if applicable):**
    ```bash

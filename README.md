@@ -154,7 +154,7 @@ curl -X POST localhost:9090/api/v1/graph/nodes \
 
 # Streaming
 curl -X POST localhost:9090/api/v1/streaming/publish \
-  -d '{"channel": "orders", "event": {"order_id": 123}}'
+  -d '{"channel": "orders", "event_type": "order_created", "source": "shop", "data": {"order_id": 123}}'
 
 # Vector / KNN (HNSW)
 curl -X POST localhost:9090/api/v1/vector/collections/docs/search \

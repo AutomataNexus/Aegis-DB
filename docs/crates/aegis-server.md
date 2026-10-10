@@ -83,6 +83,26 @@ HTTP request handlers:
 | GET | `/api/v1/admin/query-limits` | Get query safety limits |
 | PUT | `/api/v1/admin/query-limits` | Set query safety limits |
 
+**Route groups** (all under `/api/v1`, authenticated; see the User Guide for request shapes):
+
+| Prefix | Paradigm / area |
+|--------|-----------------|
+| `/kv` | Key-value, incl. batch get/set/delete |
+| `/documents` | Document collections, query, bulk insert/delete |
+| `/timeseries` | Write, `write/batch`, query (`start`/`end`/`tags`/`step`/`limit`), metrics; `DELETE /metrics/:name` is admin-only |
+| `/streaming` | Channels, publish, SSE |
+| `/graph` | Nodes and edges |
+| `/vector` | Vector collections, upsert, KNN search (HNSW) |
+| `/fts` | Full-text indexes, BM25 search |
+| `/geo` | Geospatial collections, radius / bbox / nearest |
+| `/columnar` | Columnar tables, scans, group-by aggregates |
+| `/objects` | Object buckets and blobs |
+| `/widecolumn` | Wide-column tables |
+| `/ledger` | Append-only ledgers, range reads, `verify` |
+| `/query-builder` | Structured query builder |
+| `/admin`, `/cluster`, `/auth` | Administration, cluster membership, authentication |
+| `/compliance`, `/vault`, `/shield`, `/updates` | Compliance APIs, secrets vault, security shield, OTA updates |
+
 **Query Request:**
 ```json
 {

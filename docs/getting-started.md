@@ -20,7 +20,7 @@ description: "Installation and setup guide for Aegis-DB"
 
 Before installing Aegis-DB, ensure you have:
 
-- **Rust** 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+- **Rust** 1.85+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - **Trunk** (for dashboard): `cargo install trunk`
 
 No OpenSSL or `libssl-dev` is needed: all TLS uses rustls.
@@ -40,15 +40,14 @@ cargo install aegisdb-cli
 ### From Binary Release
 
 ```bash
-# Download latest release (v0.3.1)
-curl -LO https://github.com/AutomataNexus/Aegis-DB/releases/latest/download/aegis-db-0.3.1-linux-x86_64.tar.gz
+# Download the latest release binary and its checksums (v0.6.0)
+curl -LO https://github.com/AutomataNexus/Aegis-DB/releases/download/v0.6.0/aegis-server-v0.6.0-linux-x86_64
+curl -LO https://github.com/AutomataNexus/Aegis-DB/releases/download/v0.6.0/SHA256SUMS.txt
+sha256sum --check --ignore-missing SHA256SUMS.txt
 
-# Extract
-tar -xzf aegis-db-0.3.1-linux-x86_64.tar.gz
-cd aegis-db-0.3.1-linux-x86_64
-
-# Run server (default port 9090)
-./aegis-server
+# Run server (default 127.0.0.1:9090)
+chmod +x aegis-server-v0.6.0-linux-x86_64
+./aegis-server-v0.6.0-linux-x86_64 --data-dir ./data
 ```
 
 ### From Source
@@ -61,8 +60,8 @@ cd Aegis-DB
 # Build release
 cargo build --release --workspace
 
-# Run server (default port 9090)
-./target/release/aegis-server
+# Run server (default 127.0.0.1:9090)
+./target/release/aegis-server --data-dir ./data
 ```
 
 ### Build Dashboard (Optional)
@@ -96,40 +95,37 @@ export AEGIS_OPEN_BOOTSTRAP=true
 
 ## Configuration
 
+The server is configured with command-line flags plus a few environment
+variables. Run `aegis-server --help` for the full list.
+
+### Command-Line Flags
+
+| Flag | Description | Default |
+|:-----|:------------|:--------|
+| `-H, --host` | Bind address | `127.0.0.1` |
+| `-p, --port` | Server port | `9090` |
+| `-d, --data-dir` | Data directory; enables disk persistence | (in-memory) |
+| `--node-id` / `--node-name` | Node identity in a cluster | auto-generated |
+| `--peers` | Comma-separated peer addresses to join | (none) |
+| `--cluster` | Cluster name | `aegis-cluster` |
+| `--tls`, `--tls-cert`, `--tls-key` | Enable HTTPS with PEM cert and key | off |
+| `--cluster-tls`, `--cluster-ca-cert` | TLS / mTLS for cluster traffic | off |
+
 ### Environment Variables
 
 | Variable | Description | Default |
 |:---------|:------------|:--------|
-| `AEGIS_DATA_DIR` | Data storage directory | `./data` |
-| `AEGIS_PORT` | Server port | `9090` |
-| `AEGIS_HOST` | Bind address | `0.0.0.0` |
-| `AEGIS_LOG_LEVEL` | Logging level | `info` |
-| `AEGIS_TLS_CERT` | TLS certificate path | (none) |
-| `AEGIS_TLS_KEY` | TLS key path | (none) |
+| `AEGIS_ADMIN_USERNAME` / `AEGIS_ADMIN_PASSWORD` | Admin provisioned on first boot | (none) |
+| `AEGIS_TLS_CERT` / `AEGIS_TLS_KEY` | TLS cert / key paths when the flags are not given | (none) |
+| `AEGIS_PRODUCTION` | Production mode (requires TLS unless `AEGIS_ALLOW_INSECURE`) | `false` |
+| `AEGIS_CORS_ORIGINS` | Comma-separated allowed CORS origins | (none) |
+| `AEGIS_TS_HOT_DAYS` | Time-series days kept in RAM | `7` |
+| `AEGIS_TS_COLD_DAYS` | Time-series days kept in the on-disk cold tier (`0` disables) | `365` |
+| `AEGIS_TS_MAX_QUERY_POINTS` | Most points one time-series query may return | `2000000` |
+| `RUST_LOG` | Log filter (e.g. `info`, `aegis_server=debug`) | `info` |
 
-### Configuration File
-
-Create `aegis.toml`:
-
-```toml
-[server]
-host = "0.0.0.0"
-port = 9090
-data_dir = "/var/lib/aegis"
-
-[auth]
-enabled = true
-jwt_secret = "your-secret-key-here"
-session_timeout = 3600
-
-[storage]
-backend = "localfs"
-compression = "lz4"
-
-[replication]
-enabled = false
-mode = "single"
-```
+See the [User Guide]({% link USER_GUIDE.md %}) and [Security]({% link SECURITY.md %})
+for vault, encryption and LDAP/OAuth settings.
 
 ## Verify Installation
 
@@ -143,8 +139,7 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "version": "0.3.1",
-  "uptime": 123
+  "version": "0.6.0"
 }
 ```
 

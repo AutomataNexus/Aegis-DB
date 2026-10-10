@@ -56,6 +56,14 @@ Comprehensive guide for installing, configuring, and using Aegis-DB
    - [Time Series](#time-series-api)
    - [Graph Database](#graph-database-api)
    - [Streaming](#streaming-api)
+   - [Vector, Search and Specialized Store APIs](#vector-search-and-specialized-store-apis)
+   - [Vector](#vector-api)
+   - [Full-Text Search](#full-text-search-api)
+   - [Geospatial](#geospatial-api)
+   - [Columnar](#columnar-api)
+   - [Object Store](#object-store-api)
+   - [Wide-Column](#wide-column-api)
+   - [Ledger](#ledger-api)
    - [Bulk Data Import](#bulk-data-import-api)
    - [Admin Endpoints](#admin-endpoints)
    - [Compliance APIs (GDPR, CCPA, HIPAA)](#compliance-apis-gdpr-ccpa-hipaa)
@@ -66,6 +74,7 @@ Comprehensive guide for installing, configuring, and using Aegis-DB
    - [Time Series](#time-series)
    - [Streaming/Events](#streamingevents)
    - [Graph Data](#graph-data)
+   - [Vector, Full-Text, Geospatial, Columnar, Object, Wide-Column and Ledger](#vector-full-text-geospatial-columnar-object-wide-column-and-ledger)
 9. [AegisQL Query Language](#aegisql-query-language)
 10. [Security & Authentication](#security--authentication)
     - [Local Authentication](#local-authentication)
@@ -83,11 +92,12 @@ Comprehensive guide for installing, configuring, and using Aegis-DB
 
 ## Introduction
 
-AegisDB is a unified, multi-paradigm database platform built in Rust. It combines relational (SQL), time series, document, graph, and real-time streaming capabilities into a single high-performance system.
+AegisDB is a unified, multi-paradigm database platform built in Rust. It combines relational (SQL), key-value, document, time series, graph, real-time streaming, vector (KNN), full-text search, geospatial, columnar (OLAP), object/blob, wide-column, and ledger (append-only) capabilities into a single high-performance system.
 
 ### Key Features
 
-- **Multi-Paradigm Support**: SQL, Time Series, Document Store, Graph, and Streaming in one platform
+- **Multi-Paradigm Support**: SQL, Key-Value, Document Store, Time Series, Graph, Streaming, Vector/KNN, Full-Text Search (BM25), Geospatial, Columnar/OLAP, Object/Blob Store, Wide-Column, and Ledger in one platform
+- **Auto-Created Containers**: collections, indexes, tables, buckets and ledgers are created on the first write
 - **Multi-Database Support**: Multiple isolated databases per server instance with automatic creation on first use
 - **Distributed Architecture**: Raft consensus, sharding, and multi-region replication
 - **High Performance**: 971K–2.5M TPS atomic transfers, 10.8M KV reads/sec, 204K SQL inserts/sec with vectorized execution
@@ -108,6 +118,13 @@ AegisDB is a unified, multi-paradigm database platform built in Rust. It combine
 | Content Management | Document Store | Articles, profiles, configurations |
 | Real-time Analytics | Streaming | Event processing, CDC, notifications |
 | Recommendations | Graph | Social networks, knowledge graphs |
+| Semantic Search / RAG | Vector | Embedding similarity, recommendations |
+| Site and Document Search | Full-Text | Keyword search with BM25 ranking |
+| Location Services | Geospatial | Nearby stores, geofencing, asset tracking |
+| Reporting & BI | Columnar | Group-by aggregation over large tables |
+| File and Media Storage | Object Store | Images, exports, backups |
+| Sparse or Per-Entity Data | Wide-Column | User profiles, device state, feature stores |
+| Audit Trails | Ledger | Tamper-evident event history |
 
 ---
 
@@ -123,8 +140,10 @@ AegisDB is a unified, multi-paradigm database platform built in Rust. It combine
 | OS | Linux, macOS, Windows | Linux (Ubuntu 22.04+) |
 
 **Software Requirements:**
-- Rust 1.75+ (for building from source)
+- Rust 1.85+ (for building from source)
 - Trunk (for dashboard, `cargo install trunk`)
+
+No OpenSSL or `libssl-dev` is required to build: all TLS in the workspace uses rustls.
 
 ### Quick Install
 
@@ -171,7 +190,7 @@ cp target/release/aegis /usr/local/bin/
 
 ```dockerfile
 # Dockerfile
-FROM rust:1.75-slim as builder
+FROM rust:1.85-slim as builder
 WORKDIR /app
 COPY . .
 RUN cargo build --release -p aegis-server
@@ -1104,6 +1123,7 @@ Content-Type: application/json
 {
   "channel": "orders",
   "event_type": "order_created",
+  "source": "checkout-service",
   "data": {
     "order_id": "ORD-123",
     "customer_id": "CUST-456",
@@ -1153,6 +1173,634 @@ Content-Type: application/json
 GET /api/v1/graph/data
 GET /api/v1/graph/data?label=User
 GET /api/v1/graph/data?depth=2&start_node=node-001
+```
+
+### Vector, Search and Specialized Store APIs
+
+The seven APIs below (vector, full-text, geospatial, columnar, object,
+wide-column, ledger) share these conventions:
+
+- Every endpoint requires authentication. None is restricted to the Admin role,
+  so any authenticated user can also drop a container.
+- Containers (collections, indexes, tables, buckets, ledgers) are created on
+  demand by the first write, so the explicit create call is optional. Reads,
+  searches, scans and drops on a container that does not exist return
+  `404 Not Found`; typos are not masked.
+- Errors use the body `{"success": false, "error": "<message>"}`. A missing
+  container or item is `404`. Creating a container that already exists returns
+  `400` for vector, full-text and geo, and `409 Conflict` for columnar, object,
+  wide-column and ledger. Validation failures are `400`.
+- Request bodies are subject to the server's request body limit (10 MB by
+  default).
+
+### Vector API
+
+Approximate nearest-neighbor (KNN) search over HNSW indexes.
+
+**List Collections:**
+```bash
+GET /api/v1/vector/collections
+```
+
+Response: `{"collections": ["docs", ...]}`
+
+**Create Collection:**
+```bash
+POST /api/v1/vector/collections
+Content-Type: application/json
+
+{
+  "name": "docs",
+  "dim": 384,
+  "metric": "cosine"
+}
+```
+
+`metric` is `cosine` (default), `l2` or `dot` (aliases: `cos`, `euclidean`,
+`ip`, `inner_product`). Response: `201 Created`, `{"success": true, "name": "docs"}`.
+A collection auto-created by its first write uses the cosine metric and takes its
+dimension from that first vector.
+
+**Collection Stats:**
+```bash
+GET /api/v1/vector/collections/docs
+```
+
+Response: `{"name": "docs", "dim": 384, "metric": "cosine", "count": 1200}`
+
+**Upsert a Vector:**
+```bash
+POST /api/v1/vector/collections/docs/upsert
+Content-Type: application/json
+
+{
+  "id": "doc-1",
+  "vector": [0.12, -0.04, 0.33],
+  "metadata": {"source": "wiki", "lang": "en"}
+}
+```
+
+Response: `{"success": true, "id": "doc-1"}`. A vector whose length differs from
+the collection dimension is rejected with `400`.
+
+**Batch Upsert:**
+```bash
+POST /api/v1/vector/collections/docs/batch
+Content-Type: application/json
+
+{
+  "vectors": [
+    {"id": "doc-1", "vector": [0.12, -0.04, 0.33], "metadata": {"source": "wiki"}},
+    {"id": "doc-2", "vector": [0.08, 0.21, -0.17]}
+  ]
+}
+```
+
+Response: `{"success": true, "count": 2}`
+
+**Get / Delete a Vector:**
+```bash
+GET    /api/v1/vector/collections/docs/vectors/doc-1
+DELETE /api/v1/vector/collections/docs/vectors/doc-1
+```
+
+`GET` returns `{"id", "vector", "metadata"}`.
+
+**KNN Search:**
+```bash
+POST /api/v1/vector/collections/docs/search
+Content-Type: application/json
+
+{
+  "vector": [0.10, -0.02, 0.30],
+  "k": 10,
+  "ef": 128,
+  "filter": {"source": "wiki"}
+}
+```
+
+Response:
+```json
+{
+  "hits": [
+    {"id": "doc-1", "score": 0.998, "distance": 0.002, "metadata": {"source": "wiki", "lang": "en"}}
+  ],
+  "count": 1
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `k` | Number of results (default 10). |
+| `ef` | Optional HNSW search breadth; default `max(4 * k, 64)`. Higher is more accurate and slower. |
+| `filter` | Optional exact-match filter: every key must equal the same key in the hit's metadata. |
+| `score` | Higher is more similar (cosine similarity, negative squared L2, or dot product). |
+| `distance` | Lower is closer (the metric's raw distance). |
+
+**Drop Collection:**
+```bash
+DELETE /api/v1/vector/collections/docs
+```
+
+### Full-Text Search API
+
+BM25-ranked keyword search (k1 = 1.2, b = 0.75). Text is lowercased and split on
+non-alphanumeric characters; English stopwords and one-character tokens are dropped.
+
+**List / Create Indexes:**
+```bash
+GET /api/v1/fts/indexes
+
+POST /api/v1/fts/indexes
+Content-Type: application/json
+
+{
+  "name": "articles"
+}
+```
+
+**Index Stats:**
+```bash
+GET /api/v1/fts/indexes/articles
+```
+
+Response: `{"name": "articles", "documents": 42}`
+
+**Index a Document (insert or replace):**
+```bash
+POST /api/v1/fts/indexes/articles/documents
+Content-Type: application/json
+
+{
+  "id": "a1",
+  "text": "Aegis-DB is a multi-paradigm database written in Rust",
+  "metadata": {"author": "alice"}
+}
+```
+
+Response: `{"success": true, "id": "a1"}`
+
+**Get / Delete a Document:**
+```bash
+GET    /api/v1/fts/indexes/articles/documents/a1
+DELETE /api/v1/fts/indexes/articles/documents/a1
+```
+
+`GET` returns `{"id", "text", "metadata"}`.
+
+**Search:**
+```bash
+POST /api/v1/fts/indexes/articles/search
+Content-Type: application/json
+
+{
+  "query": "rust database",
+  "k": 10,
+  "filter": {"author": "alice"}
+}
+```
+
+Response: `{"hits": [{"id": "a1", "score": 1.73, "metadata": {"author": "alice"}}], "count": 1}`.
+`k` defaults to 10; `filter` is the same exact-match metadata filter as the vector API.
+
+**Drop Index:**
+```bash
+DELETE /api/v1/fts/indexes/articles
+```
+
+### Geospatial API
+
+Point features on a grid index with great-circle (Haversine) distances in metres.
+
+**List / Create Collections:**
+```bash
+GET /api/v1/geo/collections
+
+POST /api/v1/geo/collections
+Content-Type: application/json
+
+{
+  "name": "cities"
+}
+```
+
+**Collection Stats:**
+```bash
+GET /api/v1/geo/collections/cities
+```
+
+Response: `{"name": "cities", "count": 3}`
+
+**Upsert a Feature:**
+```bash
+POST /api/v1/geo/collections/cities/features
+Content-Type: application/json
+
+{
+  "id": "nyc",
+  "lat": 40.7128,
+  "lon": -74.0060,
+  "metadata": {"country": "US"}
+}
+```
+
+`lat` must be in [-90, 90] and `lon` in [-180, 180]; anything else is rejected with
+`400` (and does not auto-create the collection).
+
+**Get / Delete a Feature:**
+```bash
+GET    /api/v1/geo/collections/cities/features/nyc
+DELETE /api/v1/geo/collections/cities/features/nyc
+```
+
+**Radius Query (nearest first):**
+```bash
+POST /api/v1/geo/collections/cities/radius
+Content-Type: application/json
+
+{
+  "lat": 40.7306,
+  "lon": -73.9352,
+  "radius_m": 25000,
+  "filter": {"country": "US"}
+}
+```
+
+**Bounding-Box Query:**
+```bash
+POST /api/v1/geo/collections/cities/bbox
+Content-Type: application/json
+
+{
+  "min_lat": 40.0,
+  "min_lon": -75.0,
+  "max_lat": 41.5,
+  "max_lon": -73.0
+}
+```
+
+**Nearest-k Query:**
+```bash
+POST /api/v1/geo/collections/cities/nearest
+Content-Type: application/json
+
+{
+  "lat": 40.7128,
+  "lon": -74.0060,
+  "k": 5
+}
+```
+
+All three queries return `{"hits": [{"id", "lat", "lon", "distance_m", "metadata"}], "count"}`.
+`distance_m` is the distance from the query point in metres (`0` for bbox queries,
+which have no reference point). `k` defaults to 10; `filter` is an optional
+exact-match metadata filter.
+
+**Drop Collection:**
+```bash
+DELETE /api/v1/geo/collections/cities
+```
+
+### Columnar API
+
+Column-major tables for analytical scans and group-by aggregation.
+
+**List / Create Tables:**
+```bash
+GET /api/v1/columnar/tables
+
+POST /api/v1/columnar/tables
+Content-Type: application/json
+
+{
+  "name": "sales",
+  "columns": [
+    {"name": "region", "type": "text"},
+    {"name": "amount", "type": "float"},
+    {"name": "units", "type": "int"},
+    {"name": "online", "type": "bool"}
+  ]
+}
+```
+
+Column types are `int`, `float`, `text` and `bool`. A table auto-created by its
+first insert infers its schema from that row: integers become `int`, other
+numbers `float`, booleans `bool`, everything else `text`.
+
+**Table Stats:**
+```bash
+GET /api/v1/columnar/tables/sales
+```
+
+Response: `{"name": "sales", "rows": 2, "columns": [{"name": "region", "type": "text"}, ...]}`
+
+**Insert Rows:**
+```bash
+POST /api/v1/columnar/tables/sales/rows
+Content-Type: application/json
+
+{
+  "rows": [
+    {"region": "east", "amount": 120.5, "units": 3, "online": true},
+    {"region": "west", "amount": 80.0, "units": 1}
+  ]
+}
+```
+
+A single row can also be sent as the bare object body
+(`{"region": "east", "amount": 120.5}`). Response: `{"success": true, "inserted": 2}`.
+Missing columns are stored as null; an unknown column or a value of the wrong
+type is rejected with `400`. A multi-row insert stops at the first bad row and
+keeps the rows before it.
+
+**Scan:**
+```bash
+POST /api/v1/columnar/tables/sales/scan
+Content-Type: application/json
+
+{
+  "columns": ["region", "amount"],
+  "filter": [{"column": "amount", "op": "gte", "value": 100}],
+  "limit": 100
+}
+```
+
+Response: `{"rows": [{"region": "east", "amount": 120.5}], "count": 1}`.
+`columns` empty or omitted returns every column. Filter conditions are ANDed;
+`op` is one of `eq`, `ne`, `lt`, `lte`, `gt`, `gte`.
+
+**Aggregate:**
+```bash
+POST /api/v1/columnar/tables/sales/aggregate
+Content-Type: application/json
+
+{
+  "group_by": ["region"],
+  "aggregates": [
+    {"func": "sum", "column": "amount"},
+    {"func": "count", "column": "*"}
+  ],
+  "filter": [{"column": "online", "op": "eq", "value": true}]
+}
+```
+
+Response: `{"groups": [{"keys": ["east"], "values": [120.5, 1]}], "count": 1}`.
+`func` is one of `count`, `sum`, `min`, `max`, `avg`; `values` follow the order of
+`aggregates`. Omit `group_by` for a single whole-table group.
+
+**Distinct Values:**
+```bash
+GET /api/v1/columnar/tables/sales/distinct/region
+```
+
+Response: `{"values": ["east", "west"], "count": 2}` (non-null values only).
+
+**Drop Table:**
+```bash
+DELETE /api/v1/columnar/tables/sales
+```
+
+### Object Store API
+
+S3-style buckets of binary objects. Object keys may contain slashes.
+
+**List / Create Buckets:**
+```bash
+GET /api/v1/objects/buckets
+
+POST /api/v1/objects/buckets
+Content-Type: application/json
+
+{
+  "name": "media"
+}
+```
+
+Bucket names are 1-63 characters of `a-z`, `0-9`, `.` and `-`; other names are
+rejected with `400`.
+
+**Bucket Stats:**
+```bash
+GET /api/v1/objects/buckets/media
+```
+
+Response: `{"name": "media", "objects": 12, "bytes": 482113}`
+
+**Store an Object:**
+```bash
+PUT /api/v1/objects/buckets/media/object/img/logo.png
+Content-Type: image/png
+X-Aegis-Meta: {"owner": "web"}
+
+<raw bytes>
+```
+
+```bash
+curl -X PUT http://localhost:9090/api/v1/objects/buckets/media/object/img/logo.png \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: image/png" \
+  -H 'X-Aegis-Meta: {"owner": "web"}' \
+  --data-binary @logo.png
+```
+
+The request body is the object content. `Content-Type` is stored with the object
+(default `application/octet-stream`); the optional `X-Aegis-Meta` header carries
+JSON metadata (ignored if it is not valid JSON). Writing an existing key replaces it.
+Response:
+```json
+{
+  "success": true,
+  "object": {"key": "img/logo.png", "size": 5120, "content_type": "image/png", "etag": "a1b2c3d4e5f60718", "metadata": {"owner": "web"}}
+}
+```
+
+The ETag is a 64-bit FNV-1a fingerprint of the bytes (16 hex characters). It
+changes when the content changes; it is not a cryptographic hash.
+
+**Fetch an Object:**
+```bash
+GET /api/v1/objects/buckets/media/object/img/logo.png
+GET /api/v1/objects/buckets/media/object/img/logo.png?meta=1
+```
+
+The plain `GET` returns the raw bytes with `Content-Type` and `ETag` headers.
+With `?meta=1` it returns the JSON metadata only.
+
+**List Objects:**
+```bash
+GET /api/v1/objects/buckets/media/objects?prefix=img/&limit=100
+```
+
+Response: `{"objects": [<object metadata>, ...], "count": 1}`, in lexical key order.
+
+**Delete an Object / Drop a Bucket:**
+```bash
+DELETE /api/v1/objects/buckets/media/object/img/logo.png
+DELETE /api/v1/objects/buckets/media
+```
+
+Dropping a bucket deletes every object in it.
+
+### Wide-Column API
+
+Row-keyed tables with sparse, dynamic columns. Rows are kept sorted by key, and
+every cell carries the timestamp of the write that set it.
+
+**List / Create Tables:**
+```bash
+GET /api/v1/widecolumn/tables
+
+POST /api/v1/widecolumn/tables
+Content-Type: application/json
+
+{
+  "name": "users"
+}
+```
+
+**Table Stats:**
+```bash
+GET /api/v1/widecolumn/tables/users
+```
+
+Response: `{"name": "users", "rows": 2, "cells": 5}`
+
+**Set Columns on a Row:**
+```bash
+PUT /api/v1/widecolumn/tables/users/rows/user:1
+Content-Type: application/json
+
+{
+  "columns": {"name": "Alice", "age": 30},
+  "timestamp": 1736935200
+}
+```
+
+Response: `{"success": true}`. Only the listed columns are written; other columns
+of the row are untouched. Conflicts resolve last-write-wins per cell: a write
+replaces a cell only when its timestamp is strictly greater (ties keep the
+existing value). Without `timestamp`, the server stamps the write from a monotonic
+logical counter rather than wall-clock time, so use either explicit timestamps or
+server-assigned ones consistently within a table. An empty `columns` object is
+rejected with `400`.
+
+**Get a Row:**
+```bash
+GET /api/v1/widecolumn/tables/users/rows/user:1
+GET /api/v1/widecolumn/tables/users/rows/user:1?columns=name,age
+```
+
+Response: `{"key": "user:1", "columns": {"name": "Alice", "age": 30}, "timestamps": {"name": 1736935200, "age": 1736935200}}`
+
+**Scan Rows (key order):**
+```bash
+POST /api/v1/widecolumn/tables/users/scan
+Content-Type: application/json
+
+{
+  "start": "user:1",
+  "end": "user:9",
+  "prefix": "user:",
+  "columns": ["name"],
+  "limit": 100
+}
+```
+
+All fields are optional. `start` is inclusive and `end` exclusive. Response:
+`{"rows": [<row>, ...], "count": 1}`.
+
+**Delete a Cell / Row / Table:**
+```bash
+DELETE /api/v1/widecolumn/tables/users/rows/user:1/columns/age
+DELETE /api/v1/widecolumn/tables/users/rows/user:1
+DELETE /api/v1/widecolumn/tables/users
+```
+
+### Ledger API
+
+Immutable, append-only, hash-chained logs for audit trails. Entries cannot be
+updated or deleted through the API; only a whole ledger can be dropped.
+
+**List / Create Ledgers:**
+```bash
+GET /api/v1/ledger/ledgers
+
+POST /api/v1/ledger/ledgers
+Content-Type: application/json
+
+{
+  "name": "audit"
+}
+```
+
+**Ledger Stats:**
+```bash
+GET /api/v1/ledger/ledgers/audit
+```
+
+Response: `{"name": "audit", "entries": 2, "tip_hash": "<hash of the latest entry>"}`.
+For an empty ledger `tip_hash` is the genesis hash.
+
+**Append an Entry:**
+```bash
+POST /api/v1/ledger/ledgers/audit/entries
+Content-Type: application/json
+
+{
+  "payload": {"event": "login", "user": "alice"},
+  "timestamp": 1736935200
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "entry": {
+    "seq": 0,
+    "timestamp": 1736935200,
+    "payload": {"event": "login", "user": "alice"},
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "<64 hex characters>"
+  }
+}
+```
+
+`seq` starts at 0 and increases by one per entry. `timestamp` is optional; when
+omitted the server assigns the next value of a monotonic logical counter, not
+wall-clock time.
+
+**Read Entries:**
+```bash
+GET /api/v1/ledger/ledgers/audit/entries?start=0&limit=100
+GET /api/v1/ledger/ledgers/audit/entries/0
+```
+
+The range form returns `{"entries": [...], "count": N}` in sequence order.
+
+**Verify the Hash Chain:**
+```bash
+GET /api/v1/ledger/ledgers/audit/verify
+```
+
+Response: `{"valid": true, "entries": 2, "broken_at": null}`. On a broken chain
+`valid` is `false` and `broken_at` is the sequence number of the first bad entry.
+
+Each entry's `hash` is SHA-256 (64 hex characters) over
+`prev_hash || seq || timestamp || payload`, and the first entry chains off a
+genesis hash of 64 zeros. Altering any past entry changes its hash and breaks every
+later link, which `verify` detects. Each ledger records a hash version: ledgers
+created from v0.6.0 on are version 2 (SHA-256). Ledgers persisted by earlier
+releases load as version 1, the original 128-bit FNV-1a digest (32 hex characters,
+32-zero genesis), and keep verifying and chaining under that algorithm, so an
+upgrade never reports a broken chain. Version 1 detects corruption and naive
+tampering but is not cryptographic; create a new ledger to get SHA-256 protection.
+The hash version is not included in API responses; it can be inferred from the
+hash length.
+
+**Drop Ledger:**
+```bash
+DELETE /api/v1/ledger/ledgers/audit
 ```
 
 ### Bulk Data Import API
@@ -1930,6 +2578,22 @@ WHERE fof <> u
 RETURN DISTINCT fof.name
 ```
 
+### Vector, Full-Text, Geospatial, Columnar, Object, Wide-Column and Ledger
+
+These paradigms are served by their own engines and REST APIs (see the
+[REST API Reference](#vector-search-and-specialized-store-apis)). Containers are
+created on the first write.
+
+| Paradigm | Container | Record model | Queries |
+|----------|-----------|--------------|---------|
+| Vector | Collection (fixed `dim`, metric `cosine`/`l2`/`dot`) | `{id, vector, metadata}` | HNSW KNN search with exact-match metadata filter |
+| Full-Text | Index | `{id, text, metadata}` | BM25-ranked keyword search |
+| Geospatial | Collection | `{id, lat, lon, metadata}` | Radius, bounding box, nearest-k (Haversine, metres) |
+| Columnar | Table with typed columns (`int`, `float`, `text`, `bool`) | Rows stored column-major | Filtered scans, group-by `count`/`sum`/`min`/`max`/`avg`, distinct |
+| Object | Bucket | Raw bytes + content type, ETag, JSON metadata | Get by key, list by prefix |
+| Wide-Column | Table | Row key with sparse columns, each cell timestamped (last-write-wins) | Get row, ordered range/prefix scan, column projection |
+| Ledger | Ledger | Immutable `{seq, timestamp, payload, prev_hash, hash}` entries | Range reads, get by sequence, SHA-256 chain verification |
+
 ---
 
 ## AegisQL Query Language
@@ -2338,12 +3002,19 @@ A: AegisDB can serve as a replacement or complement for:
 - MongoDB/CouchDB (documents)
 - Redis (key-value, caching)
 - Kafka (streaming)
+- Pinecone/pgvector (vector search)
+- Elasticsearch (full-text search)
+- PostGIS (geospatial)
+- DuckDB/ClickHouse (columnar analytics)
+- S3/MinIO (object storage)
+- Cassandra/Bigtable (wide-column)
+- QLDB (ledger)
 
 **Q: Is AegisDB production-ready?**
-A: Yes, AegisDB v0.3.1 includes production security features: TLS/HTTPS support, Argon2id password hashing, rate limiting, HashiCorp Vault integration, secure token generation, PHI data classification, consent management, breach detection, and HIPAA/GDPR/CCPA compliance APIs. It's suitable for production deployments with proper configuration.
+A: Yes, AegisDB includes production security features: TLS/HTTPS support, Argon2id password hashing, rate limiting, HashiCorp Vault integration, secure token generation, PHI data classification, consent management, breach detection, and HIPAA/GDPR/CCPA compliance APIs. It's suitable for production deployments with proper configuration.
 
 **Q: What's the license?**
-A: Apache 2.0 for the core platform. Enterprise features may require a commercial license.
+A: AegisDB is licensed under the Business Source License 1.1 (BSL 1.1), not an open-source license. The source is available, and development, testing, internal business use, non-commercial and educational use, and self-hosted production use are allowed without a commercial license. The one restriction is offering AegisDB as a Database Service: a commercial offering that lets third parties (other than your employees and contractors) access database functionality such as creating databases or tables and running queries. That requires a commercial license (Devops@automatanexus.com). Each version converts to the Apache License 2.0 on its Change Date: January 26, 2030, or the fourth anniversary of that version's first public release, whichever comes first. See `LICENSE`, `LICENSING.md` and `COMMERCIAL.md` in the repository root.
 
 ### Performance
 
