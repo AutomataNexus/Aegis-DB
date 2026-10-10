@@ -77,7 +77,16 @@ Core engine:
 - `EngineStats` - Performance metrics
 - `flush()` - Persist all data to disk via PersistenceManager
 - `load_from_disk()` - Restore data from persisted state on startup
-- Cardinality limit enforcement (`max_series_per_metric`)
+- Cardinality limit enforcement (`max_series_per_metric`), checked in O(1) and only for a new series
+- `EngineConfig` hot / cold windows (`hot_retention_days`, `cold_retention_days`) and `max_query_points`
+- Queries decode outside the series lock; a per-series `limit` without aggregation returns the newest points and stops early; a result over `max_query_points` is flagged `over_limit` (the server answers `413`)
+- `delete_metric()` - Purge every series of a metric (hot, index, cold) in one index rewrite
+
+### cold.rs
+On-disk cold tier:
+- Blocks aged out of the hot window are appended to per-series compressed files under `<data_path>/cold/`
+- Queries reaching past the hot window merge cold blocks in transparently
+- Daily compaction enforces `cold_retention_days`
 
 ### persistence.rs
 Crash-safe data persistence:
@@ -86,7 +95,8 @@ Crash-safe data persistence:
 - `PersistedSeries` - Serialized series with tags and data points
 - `PersistedBlock` - Serialized compressed blocks
 - Uses bincode serialization for efficient binary encoding
-- Atomic writes (write to temp file, then rename) to prevent corruption
+- Atomic writes (write to a unique per-call temp file, then rename) to prevent corruption
+- Saves are serialised; stale temp files are removed at open
 
 ## Usage Example
 

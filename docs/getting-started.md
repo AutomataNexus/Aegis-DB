@@ -23,6 +23,8 @@ Before installing Aegis-DB, ensure you have:
 - **Rust** 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - **Trunk** (for dashboard): `cargo install trunk`
 
+No OpenSSL or `libssl-dev` is needed: all TLS uses rustls.
+
 ## Quick Installation
 
 ### From Crates.io

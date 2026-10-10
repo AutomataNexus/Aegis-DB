@@ -13,10 +13,63 @@ All notable changes to Aegis-DB are documented here. This project adheres to
   `0` disables). Queries that reach past the hot window merge cold blocks in
   transparently; cold-only series stay discoverable across restarts. Daily cold
   compaction enforces the cold retention. RAM stays bounded by the hot window.
+- `POST /api/v1/timeseries/write/batch` — write many points in one request
+  (`{"points": [...]}`, each the same shape as `/write`). Authenticates once and
+  returns `written` / `failed` counts plus the first error. Single-point ingest
+  topped out near 350 points/s on per-request overhead.
+- `DELETE /api/v1/timeseries/metrics/:name` (admin only) — purges every series of
+  a metric across the hot window, the series index and the cold tier, in a single
+  index rewrite. Returns `series_removed`.
+- `POST /api/v1/timeseries/query` accepts an optional `step` (seconds): points are
+  downsampled to the mean per bucket, for long windows.
+- Query memory bound: `AEGIS_TS_MAX_QUERY_POINTS` (default 2,000,000, minimum
+  10,000) caps the points one query may return; a query over the cap gets
+  `413 Payload Too Large` with a hint to narrow it. A per-series `limit` with no
+  aggregation now returns the **newest** points and stops decoding early.
+
+### Changed
+- Ledger: new ledgers chain with **SHA-256** (64-hex-zero genesis). Each ledger
+  records its `hash_version`; ledgers in older snapshots load as version 1
+  (128-bit FNV-1a, 32-hex-zero genesis) and keep verifying and chaining, so they
+  do not report `broken_at = 0` after upgrade.
+- The workspace is OpenSSL-free: `aegis-cli`, `aegis-client` (reqwest) and
+  `aegis-server` (ldap3) all use rustls. `openssl-sys` and `native-tls` are gone
+  from the dependency tree, so building no longer needs `libssl-dev` /
+  `pkg-config`.
 
 ### Fixed
 - `POST /api/v1/timeseries/query` now honours `start`/`end` (epoch seconds; ms
   accepted). They were parsed but ignored, so every query returned the last 24h.
+- Time-series tag-filtered queries honour the metric name: tags narrow the
+  metric instead of replacing it, so metrics that share a tag set no longer
+  bleed into each other's results.
+- Time-series writes no longer scan every series of the metric per point to
+  enforce `max_series_per_metric`; the check runs only for a new series (O(1)).
+  A 600-point batch on a high-cardinality metric went from 19.6 s to
+  ~0.004 ms/point, so writers no longer time out and silently lose the tail of
+  a payload.
+- Time-series queries decode outside the series lock, so a large read no longer
+  blocks writers.
+- `delete_series` also clears cold-only series instead of leaving dangling index
+  entries.
+- Time-series checkpoints: the periodic checkpoint, hourly retention and backup
+  tasks could save concurrently into one shared temp file, failing with
+  `I/O error: No such file or directory`. Saves are now serialised, use a unique
+  temp file per call (stale ones are cleaned at open), and run on
+  `spawn_blocking` so a large save cannot stall request handling.
+
+### Security
+- `ldap3` 0.11 → 0.12 (`tls-rustls-ring`), removing the last copies of `rustls`
+  0.21, `ring` 0.16 and `rustls-webpki` 0.101 (webpki name-constraint
+  advisories; ring AES overflow panic).
+- `rustls` → 0.23.45 (TLS 1.3 handshake messages accepted across encryption
+  levels), `rustls-webpki` → 0.103.15 (CRL `BIT STRING` panic DoS),
+  `quinn-proto` → 0.11.19 (unbounded out-of-order stream reassembly memory),
+  `xxhash-rust` → 0.8.19 (xxh3 custom-secret length check).
+- JS SDKs (`@aegis-db/client`, admin): `vitest` dev-dependency → 4.1.11
+  (`@vitest/mocker` redirect-mock path traversal).
+- `async-trait` → 0.1.92; clippy is clean again on Rust 1.99
+  (`double_must_use` from the older macro expansion broke CI).
 
 ## [0.5.0]
 

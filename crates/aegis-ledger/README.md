@@ -25,9 +25,9 @@ caught by verification. The thirteenth data paradigm in the Aegis engine.
   serializes to a snapshot the server stores and reloads on startup; appends
   after a restore continue the same chain.
 
-> The chain hash is a fast 128-bit non-cryptographic digest (FNV-1a, two lanes).
-> It detects corruption and accidental / naive tampering by re-verification; it
-> is not a defense against a forging adversary.
+> The chain hash is SHA-256. Each ledger records a `hash_version`: ledgers
+> created before v0.6 load as version 1 (128-bit FNV-1a) and keep verifying and
+> chaining under it, so upgrading never reports a broken chain.
 
 ## Example
 

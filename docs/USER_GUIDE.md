@@ -474,6 +474,14 @@ export AEGIS_AUTH_METHOD=ldap
 export AEGIS_LDAP_PASSWORD=secret
 ```
 
+**Time-series storage:**
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `AEGIS_TS_HOT_DAYS` | `7` | Days of points kept resident in RAM (minimum 1). |
+| `AEGIS_TS_COLD_DAYS` | `365` | Days older blocks are kept in the on-disk cold tier (`<data-dir>/timeseries/cold/`). `0` disables the cold tier. |
+| `AEGIS_TS_MAX_QUERY_POINTS` | `2000000` | Most points one query may return (minimum 10,000); larger queries get `413`. |
+
 ---
 
 ## Using the CLI
@@ -1004,19 +1012,36 @@ Content-Type: application/json
 }
 ```
 
-**Write Data Points:**
+**Write a Data Point:**
 ```bash
 POST /api/v1/timeseries/write
 Content-Type: application/json
 
 {
   "metric": "cpu_usage",
+  "tags": {"host": "server-1"},
+  "value": 45.5,
+  "timestamp": 1736935200
+}
+```
+
+`timestamp` is epoch seconds and optional (defaults to now).
+
+**Write a Batch of Points:**
+```bash
+POST /api/v1/timeseries/write/batch
+Content-Type: application/json
+
+{
   "points": [
-    {"timestamp": "2024-01-15T10:00:00Z", "value": 45.5, "tags": {"host": "server-1"}},
-    {"timestamp": "2024-01-15T10:01:00Z", "value": 48.2, "tags": {"host": "server-1"}}
+    {"metric": "cpu_usage", "tags": {"host": "server-1"}, "value": 45.5, "timestamp": 1736935200},
+    {"metric": "cpu_usage", "tags": {"host": "server-1"}, "value": 48.2, "timestamp": 1736935260}
   ]
 }
 ```
+
+Response: `{"success": true, "written": 2, "failed": 0, "error": null}`. One request
+authenticates once; use it for any ingest of more than a handful of points.
 
 **Query Time Series:**
 ```bash
@@ -1025,15 +1050,33 @@ Content-Type: application/json
 
 {
   "metric": "cpu_usage",
-  "start_time": "2024-01-15T00:00:00Z",
-  "end_time": "2024-01-15T23:59:59Z",
   "tags": {"host": "server-1"},
-  "aggregation": {
-    "function": "avg",
-    "interval": "1h"
-  }
+  "start": 1736899200,
+  "end": 1736985599,
+  "step": 3600,
+  "limit": 500
 }
 ```
+
+| Field | Meaning |
+|-------|---------|
+| `metric` | Metric name (required). |
+| `tags` | Optional; narrows the metric to series carrying these tags. |
+| `start` / `end` | Epoch seconds (millisecond stamps are accepted). Default: the last 24 hours. |
+| `step` | Optional downsample bucket in seconds; returns the mean per bucket. |
+| `limit` | Optional per-series cap. Without `step`, returns the newest `limit` points. |
+
+A query that would return more than `AEGIS_TS_MAX_QUERY_POINTS` points is rejected
+with `413 Payload Too Large`. Narrow it with tags, a shorter window, a `limit` or a
+`step`.
+
+**Delete a Metric (admin):**
+```bash
+DELETE /api/v1/timeseries/metrics/cpu_usage
+```
+
+Purges every series of the metric from the hot window, the index and the cold
+tier. Response: `{"success": true, "metric": "cpu_usage", "series_removed": 3}`.
 
 ### Streaming API
 

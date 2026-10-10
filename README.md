@@ -495,7 +495,8 @@ aegis-server (REST API - Axum)
 | `/api/v1/documents/collections/:name/documents` | GET/POST/PUT/PATCH/DELETE | Document CRUD |
 | `/api/v1/documents/collections/:name/query` | POST | Query (filter, sort, `cursor`/`next_cursor` pagination) |
 | `/api/v1/documents/collections/:name/batch-{insert,delete}` | POST | Bulk document insert/delete |
-| `/api/v1/timeseries/write` · `/query` | POST | Write / query time series |
+| `/api/v1/timeseries/write` · `/write/batch` · `/query` | POST | Write one / many points, query (`start`, `end`, `tags`, `step`, `limit`) |
+| `/api/v1/timeseries/metrics/:name` | DELETE | Purge every series of a metric (admin) |
 | `/api/v1/graph/nodes` · `/nodes/:id` | POST/PUT/DELETE | Create / update / delete graph nodes |
 | `/api/v1/graph/edges` · `/edges/:id` | POST/PUT/DELETE | Create / update / delete graph edges |
 | `/api/v1/streaming/publish` | POST | Publish events |

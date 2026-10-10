@@ -52,7 +52,7 @@ parking_lot = { workspace = true }
 chrono = { workspace = true }
 libc = "0.2"
 # LDAP authentication
-ldap3 = { version = "0.11", default-features = false, features = ["tls-rustls"] }
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 # OAuth2 HTTP requests and webhook notifications
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 # TOTP verification
