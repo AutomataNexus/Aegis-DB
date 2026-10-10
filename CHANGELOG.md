@@ -6,6 +6,8 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-10
+
 ### Added
 - Time-series **cold tier**: blocks aged out of the resident hot window (default
   7 days, `AEGIS_TS_HOT_DAYS`) are appended to per-series compressed files under
