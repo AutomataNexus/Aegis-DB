@@ -44,7 +44,7 @@ queries, which have no reference point) plus the feature's metadata.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET / POST | `/api/v1/geo/collections` | List / create (`{name}`) |
-| GET / DELETE | `/api/v1/geo/collections/:name` | Stats / drop |
+| GET / DELETE | `/api/v1/geo/collections/:name` | Stats / drop (admin only) |
 | POST | `/api/v1/geo/collections/:name/features` | Upsert `{id, lat, lon, metadata?}` |
 | GET / DELETE | `/api/v1/geo/collections/:name/features/:id` | Get / delete |
 | POST | `/api/v1/geo/collections/:name/radius` | Radius `{lat, lon, radius_m, filter?}` |

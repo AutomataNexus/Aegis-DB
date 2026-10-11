@@ -97,10 +97,14 @@ fn graceful_stop(mut s: Server) {
 }
 
 fn login(base: &str) -> String {
+    login_as(base, USER, PASS)
+}
+
+fn login_as(base: &str, user: &str, pass: &str) -> String {
     let client = Client::new();
     let resp: Value = client
         .post(format!("{base}/api/v1/auth/login"))
-        .json(&json!({ "username": USER, "password": PASS }))
+        .json(&json!({ "username": user, "password": pass }))
         .send()
         .unwrap()
         .json()
@@ -124,6 +128,13 @@ impl Api {
             client: Client::new(),
             base: base.to_string(),
             token: login(base),
+        }
+    }
+    fn as_user(base: &str, user: &str, pass: &str) -> Self {
+        Api {
+            client: Client::new(),
+            base: base.to_string(),
+            token: login_as(base, user, pass),
         }
     }
     fn req(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -177,6 +188,7 @@ fn all_new_paradigms_operational_over_http() {
     widecolumn(&api);
     ledger(&api);
     auto_create(&api);
+    container_drop_is_admin_only(&server.base, &api);
 
     // ---- Persistence: graceful restart on the same data dir ----------------
     graceful_stop(server);
@@ -563,6 +575,73 @@ fn auto_create(api: &Api) {
 }
 
 /// After a graceful restart, all five engines must have reloaded their data.
+fn container_drop_is_admin_only(base: &str, admin: &Api) {
+    let (s, _) = admin.post(
+        "/api/v1/admin/users",
+        json!({"username":"op","email":"op@test.local","password":"Operat0r!secure","role":"operator"}),
+    );
+    assert!(s.is_success(), "creating operator user failed: {s}");
+    let op = Api::as_user(base, "op", "Operat0r!secure");
+
+    let containers = [
+        (
+            "/api/v1/vector/collections",
+            json!({"name":"acl_v","dim":2}),
+            "/api/v1/vector/collections/acl_v",
+        ),
+        (
+            "/api/v1/fts/indexes",
+            json!({"name":"acl_f"}),
+            "/api/v1/fts/indexes/acl_f",
+        ),
+        (
+            "/api/v1/geo/collections",
+            json!({"name":"acl_g"}),
+            "/api/v1/geo/collections/acl_g",
+        ),
+        (
+            "/api/v1/columnar/tables",
+            json!({"name":"acl_c","columns":[{"name":"x","type":"float"}]}),
+            "/api/v1/columnar/tables/acl_c",
+        ),
+        (
+            "/api/v1/objects/buckets",
+            json!({"name":"acl-b"}),
+            "/api/v1/objects/buckets/acl-b",
+        ),
+        (
+            "/api/v1/widecolumn/tables",
+            json!({"name":"acl_w"}),
+            "/api/v1/widecolumn/tables/acl_w",
+        ),
+        (
+            "/api/v1/ledger/ledgers",
+            json!({"name":"acl_l"}),
+            "/api/v1/ledger/ledgers/acl_l",
+        ),
+    ];
+    for (create, body, item) in containers {
+        let (s, v) = op.post(create, body.clone());
+        assert_eq!(s, StatusCode::CREATED, "{create}: {v}");
+        let (s, _) = op.post(create, body);
+        assert_eq!(s, StatusCode::CONFLICT, "{create}: duplicate must be 409");
+        let (s, _) = op.get(item);
+        assert_eq!(s, StatusCode::OK, "{item}: operator can read");
+        let (s, _) = op.delete(item);
+        assert_eq!(s, StatusCode::FORBIDDEN, "{item}: operator must not drop");
+        let (s, _) = admin.delete(item);
+        assert_eq!(s, StatusCode::OK, "{item}: admin drops");
+        let (s, _) = admin.get(item);
+        assert_eq!(s, StatusCode::NOT_FOUND, "{item}: gone after drop");
+    }
+
+    let (_, v) = admin.post("/api/v1/ledger/ledgers", json!({"name":"acl_hv"}));
+    assert!(v.is_object());
+    let (s, v) = admin.get("/api/v1/ledger/ledgers/acl_hv");
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["hash_version"], 2, "new ledgers report SHA-256: {v}");
+}
+
 fn verify_persisted(api: &Api) {
     // geo: la was deleted before shutdown, so 3 remain
     assert_eq!(api.get("/api/v1/geo/collections/cities").1["count"], 3);

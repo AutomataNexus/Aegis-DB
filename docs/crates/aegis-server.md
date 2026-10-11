@@ -99,6 +99,10 @@ HTTP request handlers:
 | `/objects` | Object buckets and blobs |
 | `/widecolumn` | Wide-column tables |
 | `/ledger` | Append-only ledgers, range reads, `verify` |
+
+Dropping a whole container (`DELETE` on a vector collection, full-text index, geo
+collection, columnar table, bucket, wide-column table or ledger) requires the
+Admin role. Creating a container that already exists returns `409 Conflict`.
 | `/query-builder` | Structured query builder |
 | `/admin`, `/cluster`, `/auth` | Administration, cluster membership, authentication |
 | `/compliance`, `/vault`, `/shield`, `/updates` | Compliance APIs, secrets vault, security shield, OTA updates |

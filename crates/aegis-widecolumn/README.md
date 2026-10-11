@@ -53,7 +53,7 @@ let page = wc.scan("users", None, None, Some("user:"), &[], Some(50))?;
 | Method | Path | Description |
 |--------|------|-------------|
 | GET/POST | `/api/v1/widecolumn/tables` | List / create a table (`{name}`) |
-| GET/DELETE | `/api/v1/widecolumn/tables/:name` | Stats (rows + cells) / drop |
+| GET/DELETE | `/api/v1/widecolumn/tables/:name` | Stats (rows + cells) / drop (admin only) |
 | POST | `/api/v1/widecolumn/tables/:name/scan` | Scan `{start?, end?, prefix?, columns?, limit?}` |
 | PUT | `/api/v1/widecolumn/tables/:name/rows/:row` | Set columns `{columns, timestamp?}` |
 | GET | `/api/v1/widecolumn/tables/:name/rows/:row` | Get a row (`?columns=a,b`) |

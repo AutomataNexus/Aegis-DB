@@ -45,7 +45,7 @@ for hit in hits {
 | Method | Path | Description |
 |--------|------|-------------|
 | GET/POST | `/api/v1/vector/collections` | List / create a collection (`{name, dim, metric}`) |
-| GET/DELETE | `/api/v1/vector/collections/:name` | Stats / drop |
+| GET/DELETE | `/api/v1/vector/collections/:name` | Stats / drop (admin only) |
 | POST | `/api/v1/vector/collections/:name/upsert` | Upsert `{id, vector, metadata?}` |
 | POST | `/api/v1/vector/collections/:name/batch` | Batch upsert `{vectors: [...]}` |
 | GET/DELETE | `/api/v1/vector/collections/:name/vectors/:id` | Get / delete a vector |

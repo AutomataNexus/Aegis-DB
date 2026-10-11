@@ -25,7 +25,7 @@ which `verify` detects and localizes.
 | Module | Responsibility |
 |--------|----------------|
 | `types.rs` | `LedgerEntry`, `VerifyResult`, `LedgerError`, `chain_hash` (SHA-256), `chain_hash_fnv1a` (legacy v1), `genesis_hash` |
-| `engine.rs` | `LedgerEngine` — ledgers, append, get/range, verify, stats (tip hash), snapshot + logical clock |
+| `engine.rs` | `LedgerEngine` — ledgers, append, get/range, verify, stats (tip hash, hash version), snapshot + logical clock |
 
 ## Hash chain
 
@@ -50,7 +50,7 @@ position, returning the first broken sequence if the chain is invalid.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET / POST | `/api/v1/ledger/ledgers` | List / create (`{name}`) |
-| GET / DELETE | `/api/v1/ledger/ledgers/:name` | Stats / drop |
+| GET / DELETE | `/api/v1/ledger/ledgers/:name` | Stats (count, tip hash, `hash_version`) / drop (admin only) |
 | GET / POST | `/api/v1/ledger/ledgers/:name/entries` | Read range (`?start=&limit=`) / append `{payload, timestamp?}` |
 | GET | `/api/v1/ledger/ledgers/:name/entries/:seq` | Get entry by sequence |
 | GET | `/api/v1/ledger/ledgers/:name/verify` | Verify the hash chain |

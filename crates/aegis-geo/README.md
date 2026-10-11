@@ -47,7 +47,7 @@ let near = geo.nearest("cities", 39.0, -77.0, 3, &serde_json::Value::Null)?;
 | Method | Path | Description |
 |--------|------|-------------|
 | GET/POST | `/api/v1/geo/collections` | List / create a collection (`{name}`) |
-| GET/DELETE | `/api/v1/geo/collections/:name` | Stats / drop |
+| GET/DELETE | `/api/v1/geo/collections/:name` | Stats / drop (admin only) |
 | POST | `/api/v1/geo/collections/:name/features` | Upsert `{id, lat, lon, metadata?}` |
 | GET/DELETE | `/api/v1/geo/collections/:name/features/:id` | Get / delete a feature |
 | POST | `/api/v1/geo/collections/:name/radius` | Radius query `{lat, lon, radius_m, filter?}` |

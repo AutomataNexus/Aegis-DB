@@ -20,7 +20,7 @@ caught by verification. The thirteenth data paradigm in the Aegis engine.
   and checking every link, and reports the first broken sequence (if any).
 - **Reads** — fetch a single entry by sequence, or read a range from an offset
   with a limit.
-- **Chain tip** — ledger stats expose the entry count and the tip hash.
+- **Chain tip** — ledger stats expose the entry count, the tip hash and the `hash_version`.
 - **Snapshot persistence** — the whole ledger set (and the logical clock)
   serializes to a snapshot the server stores and reloads on startup; appends
   after a restore continue the same chain.
@@ -49,7 +49,7 @@ let report = ledger.verify("audit")?;        // { valid: true, entries: 2, broke
 | Method | Path | Description |
 |--------|------|-------------|
 | GET/POST | `/api/v1/ledger/ledgers` | List / create a ledger (`{name}`) |
-| GET/DELETE | `/api/v1/ledger/ledgers/:name` | Stats (count + tip hash) / drop |
+| GET/DELETE | `/api/v1/ledger/ledgers/:name` | Stats (count, tip hash, `hash_version`) / drop (admin only) |
 | GET/POST | `/api/v1/ledger/ledgers/:name/entries` | Read range (`?start=&limit=`) / append `{payload, timestamp?}` |
 | GET | `/api/v1/ledger/ledgers/:name/entries/:seq` | Get an entry by sequence |
 | GET | `/api/v1/ledger/ledgers/:name/verify` | Verify the hash chain |

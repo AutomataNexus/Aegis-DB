@@ -55,7 +55,7 @@ let groups = olap.aggregate(
 | Method | Path | Description |
 |--------|------|-------------|
 | GET/POST | `/api/v1/columnar/tables` | List / create a table (`{name, columns}`) |
-| GET/DELETE | `/api/v1/columnar/tables/:name` | Stats (rows + schema) / drop |
+| GET/DELETE | `/api/v1/columnar/tables/:name` | Stats (rows + schema) / drop (admin only) |
 | POST | `/api/v1/columnar/tables/:name/rows` | Insert `{rows: [...]}` |
 | POST | `/api/v1/columnar/tables/:name/scan` | Scan `{columns?, filter?, limit?}` |
 | POST | `/api/v1/columnar/tables/:name/aggregate` | Aggregate `{group_by?, aggregates, filter?}` |

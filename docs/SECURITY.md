@@ -340,8 +340,10 @@ The startup banner reflects whether the server is locked or legacy-open.
 
 `require_admin` is now enforced on every privileged mutation route: user and
 role management, node lifecycle, cluster shutdown, vault secrets / seal /
-transit, OTA plan / execute, backup / restore, Shield mutations, and GDPR
-erase / export. Reads remain open to any authenticated role. A non-admin
+transit, OTA plan / execute, backup / restore, Shield mutations, GDPR
+erase / export, purging a time-series metric, and dropping a whole data
+container (vector collection, full-text index, geo collection, columnar table,
+object bucket, wide-column table, ledger). Reads remain open to any authenticated role. A non-admin
 calling a privileged route receives **403**.
 
 ### Vault Deny-by-Default

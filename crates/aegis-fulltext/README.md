@@ -41,7 +41,7 @@ for hit in hits {
 | Method | Path | Description |
 |--------|------|-------------|
 | GET/POST | `/api/v1/fts/indexes` | List / create an index (`{name}`) |
-| GET/DELETE | `/api/v1/fts/indexes/:name` | Stats / drop |
+| GET/DELETE | `/api/v1/fts/indexes/:name` | Stats / drop (admin only) |
 | POST | `/api/v1/fts/indexes/:name/documents` | Index `{id, text, metadata?}` |
 | GET/DELETE | `/api/v1/fts/indexes/:name/documents/:id` | Get / delete a document |
 | POST | `/api/v1/fts/indexes/:name/search` | BM25 search `{query, k, filter?}` |

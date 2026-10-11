@@ -39,7 +39,7 @@ classic last-write-wins, the same model Cassandra uses for cell reconciliation.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET / POST | `/api/v1/widecolumn/tables` | List / create (`{name}`) |
-| GET / DELETE | `/api/v1/widecolumn/tables/:name` | Stats / drop |
+| GET / DELETE | `/api/v1/widecolumn/tables/:name` | Stats / drop (admin only) |
 | POST | `/api/v1/widecolumn/tables/:name/scan` | Scan `{start?, end?, prefix?, columns?, limit?}` |
 | PUT | `/api/v1/widecolumn/tables/:name/rows/:row` | Set columns `{columns, timestamp?}` |
 | GET | `/api/v1/widecolumn/tables/:name/rows/:row` | Get a row (`?columns=a,b`) |

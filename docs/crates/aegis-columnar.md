@@ -45,7 +45,7 @@ lexically; null compares equal only to null.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET / POST | `/api/v1/columnar/tables` | List / create (`{name, columns}`) |
-| GET / DELETE | `/api/v1/columnar/tables/:name` | Stats / drop |
+| GET / DELETE | `/api/v1/columnar/tables/:name` | Stats / drop (admin only) |
 | POST | `/api/v1/columnar/tables/:name/rows` | Insert `{rows: [...]}` |
 | POST | `/api/v1/columnar/tables/:name/scan` | Scan `{columns?, filter?, limit?}` |
 | POST | `/api/v1/columnar/tables/:name/aggregate` | Aggregate `{group_by?, aggregates, filter?}` |

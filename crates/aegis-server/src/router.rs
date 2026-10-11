@@ -317,10 +317,7 @@ pub fn create_router(state: AppState) -> Router {
             "/collections",
             get(handlers::list_vector_collections).post(handlers::create_vector_collection),
         )
-        .route(
-            "/collections/:name",
-            get(handlers::get_vector_collection).delete(handlers::drop_vector_collection),
-        )
+        .route("/collections/:name", get(handlers::get_vector_collection))
         .route("/collections/:name/upsert", post(handlers::upsert_vector))
         .route(
             "/collections/:name/batch",
@@ -336,16 +333,25 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    let vector_routes = vector_routes.merge(
+        Router::new()
+            .route(
+                "/collections/:name",
+                delete(handlers::drop_vector_collection),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::require_admin,
+            )),
+    );
+
     // Full-text search routes (require auth)
     let fts_routes = Router::new()
         .route(
             "/indexes",
             get(handlers::list_fts_indexes).post(handlers::create_fts_index),
         )
-        .route(
-            "/indexes/:name",
-            get(handlers::get_fts_index).delete(handlers::drop_fts_index),
-        )
+        .route("/indexes/:name", get(handlers::get_fts_index))
         .route(
             "/indexes/:name/documents",
             post(handlers::fts_upsert_document),
@@ -360,16 +366,22 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    let fts_routes = fts_routes.merge(
+        Router::new()
+            .route("/indexes/:name", delete(handlers::drop_fts_index))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::require_admin,
+            )),
+    );
+
     // Geospatial routes (require auth)
     let geo_routes = Router::new()
         .route(
             "/collections",
             get(handlers::list_geo_collections).post(handlers::create_geo_collection),
         )
-        .route(
-            "/collections/:name",
-            get(handlers::get_geo_collection).delete(handlers::drop_geo_collection),
-        )
+        .route("/collections/:name", get(handlers::get_geo_collection))
         .route(
             "/collections/:name/features",
             post(handlers::geo_upsert_feature),
@@ -386,16 +398,22 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    let geo_routes = geo_routes.merge(
+        Router::new()
+            .route("/collections/:name", delete(handlers::drop_geo_collection))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::require_admin,
+            )),
+    );
+
     // Columnar / OLAP routes (require auth)
     let columnar_routes = Router::new()
         .route(
             "/tables",
             get(handlers::list_columnar_tables).post(handlers::create_columnar_table),
         )
-        .route(
-            "/tables/:name",
-            get(handlers::get_columnar_table).delete(handlers::drop_columnar_table),
-        )
+        .route("/tables/:name", get(handlers::get_columnar_table))
         .route("/tables/:name/rows", post(handlers::columnar_insert))
         .route("/tables/:name/scan", post(handlers::columnar_scan))
         .route(
@@ -411,6 +429,15 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    let columnar_routes = columnar_routes.merge(
+        Router::new()
+            .route("/tables/:name", delete(handlers::drop_columnar_table))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::require_admin,
+            )),
+    );
+
     // Object / blob store routes (require auth). Object keys may contain
     // slashes, so item operations use a `*key` wildcard.
     let object_routes = Router::new()
@@ -418,10 +445,7 @@ pub fn create_router(state: AppState) -> Router {
             "/buckets",
             get(handlers::list_buckets).post(handlers::create_bucket),
         )
-        .route(
-            "/buckets/:bucket",
-            get(handlers::get_bucket).delete(handlers::drop_bucket),
-        )
+        .route("/buckets/:bucket", get(handlers::get_bucket))
         .route("/buckets/:bucket/objects", get(handlers::list_objects))
         .route(
             "/buckets/:bucket/object/*key",
@@ -434,16 +458,22 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    let object_routes = object_routes.merge(
+        Router::new()
+            .route("/buckets/:bucket", delete(handlers::drop_bucket))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::require_admin,
+            )),
+    );
+
     // Wide-column routes (require auth)
     let widecolumn_routes = Router::new()
         .route(
             "/tables",
             get(handlers::list_wide_tables).post(handlers::create_wide_table),
         )
-        .route(
-            "/tables/:name",
-            get(handlers::get_wide_table).delete(handlers::drop_wide_table),
-        )
+        .route("/tables/:name", get(handlers::get_wide_table))
         .route("/tables/:name/scan", post(handlers::wide_scan))
         .route(
             "/tables/:name/rows/:row",
@@ -460,16 +490,22 @@ pub fn create_router(state: AppState) -> Router {
             middleware::require_auth,
         ));
 
+    let widecolumn_routes = widecolumn_routes.merge(
+        Router::new()
+            .route("/tables/:name", delete(handlers::drop_wide_table))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::require_admin,
+            )),
+    );
+
     // Ledger / append-only routes (require auth)
     let ledger_routes = Router::new()
         .route(
             "/ledgers",
             get(handlers::list_ledgers).post(handlers::create_ledger),
         )
-        .route(
-            "/ledgers/:name",
-            get(handlers::get_ledger).delete(handlers::drop_ledger),
-        )
+        .route("/ledgers/:name", get(handlers::get_ledger))
         .route(
             "/ledgers/:name/entries",
             get(handlers::ledger_entries).post(handlers::ledger_append),
@@ -483,6 +519,15 @@ pub fn create_router(state: AppState) -> Router {
             state.clone(),
             middleware::require_auth,
         ));
+
+    let ledger_routes = ledger_routes.merge(
+        Router::new()
+            .route("/ledgers/:name", delete(handlers::drop_ledger))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::require_admin,
+            )),
+    );
 
     // Query builder routes (require auth)
     let query_routes = Router::new()

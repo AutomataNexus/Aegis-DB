@@ -41,7 +41,7 @@ alongside the raw metric `distance`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET / POST | `/api/v1/vector/collections` | List / create (`{name, dim, metric}`) |
-| GET / DELETE | `/api/v1/vector/collections/:name` | Stats / drop |
+| GET / DELETE | `/api/v1/vector/collections/:name` | Stats / drop (admin only) |
 | POST | `/api/v1/vector/collections/:name/upsert` | Upsert `{id, vector, metadata?}` |
 | POST | `/api/v1/vector/collections/:name/batch` | Batch upsert |
 | GET / DELETE | `/api/v1/vector/collections/:name/vectors/:id` | Get / delete |

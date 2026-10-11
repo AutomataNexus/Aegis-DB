@@ -299,5 +299,13 @@ mod tests {
         );
         assert!(reloaded.verify("audit").unwrap().valid);
         assert!(reloaded.verify("new").unwrap().valid);
+        assert_eq!(
+            reloaded.ledger_stats("audit").unwrap().hash_version,
+            HASH_VERSION_FNV1A
+        );
+        assert_eq!(
+            reloaded.ledger_stats("new").unwrap().hash_version,
+            HASH_VERSION_SHA256
+        );
     }
 }

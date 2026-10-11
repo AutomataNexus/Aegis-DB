@@ -16,6 +16,7 @@ pub struct LedgerStats {
     pub entries: usize,
     /// The hash of the most recent entry (the chain tip), or genesis if empty.
     pub tip_hash: String,
+    pub hash_version: u8,
 }
 
 /// A single append-only ledger. Entries are stored in sequence order; `seq`
@@ -107,6 +108,7 @@ impl LedgerEngine {
             name: name.to_string(),
             entries: l.entries.len(),
             tip_hash: l.tip().to_string(),
+            hash_version: l.hash_version,
         })
     }
 

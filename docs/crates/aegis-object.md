@@ -31,7 +31,7 @@ range scan.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET / POST | `/api/v1/objects/buckets` | List / create (`{name}`) |
-| GET / DELETE | `/api/v1/objects/buckets/:bucket` | Stats / drop |
+| GET / DELETE | `/api/v1/objects/buckets/:bucket` | Stats / drop (admin only) |
 | GET | `/api/v1/objects/buckets/:bucket/objects` | List metadata (`?prefix=&limit=`) |
 | PUT | `/api/v1/objects/buckets/:bucket/object/*key` | Store (raw body) |
 | GET | `/api/v1/objects/buckets/:bucket/object/*key` | Fetch bytes (or `?meta=1`) |

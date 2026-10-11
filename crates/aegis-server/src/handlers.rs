@@ -3363,10 +3363,7 @@ pub async fn create_vector_collection(
             StatusCode::CREATED,
             Json(serde_json::json!({"success": true, "name": req.name})),
         ),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"success": false, "error": e.to_string()})),
-        ),
+        Err(e) => vector_err(e),
     }
 }
 
@@ -3491,6 +3488,7 @@ fn vector_err(e: aegis_vector::VectorError) -> (StatusCode, Json<serde_json::Val
     let status = match &e {
         aegis_vector::VectorError::CollectionNotFound(_)
         | aegis_vector::VectorError::VectorNotFound(_) => StatusCode::NOT_FOUND,
+        aegis_vector::VectorError::CollectionExists(_) => StatusCode::CONFLICT,
         _ => StatusCode::BAD_REQUEST,
     };
     (
@@ -3543,10 +3541,7 @@ pub async fn create_fts_index(
             StatusCode::CREATED,
             Json(serde_json::json!({"success": true, "name": req.name})),
         ),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"success": false, "error": e.to_string()})),
-        ),
+        Err(e) => fts_err(e),
     }
 }
 
@@ -3655,7 +3650,7 @@ fn fts_err(e: aegis_fulltext::FtsError) -> (StatusCode, Json<serde_json::Value>)
     let status = match &e {
         aegis_fulltext::FtsError::IndexNotFound(_)
         | aegis_fulltext::FtsError::DocumentNotFound(_) => StatusCode::NOT_FOUND,
-        _ => StatusCode::BAD_REQUEST,
+        aegis_fulltext::FtsError::IndexExists(_) => StatusCode::CONFLICT,
     };
     (
         status,
@@ -3728,10 +3723,7 @@ pub async fn create_geo_collection(
             StatusCode::CREATED,
             Json(serde_json::json!({"success": true, "name": req.name})),
         ),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"success": false, "error": e.to_string()})),
-        ),
+        Err(e) => geo_err(e),
     }
 }
 
@@ -3884,6 +3876,7 @@ fn geo_err(e: aegis_geo::GeoError) -> (StatusCode, Json<serde_json::Value>) {
         aegis_geo::GeoError::CollectionNotFound(_) | aegis_geo::GeoError::FeatureNotFound(_) => {
             StatusCode::NOT_FOUND
         }
+        aegis_geo::GeoError::CollectionExists(_) => StatusCode::CONFLICT,
         _ => StatusCode::BAD_REQUEST,
     };
     (

@@ -6,6 +6,22 @@ All notable changes to Aegis-DB are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+- Ledger stats (`GET /api/v1/ledger/ledgers/:name`) report `hash_version`
+  (`1` = legacy FNV-1a, `2` = SHA-256).
+
+### Changed
+- Creating a container that already exists returns `409 Conflict` for vector
+  collections, full-text indexes and geo collections, matching columnar, object,
+  wide-column and ledger. These three returned `400`.
+
+### Security
+- Dropping a whole container is admin only: `DELETE` on a vector collection,
+  full-text index, geo collection, columnar table, object bucket, wide-column
+  table or ledger now returns `403` for non-admin roles. Previously any
+  authenticated user could drop one, including a ledger and its history.
+  Item-level deletes are unchanged.
+
 ## [0.6.0] - 2026-10-10
 
 ### Added

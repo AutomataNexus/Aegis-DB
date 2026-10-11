@@ -1180,16 +1180,17 @@ GET /api/v1/graph/data?depth=2&start_node=node-001
 The seven APIs below (vector, full-text, geospatial, columnar, object,
 wide-column, ledger) share these conventions:
 
-- Every endpoint requires authentication. None is restricted to the Admin role,
-  so any authenticated user can also drop a container.
+- Every endpoint requires authentication. Dropping a whole container
+  (`DELETE` on a collection, index, table, bucket or ledger) is restricted to the
+  Admin role and returns `403 Forbidden` for other roles; item-level deletes
+  (a vector, document, feature, object, row, cell) need only authentication.
 - Containers (collections, indexes, tables, buckets, ledgers) are created on
   demand by the first write, so the explicit create call is optional. Reads,
   searches, scans and drops on a container that does not exist return
   `404 Not Found`; typos are not masked.
 - Errors use the body `{"success": false, "error": "<message>"}`. A missing
   container or item is `404`. Creating a container that already exists returns
-  `400` for vector, full-text and geo, and `409 Conflict` for columnar, object,
-  wide-column and ledger. Validation failures are `400`.
+  `409 Conflict` for every paradigm. Validation failures are `400`.
 - Request bodies are subject to the server's request body limit (10 MB by
   default).
 
@@ -1738,7 +1739,7 @@ Content-Type: application/json
 GET /api/v1/ledger/ledgers/audit
 ```
 
-Response: `{"name": "audit", "entries": 2, "tip_hash": "<hash of the latest entry>"}`.
+Response: `{"name": "audit", "entries": 2, "tip_hash": "<hash of the latest entry>", "hash_version": 2}`.
 For an empty ledger `tip_hash` is the genesis hash.
 
 **Append an Entry:**
@@ -1795,8 +1796,8 @@ releases load as version 1, the original 128-bit FNV-1a digest (32 hex character
 32-zero genesis), and keep verifying and chaining under that algorithm, so an
 upgrade never reports a broken chain. Version 1 detects corruption and naive
 tampering but is not cryptographic; create a new ledger to get SHA-256 protection.
-The hash version is not included in API responses; it can be inferred from the
-hash length.
+`GET /api/v1/ledger/ledgers/:name` reports it as `hash_version` (`1` = FNV-1a,
+`2` = SHA-256).
 
 **Drop Ledger:**
 ```bash
