@@ -2085,6 +2085,81 @@ pub struct PointResponse {
     pub value: f64,
 }
 
+/// Most time series queries allowed to run on the blocking pool at once.
+const TS_QUERY_CONCURRENCY: usize = 8;
+
+/// How long a time series query may wait for a slot plus run before the request is
+/// answered with 503. The blocking task itself cannot be cancelled; it finishes in the
+/// background and releases its slot when it does.
+const TS_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+static TS_QUERY_SLOTS: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Arc::new(tokio::sync::Semaphore::new(TS_QUERY_CONCURRENCY))
+    });
+
+/// Why a time series query was not answered.
+#[derive(Debug, PartialEq, Eq)]
+enum TsQueryError {
+    /// The slot wait plus the query ran past [`TS_QUERY_TIMEOUT`].
+    TimedOut,
+    /// The blocking task panicked or the runtime is shutting down.
+    Failed,
+}
+
+impl std::fmt::Display for TsQueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimedOut => write!(
+                f,
+                "timed out after {}s — narrow it with tags, a shorter window or a per-series limit",
+                TS_QUERY_TIMEOUT.as_secs()
+            ),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+/// Run a time series query off the async workers: wait for one of
+/// [`TS_QUERY_CONCURRENCY`] slots, run the engine query on the blocking pool, and give up
+/// waiting after [`TS_QUERY_TIMEOUT`].
+async fn run_timeseries_query(
+    engine: std::sync::Arc<aegis_timeseries::TimeSeriesEngine>,
+    query: TimeSeriesQuery,
+) -> Result<aegis_timeseries::QueryResult, TsQueryError> {
+    run_timeseries_query_with(&TS_QUERY_SLOTS, TS_QUERY_TIMEOUT, move || {
+        engine.query(&query)
+    })
+    .await
+}
+
+async fn run_timeseries_query_with<T, F>(
+    slots: &std::sync::Arc<tokio::sync::Semaphore>,
+    timeout: std::time::Duration,
+    run: F,
+) -> Result<T, TsQueryError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let work = async {
+        let permit = slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| TsQueryError::Failed)?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            run()
+        })
+        .await
+        .map_err(|_| TsQueryError::Failed)
+    };
+    tokio::time::timeout(timeout, work)
+        .await
+        .map_err(|_| TsQueryError::TimedOut)?
+}
+
 /// Query time series data.
 pub async fn query_timeseries(
     State(state): State<AppState>,
@@ -2129,7 +2204,24 @@ pub async fn query_timeseries(
         query = query.with_tags(tags);
     }
 
-    let result = state.timeseries_engine.query(&query);
+    // The engine query is synchronous: it takes the series index and data locks and
+    // decodes compressed blocks. Run inline on an async worker, a wide or slow query
+    // pins that worker, and enough of them in parallel starve the runtime that also
+    // accepts connections and drives every other request. Run it on the blocking pool
+    // instead, bound how many run at once, and stop waiting after a timeout.
+    let result = match run_timeseries_query(state.timeseries_engine.clone(), query).await {
+        Ok(result) => result,
+        Err(err) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("query for '{}' {}", request.metric, err),
+                })),
+            )
+                .into_response();
+        }
+    };
     if result.over_limit {
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -4762,4 +4854,53 @@ pub async fn list_update_plans(State(state): State<AppState>) -> impl IntoRespon
             "plans": plans,
         })),
     )
+}
+
+#[cfg(test)]
+mod ts_query_tests {
+    use super::{run_timeseries_query_with, TsQueryError};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Semaphore;
+
+    #[tokio::test]
+    async fn returns_the_blocking_result() {
+        let slots = Arc::new(Semaphore::new(1));
+        let out = run_timeseries_query_with(&slots, Duration::from_secs(5), || 41 + 1).await;
+        assert_eq!(out, Ok(42));
+        assert_eq!(slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn times_out_without_blocking_the_runtime() {
+        let slots = Arc::new(Semaphore::new(1));
+        let out = run_timeseries_query_with(&slots, Duration::from_millis(50), || {
+            std::thread::sleep(Duration::from_millis(400));
+        })
+        .await;
+        assert_eq!(out, Err(TsQueryError::TimedOut));
+        // The abandoned task still holds its slot until it finishes, then frees it.
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn waits_for_a_free_slot_within_the_timeout() {
+        let slots = Arc::new(Semaphore::new(1));
+        let held = slots.clone().acquire_owned().await.expect("permit");
+        let out = run_timeseries_query_with(&slots, Duration::from_millis(50), || 1).await;
+        assert_eq!(out, Err(TsQueryError::TimedOut));
+        drop(held);
+        let out = run_timeseries_query_with(&slots, Duration::from_secs(5), || 2).await;
+        assert_eq!(out, Ok(2));
+    }
+
+    #[tokio::test]
+    async fn a_panicking_query_is_reported_and_frees_its_slot() {
+        let slots = Arc::new(Semaphore::new(1));
+        let out: Result<(), _> =
+            run_timeseries_query_with(&slots, Duration::from_secs(5), || panic!("boom")).await;
+        assert_eq!(out, Err(TsQueryError::Failed));
+        assert_eq!(slots.available_permits(), 1);
+    }
 }
