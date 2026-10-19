@@ -582,7 +582,24 @@ impl AppState {
     }
 
     /// Flush a single document collection to disk (if data_dir is configured).
+    ///
+    /// The whole collection is re-encoded and compressed, which takes long enough on a
+    /// big collection to stall the async worker it runs on, and with it any task parked
+    /// on that worker (the accept loop included: logins timed out while one worker
+    /// compressed and the rest sat idle). On the multi-thread runtime
+    /// the worker hands its queue to another thread first.
     pub fn flush_collection(&self, collection_name: &str) {
+        let multi_thread = tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false);
+        if multi_thread {
+            tokio::task::block_in_place(|| self.flush_collection_now(collection_name));
+        } else {
+            self.flush_collection_now(collection_name);
+        }
+    }
+
+    fn flush_collection_now(&self, collection_name: &str) {
         let Some(ref dir) = self.data_dir else { return };
         let docs_dir = dir.join("documents");
         if let Err(e) = std::fs::create_dir_all(&docs_dir) {
