@@ -81,7 +81,7 @@ pub fn read_blob_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
 pub fn write_blob_json<T: Serialize>(path: &std::path::Path, value: &T) -> std::io::Result<()> {
     let json = serde_json::to_vec(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(path, encode_blob(&json))
+    crate::oplog::write_atomic(path, encode_blob(&json))
 }
 
 // ── Document-collection compression (NexusCompress, Record domain) ─────────

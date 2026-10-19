@@ -376,7 +376,7 @@ impl ConsentManager {
         let path = dir.join("consent.json");
         match serde_json::to_string_pretty(&snapshot) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                if let Err(e) = crate::oplog::write_atomic(&path, json) {
                     tracing::error!("Failed to write consent data to {}: {}", path.display(), e);
                 }
             }

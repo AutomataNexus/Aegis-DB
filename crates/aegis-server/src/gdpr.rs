@@ -611,6 +611,7 @@ impl GdprService {
                             .delete(&collection_name, &doc.id)
                             .is_ok()
                         {
+                            state.persist_docs(&collection_name, std::slice::from_ref(&doc.id));
                             deleted.push(DeletedItem {
                                 store_type: "document".to_string(),
                                 location: collection_name.clone(),

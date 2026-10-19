@@ -641,42 +641,56 @@ impl TimeSeriesEngine {
 
     /// Flush all pending writes to disk.
     pub fn flush(&self) {
-        if let Some(ref pm) = self.persistence {
-            let metrics: Vec<Metric> = {
-                let m = self.metrics.read();
-                m.values().cloned().collect()
-            };
-
-            let series: Vec<PersistedSeries> = {
-                let data = self.series_data.read();
-                data.iter()
-                    .map(|(id, buffer)| PersistedSeries {
-                        series_id: id.clone(),
-                        metric: buffer.metric.clone(),
-                        tags: buffer.tags.clone(),
-                        points: buffer.points.clone(),
-                        compressed_blocks: buffer
-                            .compressed_blocks
-                            .iter()
-                            .map(PersistedBlock::from)
-                            .collect(),
-                    })
-                    .collect()
-            };
-
-            let state = PersistedState {
-                version: 1,
-                metrics,
-                series,
-            };
-
-            if let Err(e) = pm.save(&state) {
+        if let Some(state) = self.capture() {
+            if let Err(e) = self.save_captured(&state) {
                 eprintln!("Failed to flush timeseries data: {}", e);
             }
         }
+    }
 
+    /// Copy the resident series for a checkpoint (`None` without persistence).
+    /// Writers wait while the copy is taken; [`TimeSeriesEngine::save_captured`]
+    /// then writes it without holding any engine lock.
+    pub fn capture(&self) -> Option<PersistedState> {
+        self.persistence.as_ref()?;
+        let metrics: Vec<Metric> = {
+            let m = self.metrics.read();
+            m.values().cloned().collect()
+        };
+
+        let series: Vec<PersistedSeries> = {
+            let data = self.series_data.read();
+            data.iter()
+                .map(|(id, buffer)| PersistedSeries {
+                    series_id: id.clone(),
+                    metric: buffer.metric.clone(),
+                    tags: buffer.tags.clone(),
+                    points: buffer.points.clone(),
+                    compressed_blocks: buffer
+                        .compressed_blocks
+                        .iter()
+                        .map(PersistedBlock::from)
+                        .collect(),
+                })
+                .collect()
+        };
+
+        Some(PersistedState {
+            version: 1,
+            metrics,
+            series,
+        })
+    }
+
+    /// Write a state from [`TimeSeriesEngine::capture`] to disk (atomically).
+    pub fn save_captured(&self, state: &PersistedState) -> Result<(), String> {
+        let Some(ref pm) = self.persistence else {
+            return Ok(());
+        };
+        pm.save(state).map_err(|e| e.to_string())?;
         let mut stats = self.stats.write();
         stats.last_flush = Some(Utc::now());
+        Ok(())
     }
 
     /// Age-based retention on the resident series map: drop every point/block older

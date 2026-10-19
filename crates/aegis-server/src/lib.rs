@@ -24,6 +24,7 @@ pub mod consent;
 pub mod gdpr;
 pub mod handlers;
 pub mod middleware;
+pub mod oplog;
 pub mod router;
 pub mod secrets;
 pub mod shield_handlers;

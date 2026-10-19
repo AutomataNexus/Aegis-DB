@@ -147,12 +147,23 @@ impl PersistenceManager {
                 .map_err(|e| PersistenceError::SerializationError(e.to_string()))?;
             std::io::Write::flush(&mut writer)
                 .map_err(|e| PersistenceError::IoError(e.to_string()))?;
+            // On disk before the rename, or a crash could leave an empty file in
+            // place of the last good one.
+            writer
+                .get_ref()
+                .sync_all()
+                .map_err(|e| PersistenceError::IoError(e.to_string()))?;
         }
 
         // Atomic rename
         if let Err(e) = std::fs::rename(&temp_path, &data_path) {
             let _ = std::fs::remove_file(&temp_path);
             return Err(PersistenceError::IoError(e.to_string()));
+        }
+        if let Some(dir) = data_path.parent() {
+            if let Ok(d) = std::fs::File::open(dir) {
+                let _ = d.sync_all();
+            }
         }
         self.last_save_ms
             .store(now_ms(), std::sync::atomic::Ordering::Relaxed);

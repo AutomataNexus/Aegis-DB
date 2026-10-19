@@ -1149,7 +1149,7 @@ pub async fn delete_document(
     let doc_id = DocumentId::new(&id);
     match state.document_engine.delete(&collection, &doc_id) {
         Ok(doc) => {
-            state.flush_collection(&collection);
+            state.persist_docs(&collection, std::slice::from_ref(&doc_id));
             let response = DocumentResponse {
                 id: doc.id.to_string(),
                 collection: collection.clone(),
@@ -1197,7 +1197,7 @@ pub async fn bulk_insert_documents(
     let docs: Vec<_> = request.documents.into_iter().map(json_to_doc).collect();
     match state.document_engine.insert_many(&collection, docs) {
         Ok(ids) => {
-            state.flush_collection(&collection);
+            state.persist_docs(&collection, &ids);
             let ids: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
             let count = ids.len();
             (
@@ -1218,14 +1218,15 @@ pub async fn bulk_delete_documents(
     Path(collection): Path<String>,
     Json(request): Json<BulkDeleteRequest>,
 ) -> impl IntoResponse {
-    let mut deleted = 0usize;
+    let mut removed = Vec::new();
     for id in &request.ids {
         let doc_id = DocumentId::new(id);
         if state.document_engine.delete(&collection, &doc_id).is_ok() {
-            deleted += 1;
+            removed.push(doc_id);
         }
     }
-    state.flush_collection(&collection);
+    let deleted = removed.len();
+    state.persist_docs(&collection, &removed);
     state.activity.log(
         ActivityType::Delete,
         &format!("Bulk delete {} documents from: {}", deleted, collection),
@@ -1257,7 +1258,7 @@ pub async fn update_document(
 
     match state.document_engine.update(&collection, &doc_id, doc) {
         Ok(()) => {
-            state.flush_collection(&collection);
+            state.persist_docs(&collection, std::slice::from_ref(&doc_id));
             // Fetch the updated document to return it
             match state.document_engine.get(&collection, &doc_id) {
                 Ok(Some(updated_doc)) => {
@@ -1326,7 +1327,7 @@ pub async fn patch_document(
         .update(&collection, &doc_id, updated_doc)
     {
         Ok(()) => {
-            state.flush_collection(&collection);
+            state.persist_docs(&collection, std::slice::from_ref(&doc_id));
             // Fetch the updated document to return it
             match state.document_engine.get(&collection, &doc_id) {
                 Ok(Some(final_doc)) => {
@@ -1369,10 +1370,13 @@ pub async fn create_collection(
         .log_write(&format!("Create collection: {}", request.name), None);
 
     match state.document_engine.create_collection(&request.name) {
-        Ok(()) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({"success": true, "collection": request.name})),
-        ),
+        Ok(()) => {
+            state.persist_collection_create(&request.name);
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({"success": true, "collection": request.name})),
+            )
+        }
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"success": false, "error": e.to_string()})),
@@ -1390,10 +1394,13 @@ pub async fn delete_collection(
         .log_write(&format!("Drop collection: {name}"), None);
 
     match state.document_engine.drop_collection(&name) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"success": true, "collection": name})),
-        ),
+        Ok(()) => {
+            state.persist_collection_drop(&name);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"success": true, "collection": name})),
+            )
+        }
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"success": false, "error": e.to_string()})),
@@ -1433,7 +1440,7 @@ pub async fn insert_document(
     let doc = json_to_doc(doc_json);
     match state.document_engine.insert(&collection, doc) {
         Ok(id) => {
-            state.flush_collection(&collection);
+            state.persist_docs(&collection, std::slice::from_ref(&id));
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({"success": true, "id": id.to_string()})),
@@ -1995,7 +2002,7 @@ pub async fn write_timeseries_batch(
                 .unwrap_or_else(Utc::now),
             value: req.value,
         };
-        match state.timeseries_engine.write(&req.metric, tags, point) {
+        match state.write_points(&req.metric, tags, vec![point]) {
             Ok(()) => written += 1,
             Err(e) => {
                 failed += 1;
@@ -2041,7 +2048,7 @@ pub async fn write_timeseries(
         }
     };
 
-    match state.timeseries_engine.write(&request.metric, tags, point) {
+    match state.write_points(&request.metric, tags, vec![point]) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"success": true}))),
         Err(e) => (
             StatusCode::BAD_REQUEST,
