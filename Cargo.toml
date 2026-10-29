@@ -23,6 +23,7 @@ members = [
     "crates/aegis-object",
     "crates/aegis-widecolumn",
     "crates/aegis-ledger",
+    "crates/aegis-gate",
     "benchmarks",
 ]
 # WASM crates built separately with Trunk

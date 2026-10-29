@@ -1,0 +1,17 @@
+[package]
+name = "aegis-gate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Aegis-DB release gate: cargo audit, aegis-server booted on loopback, its query and document-store suite"
+publish = false
+
+[[bin]]
+name = "aegis-gate"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+libc = "0.2"

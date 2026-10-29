@@ -1,0 +1,12 @@
+# NexusForge release gate for Aegis-DB: run after fmt / clippy / test, before the attested release.
+# aegis-gate = cargo audit, aegis-server booted on loopback with a scratch data dir and a one-run admin,
+# the query and document-store suite over HTTP, then SIGTERM, a second boot on the same data dir and
+# the data read back. Nothing leaves 127.0.0.1.
+
+[[gate]]
+name = "aegis-server binary"
+argv = ["cargo", "build", "-j", "{jobs}", "--release", "-p", "aegis-server", "--bin", "aegis-server"]
+
+[[gate]]
+name = "aegis-server loopback query + document-store suite + audit"
+argv = ["cargo", "run", "-j", "{jobs}", "-p", "aegis-gate", "--", "--bin", "target/release/aegis-server", "--out", "target/nexusforge-gate/aegis"]
