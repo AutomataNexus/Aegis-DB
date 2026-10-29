@@ -1233,6 +1233,59 @@ async fn test_sql_syntax_error_e2e() {
 }
 
 #[tokio::test]
+async fn test_sql_aggregates_e2e() {
+    let state = shared_state_open();
+    let mut app = app_with_state(state);
+
+    for sql in [
+        "CREATE TABLE e2e_agg_parts (id INTEGER NOT NULL, kind VARCHAR(16), qty INTEGER)",
+        "INSERT INTO e2e_agg_parts (id, kind, qty) VALUES (1, 'bolt', 4), (2, 'nut', 6), (3, 'bolt', 2)",
+    ] {
+        let (status, json) = post_json(&mut app, "/api/v1/query", json!({ "sql": sql })).await;
+        assert_eq!(status, StatusCode::OK, "{sql}: {json}");
+    }
+
+    let rows = |json: &Value| json["data"]["rows"].clone();
+    let cases = [
+        ("SELECT COUNT(*) FROM e2e_agg_parts", json!([[3]])),
+        (
+            "SELECT COUNT(*) AS n, SUM(qty) AS total, MIN(qty), MAX(qty) FROM e2e_agg_parts",
+            json!([[3, 12.0, 2, 6]]),
+        ),
+        (
+            "SELECT kind, COUNT(*) AS n, SUM(qty) AS total FROM e2e_agg_parts GROUP BY kind ORDER BY kind",
+            json!([["bolt", 2, 6.0], ["nut", 1, 6.0]]),
+        ),
+        (
+            "SELECT kind FROM e2e_agg_parts GROUP BY kind HAVING COUNT(*) > 1",
+            json!([["bolt"]]),
+        ),
+        (
+            "SELECT kind, COUNT(*) FROM e2e_agg_parts GROUP BY kind ORDER BY COUNT(*) DESC",
+            json!([["bolt", 2], ["nut", 1]]),
+        ),
+        ("SELECT SUM(qty) / COUNT(*) AS mean FROM e2e_agg_parts", json!([[4.0]])),
+        (
+            "SELECT id FROM e2e_agg_parts ORDER BY qty DESC",
+            json!([[2], [1], [3]]),
+        ),
+        (
+            "SELECT id, kind FROM e2e_agg_parts ORDER BY qty LIMIT 2",
+            json!([[3, "bolt"], [1, "bolt"]]),
+        ),
+        (
+            "SELECT kind FROM e2e_agg_parts GROUP BY kind ORDER BY SUM(qty) DESC, kind",
+            json!([["bolt"], ["nut"]]),
+        ),
+    ];
+    for (sql, want) in cases {
+        let (status, json) = post_json(&mut app, "/api/v1/query", json!({ "sql": sql })).await;
+        assert_eq!(status, StatusCode::OK, "{sql}: {json}");
+        assert_eq!(rows(&json), want, "{sql}");
+    }
+}
+
+#[tokio::test]
 async fn test_sql_with_params_e2e() {
     let state = shared_state_open();
     let mut app = app_with_state(state);

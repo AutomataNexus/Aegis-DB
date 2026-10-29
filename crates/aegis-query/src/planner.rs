@@ -13,8 +13,8 @@
 //! @author AutomataNexus Development Team
 
 use crate::ast::{
-    BinaryOperator, Expression, FromClause, JoinClause, JoinType, SelectColumn, SelectStatement,
-    SetOperationType, Statement, TableReference,
+    BinaryOperator, ColumnRef, Expression, FromClause, JoinClause, JoinType, SelectColumn,
+    SelectStatement, SetOperationType, Statement, TableReference,
 };
 use aegis_common::DataType;
 use std::collections::HashMap;
@@ -923,11 +923,65 @@ impl Planner {
             });
         }
 
-        if !select.group_by.is_empty() || self.has_aggregates(&select.columns) {
-            plan = self.plan_aggregation(plan, select)?;
+        let grouped = !select.group_by.is_empty() || self.has_aggregates(&select.columns);
+        let mut columns = select.columns.clone();
+        let mut having = select.having.clone();
+        let mut order_by_exprs: Vec<Expression> = select
+            .order_by
+            .iter()
+            .map(|item| item.expression.clone())
+            .collect();
+
+        if grouped {
+            let mut lifted = Vec::new();
+            for col in &mut columns {
+                if let SelectColumn::Expression { expr, alias } = col {
+                    if alias.is_none() {
+                        *alias = aggregate_call_name(expr);
+                    }
+                    *expr = self.lift_aggregates(expr, &mut lifted)?;
+                }
+            }
+            having = having
+                .map(|h| self.lift_aggregates(&h, &mut lifted))
+                .transpose()?;
+            for expr in &mut order_by_exprs {
+                *expr = match projected_name_of(expr, &select.columns, &columns) {
+                    Some(name) => Expression::Column(ColumnRef {
+                        table: None,
+                        column: name,
+                    }),
+                    None => self.lift_aggregates(expr, &mut lifted)?,
+                };
+            }
+            plan = self.plan_aggregation(plan, select, lifted)?;
         }
 
-        if let Some(ref having) = select.having {
+        let visible = output_names(&columns);
+        let mut hidden = 0;
+        if let Some(names) = &visible {
+            for expr in &mut order_by_exprs {
+                if let Some(name) = projected_name_of(expr, &columns, &columns) {
+                    *expr = Expression::Column(ColumnRef {
+                        table: None,
+                        column: name,
+                    });
+                } else if !matches!(expr, Expression::Column(c) if names.contains(&c.column)) {
+                    let alias = format!("__sort_{hidden}");
+                    hidden += 1;
+                    columns.push(SelectColumn::Expression {
+                        expr: expr.clone(),
+                        alias: Some(alias.clone()),
+                    });
+                    *expr = Expression::Column(ColumnRef {
+                        table: None,
+                        column: alias,
+                    });
+                }
+            }
+        }
+
+        if let Some(ref having) = having {
             let predicate = self.plan_expression(having)?;
             plan = PlanNode::Filter(FilterNode {
                 input: Box::new(plan),
@@ -935,15 +989,16 @@ impl Planner {
             });
         }
 
-        plan = self.plan_projection(plan, &select.columns)?;
+        plan = self.plan_projection(plan, &columns)?;
 
         if !select.order_by.is_empty() {
             let order_by: Vec<SortKey> = select
                 .order_by
                 .iter()
-                .map(|item| {
+                .zip(&order_by_exprs)
+                .map(|(item, expr)| {
                     Ok(SortKey {
-                        expr: self.plan_expression(&item.expression)?,
+                        expr: self.plan_expression(expr)?,
                         ascending: item.ascending,
                         nulls_first: item.nulls_first.unwrap_or(!item.ascending),
                     })
@@ -961,6 +1016,23 @@ impl Planner {
                 input: Box::new(plan),
                 limit: select.limit,
                 offset: select.offset,
+            });
+        }
+
+        if let (Some(names), true) = (visible, hidden > 0) {
+            plan = PlanNode::Project(ProjectNode {
+                input: Box::new(plan),
+                expressions: names
+                    .into_iter()
+                    .map(|name| ProjectionExpr {
+                        expr: PlanExpression::Column {
+                            table: None,
+                            name: name.clone(),
+                            data_type: DataType::Any,
+                        },
+                        alias: Some(name),
+                    })
+                    .collect(),
             });
         }
 
@@ -1063,17 +1135,117 @@ impl Planner {
     /// Check if expression contains aggregate function.
     fn expression_has_aggregate(&self, expr: &Expression) -> bool {
         match expr {
-            Expression::Function { name, .. } => {
-                matches!(
-                    name.to_uppercase().as_str(),
-                    "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
-                )
+            Expression::Function { name, args, .. } => {
+                is_aggregate_function(name) || args.iter().any(|a| self.expression_has_aggregate(a))
             }
             Expression::BinaryOp { left, right, .. } => {
                 self.expression_has_aggregate(left) || self.expression_has_aggregate(right)
             }
+            Expression::UnaryOp { expr, .. } | Expression::Cast { expr, .. } => {
+                self.expression_has_aggregate(expr)
+            }
             _ => false,
         }
+    }
+
+    /// Replace aggregate calls with references to the Aggregate node's `__agg_N` output columns.
+    fn lift_aggregates(
+        &self,
+        expr: &Expression,
+        lifted: &mut Vec<(Expression, AggregateExpr)>,
+    ) -> PlannerResult<Expression> {
+        let lift = |e: &Expression, lifted: &mut Vec<(Expression, AggregateExpr)>| {
+            self.lift_aggregates(e, lifted).map(Box::new)
+        };
+        Ok(match expr {
+            Expression::Function { name, .. } if is_aggregate_function(name) => {
+                let i = match lifted.iter().position(|(e, _)| e == expr) {
+                    Some(i) => i,
+                    None => {
+                        let column = format!("__agg_{}", lifted.len());
+                        let agg = self.extract_aggregate(expr, Some(column))?.ok_or_else(|| {
+                            PlannerError::Internal(format!("aggregate {name} could not be planned"))
+                        })?;
+                        lifted.push((expr.clone(), agg));
+                        lifted.len() - 1
+                    }
+                };
+                Expression::Column(ColumnRef {
+                    table: None,
+                    column: format!("__agg_{i}"),
+                })
+            }
+            Expression::Function {
+                name,
+                args,
+                distinct,
+            } => Expression::Function {
+                name: name.clone(),
+                args: args
+                    .iter()
+                    .map(|a| self.lift_aggregates(a, lifted))
+                    .collect::<PlannerResult<_>>()?,
+                distinct: *distinct,
+            },
+            Expression::BinaryOp { left, op, right } => Expression::BinaryOp {
+                left: lift(left, lifted)?,
+                op: *op,
+                right: lift(right, lifted)?,
+            },
+            Expression::UnaryOp { op, expr } => Expression::UnaryOp {
+                op: *op,
+                expr: lift(expr, lifted)?,
+            },
+            Expression::Cast { expr, data_type } => Expression::Cast {
+                expr: lift(expr, lifted)?,
+                data_type: data_type.clone(),
+            },
+            Expression::IsNull { expr, negated } => Expression::IsNull {
+                expr: lift(expr, lifted)?,
+                negated: *negated,
+            },
+            Expression::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => Expression::Between {
+                expr: lift(expr, lifted)?,
+                low: lift(low, lifted)?,
+                high: lift(high, lifted)?,
+                negated: *negated,
+            },
+            Expression::InList {
+                expr,
+                list,
+                negated,
+            } => Expression::InList {
+                expr: lift(expr, lifted)?,
+                list: list
+                    .iter()
+                    .map(|a| self.lift_aggregates(a, lifted))
+                    .collect::<PlannerResult<_>>()?,
+                negated: *negated,
+            },
+            Expression::Case {
+                operand,
+                conditions,
+                else_result,
+            } => Expression::Case {
+                operand: operand.as_ref().map(|o| lift(o, lifted)).transpose()?,
+                conditions: conditions
+                    .iter()
+                    .map(|(w, t)| {
+                        Ok((
+                            self.lift_aggregates(w, lifted)?,
+                            self.lift_aggregates(t, lifted)?,
+                        ))
+                    })
+                    .collect::<PlannerResult<_>>()?,
+                else_result: else_result.as_ref().map(|e| lift(e, lifted)).transpose()?,
+            },
+            other => other.clone(),
+        })
     }
 
     /// Plan aggregation.
@@ -1081,6 +1253,7 @@ impl Planner {
         &self,
         input: PlanNode,
         select: &SelectStatement,
+        lifted: Vec<(Expression, AggregateExpr)>,
     ) -> PlannerResult<PlanNode> {
         let group_by: Vec<PlanExpression> = select
             .group_by
@@ -1088,19 +1261,10 @@ impl Planner {
             .map(|e| self.plan_expression(e))
             .collect::<PlannerResult<Vec<_>>>()?;
 
-        let mut aggregates = Vec::new();
-        for col in &select.columns {
-            if let SelectColumn::Expression { expr, alias } = col {
-                if let Some(agg) = self.extract_aggregate(expr, alias.clone())? {
-                    aggregates.push(agg);
-                }
-            }
-        }
-
         Ok(PlanNode::Aggregate(AggregateNode {
             input: Box::new(input),
             group_by,
-            aggregates,
+            aggregates: lifted.into_iter().map(|(_, agg)| agg).collect(),
         }))
     }
 
@@ -1493,6 +1657,75 @@ impl Planner {
             | PlanNode::RollbackTransaction => (0.0, 0),
         }
     }
+}
+
+// =============================================================================
+// Aggregate Helpers
+// =============================================================================
+
+/// Whether `name` is one of the aggregate functions the executor accumulates.
+fn is_aggregate_function(name: &str) -> bool {
+    matches!(
+        name.to_uppercase().as_str(),
+        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
+    )
+}
+
+/// Output name for an unaliased select column that is a bare aggregate call.
+fn aggregate_call_name(expr: &Expression) -> Option<String> {
+    match expr {
+        Expression::Function { name, .. } if is_aggregate_function(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// The output column names a projection of `columns` produces (as the executor
+/// names them), or None when a wildcard or a repeated name makes them ambiguous.
+fn output_names(columns: &[SelectColumn]) -> Option<Vec<String>> {
+    fn name_of(expr: &Expression) -> Option<String> {
+        match expr {
+            Expression::Column(c) => Some(c.column.clone()),
+            Expression::Function { name, .. } => Some(name.clone()),
+            Expression::Cast { expr, .. } | Expression::UnaryOp { expr, .. } => name_of(expr),
+            _ => None,
+        }
+    }
+    let names: Vec<String> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, col)| match col {
+            SelectColumn::Expression { expr, alias } => Some(
+                alias
+                    .clone()
+                    .or_else(|| name_of(expr))
+                    .unwrap_or_else(|| format!("column_{i}")),
+            ),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let mut seen = std::collections::HashSet::new();
+    names.iter().all(|n| seen.insert(n)).then_some(names)
+}
+
+/// The projected output name of the select column whose original expression is
+/// `expr`, so `ORDER BY COUNT(*)` sorts on the projected aggregate column.
+fn projected_name_of(
+    expr: &Expression,
+    original: &[SelectColumn],
+    rewritten: &[SelectColumn],
+) -> Option<String> {
+    original
+        .iter()
+        .zip(rewritten)
+        .find_map(|(orig, new)| match (orig, new) {
+            (
+                SelectColumn::Expression { expr: e, .. },
+                SelectColumn::Expression {
+                    alias: Some(name), ..
+                },
+            ) if e == expr => Some(name.clone()),
+            _ => None,
+        })
 }
 
 // =============================================================================
