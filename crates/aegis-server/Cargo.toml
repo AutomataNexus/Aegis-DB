@@ -73,8 +73,7 @@ hex = "0.4"
 getrandom = "0.2"
 # TLS support (rustls — no OpenSSL; a vendored openssl-sys was declared here but
 # never used in code and blocked windows-msvc cross-compilation, so it was removed).
-axum-server = { version = "0.7", features = ["tls-rustls"] }
-rustls-pemfile = "2.0"
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
