@@ -25,7 +25,7 @@ aegis-query = { workspace = true }
 aegis-document = { workspace = true }
 aegis-timeseries = { workspace = true }
 aegis-streaming = { workspace = true }
-nexuscompress = { git = "https://github.com/AutomataNexus/NexusCompress.git", tag = "v0.4.0" }
+nexuscompress = { git = "https://github.com/AutomataNexus/NexusCompress.git", rev = "bfff102109a88bf6fff2b2d6f121f6946864f3cb" }
 aegis-updates = { workspace = true }
 aegis-vault = { workspace = true }
 aegis-shield = { workspace = true }
