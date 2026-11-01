@@ -204,7 +204,8 @@ impl HnswIndex {
     /// nearest-first. Traverses through tombstoned nodes (for connectivity) but
     /// still returns them; callers filter deletes at the top level.
     fn search_layer(&self, q: &[f32], entry: &[u32], ef: usize, layer: usize) -> Vec<Cand> {
-        let mut visited: HashSet<u32> = HashSet::with_capacity(ef * 4);
+        let mut visited: HashSet<u32> =
+            HashSet::with_capacity(ef.saturating_mul(4).min(self.len().max(1)));
         let mut candidates: BinaryHeap<std::cmp::Reverse<Cand>> = BinaryHeap::new();
         let mut results: BinaryHeap<Cand> = BinaryHeap::new();
 

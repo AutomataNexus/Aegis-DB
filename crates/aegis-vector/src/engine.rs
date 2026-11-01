@@ -8,6 +8,14 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Largest `k` a search may ask for. Requests above it are rejected rather
+/// than clamped so a client never silently gets fewer hits than it asked for.
+pub const MAX_SEARCH_K: usize = 10_000;
+/// Largest HNSW `ef` (candidate list size) a search may ask for.
+pub const MAX_SEARCH_EF: usize = 100_000;
+/// Largest vector dimension a collection may be created with.
+pub const MAX_DIM: usize = 65_536;
+
 /// Per-collection configuration.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CollectionConfig {
@@ -105,6 +113,19 @@ impl Collection {
         ef: Option<usize>,
         filter: &serde_json::Value,
     ) -> Result<Vec<SearchHit>, VectorError> {
+        if k > MAX_SEARCH_K {
+            return Err(VectorError::InvalidSearchParam(format!(
+                "k must be at most {MAX_SEARCH_K}"
+            )));
+        }
+        if ef.is_some_and(|ef| ef > MAX_SEARCH_EF) {
+            return Err(VectorError::InvalidSearchParam(format!(
+                "ef must be at most {MAX_SEARCH_EF}"
+            )));
+        }
+        if k == 0 {
+            return Ok(Vec::new());
+        }
         let prepared = self.prepared(query)?;
         let has_filter = filter.as_object().map(|m| !m.is_empty()).unwrap_or(false);
         // Over-fetch when a metadata filter is applied so post-filtering still
@@ -118,7 +139,7 @@ impl Collection {
         let raw = self.index.search(&prepared, fetch, ef);
 
         let metric = self.config.metric;
-        let mut hits = Vec::with_capacity(k);
+        let mut hits = Vec::with_capacity(k.min(raw.len()));
         for (node, dist) in raw {
             let meta = &self.node_meta[node as usize];
             if has_filter && !matches_filter(meta, filter) {
@@ -210,7 +231,7 @@ impl VectorEngine {
         dim: usize,
         metric: Metric,
     ) -> Result<(), VectorError> {
-        if dim == 0 {
+        if dim == 0 || dim > MAX_DIM {
             return Err(VectorError::InvalidDimension);
         }
         let name = name.into();
@@ -266,7 +287,7 @@ impl VectorEngine {
     ) -> Result<(), VectorError> {
         let mut cols = self.collections.write();
         if !cols.contains_key(collection) {
-            if vector.is_empty() {
+            if vector.is_empty() || vector.len() > MAX_DIM {
                 return Err(VectorError::InvalidDimension);
             }
             cols.insert(
