@@ -400,6 +400,19 @@ async fn main() {
         });
     }
 
+    // Prune idle rate-limiter buckets and expired sessions / MFA challenges so
+    // these maps do not grow with every client address ever seen.
+    let state_for_cleanup = state_for_shutdown.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            state_for_cleanup.rate_limiter.cleanup();
+            state_for_cleanup.login_rate_limiter.cleanup();
+            state_for_cleanup.auth.cleanup_expired();
+        }
+    });
+
     // Start peer discovery and heartbeat task
     let state_for_cluster = state_for_shutdown.clone();
     let peers_for_task = peers.clone();
@@ -489,7 +502,7 @@ async fn main() {
 
         axum_server::bind_rustls(addr, rustls_config)
             .handle(handle)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .await
             .expect("Server error");
     } else {
@@ -501,10 +514,13 @@ async fn main() {
         tracing::info!("Aegis Server listening on http://{}", addr);
         tracing::info!("Dashboard API ready at http://{}/api/v1", addr);
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(state_for_shutdown))
-            .await
-            .expect("Server error");
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal(state_for_shutdown))
+        .await
+        .expect("Server error");
     }
 }
 

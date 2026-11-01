@@ -77,6 +77,7 @@ pub struct QueryResponse {
 pub async fn execute_query(
     State(state): State<AppState>,
     auth: Option<axum::Extension<AuthContext>>,
+    ip: Option<axum::Extension<crate::middleware::ClientIp>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<QueryRequest>,
 ) -> axum::response::Response {
@@ -99,7 +100,7 @@ pub async fn execute_query(
     // rolling deploy. To enforce, return 403 on the Block arm below.
     if !is_replicated {
         let ctx = aegis_shield::RequestContext {
-            source_ip: client_ip_from_headers(&headers),
+            source_ip: client_ip(ip),
             path: "/api/v1/query".to_string(),
             method: "POST".to_string(),
             user_agent: headers
@@ -799,26 +800,16 @@ pub async fn get_alerts(State(_state): State<AppState>) -> Json<AlertsResponse> 
 /// Best-effort client IP from proxy headers, falling back to localhost.
 /// Mirrors the middleware's extraction; only the first `X-Forwarded-For` hop
 /// and `X-Real-IP` are considered.
-fn client_ip_from_headers(headers: &axum::http::HeaderMap) -> String {
-    if let Some(xff) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            let ip = first.trim();
-            if !ip.is_empty() {
-                return ip.to_string();
-            }
-        }
-    }
-    if let Some(real) = headers.get("x-real-ip").and_then(|h| h.to_str().ok()) {
-        if !real.trim().is_empty() {
-            return real.trim().to_string();
-        }
-    }
-    "127.0.0.1".to_string()
+/// The client address resolved by the Shield middleware (socket address, or a
+/// trusted proxy's forwarded address); `unknown` if it did not run.
+fn client_ip(ip: Option<axum::Extension<crate::middleware::ClientIp>>) -> String {
+    ip.map(|axum::Extension(c)| c.0)
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 pub async fn login(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    ip: Option<axum::Extension<crate::middleware::ClientIp>>,
     Json(request): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let response = state.auth.login(&request.username, &request.password);
@@ -830,7 +821,7 @@ pub async fn login(
         );
         // Feed the Shield's brute-force detector so repeated failures from an IP
         // trigger its auto-ban (the rate limiter alone can't do reputation/bans).
-        let client_ip = client_ip_from_headers(&headers);
+        let client_ip = client_ip(ip);
         state
             .shield
             .record_failed_auth(&client_ip, &request.username);

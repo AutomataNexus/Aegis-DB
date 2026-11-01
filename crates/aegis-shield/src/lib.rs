@@ -33,6 +33,18 @@ pub use crate::policy::SecurityPolicy;
 pub use crate::sql_injection::SqlInjectionDetector;
 pub use crate::threat::{ThreatAction, ThreatEvent, ThreatLevel, ThreatType};
 
+/// True if `ip` is a loopback address (127.0.0.0/8, ::1, or IPv4-mapped
+/// loopback). Unparseable input is not loopback.
+pub fn is_loopback(ip: &str) -> bool {
+    match ip.trim().parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_loopback(),
+        Ok(std::net::IpAddr::V6(v6)) => {
+            v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+        Err(_) => false,
+    }
+}
+
 /// Contextual information about an incoming request.
 #[derive(Debug, Clone)]
 pub struct RequestContext {
@@ -124,8 +136,9 @@ impl ShieldEngine {
 
         self.total_requests.fetch_add(1, Ordering::Relaxed);
 
-        // 1. Allowlist bypass
-        if self.blocker.is_allowlisted(&ctx.source_ip) {
+        // 1. Allowlist bypass (loopback is always allowlisted: banning it would
+        // lock out every local client, including the server's own tooling).
+        if self.is_exempt(&ctx.source_ip) {
             debug!(ip = %ctx.source_ip, "allowlisted, skipping checks");
             return ShieldVerdict::Allow;
         }
@@ -156,6 +169,9 @@ impl ShieldEngine {
         }
 
         let mut combined_score: u32 = 0;
+        // Score from evidence other than the client-supplied User-Agent. A
+        // User-Agent alone may block one request but never bans an address.
+        let mut behaviour_score: u32 = 0;
 
         // 4. Fingerprint the request
         if config.fingerprinting_enabled {
@@ -182,8 +198,10 @@ impl ShieldEngine {
             if let Some(rep) = self.ip_reputation.get_reputation(&ctx.source_ip) {
                 if rep.score < -50 {
                     combined_score += 30;
+                    behaviour_score += 30;
                 } else if rep.score < -20 {
                     combined_score += 15;
+                    behaviour_score += 15;
                 }
             }
         }
@@ -197,8 +215,12 @@ impl ShieldEngine {
                 let level = ThreatLevel::from_score(capped);
                 self.total_threats.fetch_add(1, Ordering::Relaxed);
 
-                // Auto-block if enabled and above threshold
-                if config.auto_blocking_enabled && capped >= config.auto_block_threshold {
+                // Auto-block if enabled, above threshold, and not on the
+                // User-Agent alone.
+                if config.auto_blocking_enabled
+                    && capped >= config.auto_block_threshold
+                    && behaviour_score > 0
+                {
                     self.blocker.block(
                         &ctx.source_ip,
                         "auto-blocked by shield",
@@ -235,10 +257,16 @@ impl ShieldEngine {
         }
     }
 
+    /// True for an address the shield never blocks or bans: loopback, or an
+    /// entry on the allowlist.
+    pub fn is_exempt(&self, ip: &str) -> bool {
+        is_loopback(ip) || self.blocker.is_allowlisted(ip)
+    }
+
     /// Analyze a SQL query for injection. Called from query handler.
     pub fn analyze_query(&self, query: &str, ctx: &RequestContext) -> ShieldVerdict {
         let config = self.config.read().clone();
-        if !config.enabled {
+        if !config.enabled || self.is_exempt(&ctx.source_ip) {
             return ShieldVerdict::Allow;
         }
 
@@ -487,6 +515,59 @@ mod tests {
             body_size: 100,
             headers: HashMap::new(),
         }
+    }
+
+    fn scanner_ctx(ip: &str) -> RequestContext {
+        RequestContext {
+            user_agent: Some("sqlmap/1.7".to_string()),
+            ..test_ctx(ip)
+        }
+    }
+
+    /// The old middleware fell back to 127.0.0.1 when X-Forwarded-For was
+    /// missing, so one scanner User-Agent banned every local client.
+    #[test]
+    fn test_loopback_is_never_blocked_or_banned() {
+        let engine = ShieldEngine::new(ShieldConfig::from_preset(SecurityPreset::Strict));
+        for ip in ["127.0.0.1", "127.0.0.53", "::1", "::ffff:127.0.0.1"] {
+            for _ in 0..50 {
+                assert!(matches!(
+                    engine.analyze_request(&scanner_ctx(ip)),
+                    ShieldVerdict::Allow
+                ));
+                assert!(matches!(
+                    engine.analyze_query(
+                        "SELECT * FROM t WHERE a='' OR 1=1; DROP TABLE t",
+                        &test_ctx(ip)
+                    ),
+                    ShieldVerdict::Allow
+                ));
+            }
+            assert!(!engine.ip_reputation.is_banned(ip));
+        }
+    }
+
+    #[test]
+    fn test_user_agent_alone_never_bans() {
+        let engine = ShieldEngine::new(ShieldConfig::from_preset(SecurityPreset::Strict));
+        for _ in 0..20 {
+            let _ = engine.analyze_request(&scanner_ctx("203.0.113.9"));
+        }
+        assert!(!engine.ip_reputation.is_banned("203.0.113.9"));
+        // A normal request from the same address still gets through.
+        assert!(matches!(
+            engine.analyze_request(&test_ctx("203.0.113.9")),
+            ShieldVerdict::Allow
+        ));
+    }
+
+    #[test]
+    fn test_is_loopback() {
+        assert!(is_loopback("127.0.0.1"));
+        assert!(is_loopback("::1"));
+        assert!(!is_loopback("10.0.0.1"));
+        assert!(!is_loopback("unknown"));
+        assert!(!is_loopback("127.0.0.1.evil"));
     }
 
     #[test]
