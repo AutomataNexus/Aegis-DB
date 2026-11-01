@@ -910,7 +910,11 @@ impl AppState {
         // Extract table name and change type from SQL
         let sql_trimmed = sql.trim();
         let (change_type, table_name) = if sql_trimmed.len() > 6 {
-            let upper = sql_trimmed[..12.min(sql_trimmed.len())].to_uppercase();
+            let upper: String = sql_trimmed
+                .chars()
+                .take(12)
+                .collect::<String>()
+                .to_uppercase();
             if upper.starts_with("INSERT") {
                 (ChangeType::Insert, extract_table_after(sql_trimmed, "INTO"))
             } else if upper.starts_with("UPDATE") {
@@ -1783,12 +1787,19 @@ impl QueryEngine {
 
     /// Set peer addresses for mutation replication.
     pub fn set_peers(&self, peers: Vec<String>) {
-        *self.peers.write().unwrap() = peers;
+        *self
+            .peers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = peers;
     }
 
     /// Asynchronously replicate a SQL mutation to all peer nodes.
     fn replicate_to_peers(&self, sql: &str, database: &str) {
-        let peers = self.peers.read().unwrap().clone();
+        let peers = self
+            .peers
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         if peers.is_empty() {
             return;
         }
@@ -1830,7 +1841,7 @@ impl QueryEngine {
                             tracing::debug!(
                                 "Replicated to {}: {}",
                                 peer,
-                                &sql[..sql.len().min(80)]
+                                prefix_at_char_boundary(&sql, 80)
                             );
                             success = true;
                             break;
@@ -1907,14 +1918,20 @@ impl QueryEngine {
 
         // Try to get existing context
         {
-            let contexts = self.contexts.read().unwrap();
+            let contexts = self
+                .contexts
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(ctx) = contexts.get(db_name) {
                 return ctx.clone();
             }
         }
 
         // Create new context for this database
-        let mut contexts = self.contexts.write().unwrap();
+        let mut contexts = self
+            .contexts
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Double-check after acquiring write lock
         if let Some(ctx) = contexts.get(db_name) {
             return ctx.clone();
@@ -1957,7 +1974,10 @@ impl QueryEngine {
                 }
             }
 
-            let contexts = self.contexts.read().unwrap();
+            let contexts = self
+                .contexts
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(ctx) = contexts.get(db_name) {
                 if let Ok(ctx_guard) = ctx.read() {
                     if let Err(e) =
@@ -2332,7 +2352,10 @@ impl QueryEngine {
         params: &[serde_json::Value],
     ) -> Result<QueryResult, QueryError> {
         let (plan, db_name, is_mutation) = {
-            let map = self.prepared.read().unwrap();
+            let map = self
+                .prepared
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let prepared = map.get(id).ok_or_else(|| {
                 QueryError::Execute(format!("unknown prepared statement '{}'", id))
             })?;
@@ -2367,7 +2390,11 @@ impl QueryEngine {
 
     /// Deallocate a prepared statement. Returns true if it existed.
     pub fn deallocate(&self, id: &str) -> bool {
-        self.prepared.write().unwrap().remove(id).is_some()
+        self.prepared
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id)
+            .is_some()
     }
 
     /// Number of currently prepared statements.
@@ -2377,7 +2404,10 @@ impl QueryEngine {
 
     pub fn list_tables(&self, database: Option<&str>) -> Vec<String> {
         let db_name = database.unwrap_or("default");
-        let contexts = self.contexts.read().unwrap();
+        let contexts = self
+            .contexts
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         contexts
             .get(db_name)
             .and_then(|ctx| ctx.read().ok())
@@ -2421,7 +2451,10 @@ impl QueryEngine {
     /// Force persist all databases to disk (for graceful shutdown).
     pub fn flush(&self) {
         if let Some(ref base_path) = self.data_path {
-            let contexts = self.contexts.read().unwrap();
+            let contexts = self
+                .contexts
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for (db_name, ctx) in contexts.iter() {
                 let Some(path) = data_file_path(base_path, db_name) else {
                     continue;
@@ -2498,10 +2531,22 @@ fn json_param_to_value(json: &serde_json::Value) -> aegis_common::Value {
 }
 
 /// Extract the table name following a keyword in SQL (e.g., "INTO" in INSERT INTO).
+/// At most `max_bytes` of `s`, cut back to a char boundary (byte slicing in
+/// the middle of a multi-byte character panics).
+fn prefix_at_char_boundary(s: &str, max_bytes: usize) -> &str {
+    let mut end = s.len().min(max_bytes);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 fn extract_table_after(sql: &str, keyword: &str) -> String {
-    let upper = sql.to_uppercase();
+    // ASCII uppercasing keeps every byte offset valid in `sql` (full Unicode
+    // uppercasing can change lengths, e.g. 'ß' -> "SS").
+    let upper = sql.to_ascii_uppercase();
     if let Some(pos) = upper.find(keyword) {
-        let after = &sql[pos + keyword.len()..].trim_start();
+        let after = sql.get(pos + keyword.len()..).unwrap_or("").trim_start();
         after
             .split(|c: char| c.is_whitespace() || c == '(')
             .next()
@@ -2819,6 +2864,21 @@ fn replay_ops(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sql_text_helpers_respect_char_boundaries() {
+        let sql = format!("INSERT INTO t VALUES ('{}')", "\u{00e9}".repeat(60));
+        for n in 0..sql.len() + 2 {
+            let p = prefix_at_char_boundary(&sql, n);
+            assert!(p.len() <= n && sql.starts_with(p));
+        }
+        assert_eq!(
+            extract_table_after("insert into stra\u{df}e (a)", "INTO"),
+            "stra\u{df}e"
+        );
+        assert_eq!(extract_table_after("\u{df}\u{df} UPDATE t", "UPDATE"), "t");
+        assert_eq!(extract_table_after("SELECT 1", "INTO"), "unknown");
+    }
 
     #[test]
     fn test_database_names_cannot_escape_the_data_dir() {

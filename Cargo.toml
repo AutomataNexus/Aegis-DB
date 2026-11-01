@@ -87,7 +87,7 @@ regex = "1.10"
 # Networking
 axum = "0.7"
 tower = { version = "0.4", features = ["util", "limit"] }
-tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "catch-panic"] }
 hyper = { version = "1.1", features = ["full"] }
 tonic = "0.11"
 prost = "0.12"

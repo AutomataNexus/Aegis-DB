@@ -21,6 +21,7 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Router,
 };
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -725,6 +726,9 @@ pub fn create_router(state: AppState) -> Router {
         .layer(tower::limit::ConcurrencyLimitLayer::new(
             state.config.max_connections,
         ))
+        // A panic in a handler becomes a 500 for that request instead of
+        // tearing down the connection task.
+        .layer(CatchPanicLayer::custom(panic_response))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
@@ -737,6 +741,21 @@ pub fn create_router(state: AppState) -> Router {
         ))
         .layer(axum::middleware::from_fn(middleware::request_id))
         .with_state(state)
+}
+
+/// Response for a request whose handler panicked. The panic message is logged,
+/// never returned.
+fn panic_response(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let detail = err
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| err.downcast_ref::<&str>().copied())
+        .unwrap_or("unknown panic");
+    tracing::error!("Request handler panicked: {}", detail);
+    axum::response::IntoResponse::into_response((
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        axum::Json(serde_json::json!({ "error": "Internal server error" })),
+    ))
 }
 
 // =============================================================================
@@ -767,6 +786,25 @@ mod tests {
             .expect("failed to execute request");
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_handler_panic_becomes_500() {
+        async fn boom() -> &'static str {
+            panic!("table lock holder panicked")
+        }
+        let app: Router = Router::new()
+            .route("/boom", get(boom))
+            .layer(CatchPanicLayer::custom(panic_response));
+        let response = app
+            .oneshot(Request::builder().uri("/boom").body(Body::empty()).unwrap())
+            .await
+            .expect("panic must not escape the service");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&body).contains("table lock"));
     }
 
     #[tokio::test]
