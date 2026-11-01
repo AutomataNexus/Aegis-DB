@@ -143,6 +143,14 @@ lto = "thin"
 codegen-units = 1
 opt-level = 3
 
+# Arithmetic overflow in the storage engines must fail loudly, never wrap into
+# silently corrupt data (a wrapped shift once zeroed Gorilla-encoded values).
+[profile.release.package.aegis-timeseries]
+overflow-checks = true
+
+[profile.release.package.aegis-server]
+overflow-checks = true
+
 [profile.bench]
 inherits = "release"
 debug = true

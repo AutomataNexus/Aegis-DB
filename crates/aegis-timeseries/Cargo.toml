@@ -25,3 +25,4 @@ nexuscompress = { git = "https://github.com/AutomataNexus/NexusCompress.git", ta
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = { workspace = true }

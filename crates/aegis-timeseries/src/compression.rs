@@ -22,6 +22,9 @@ use chrono::Utc;
 use nexuscompress::core_types::{DType, Domain, Schema};
 use nexuscompress::timeseries::TimeSeriesCompressor;
 
+/// Mask for the 6-bit "meaningful bits" field of a Gorilla value header.
+const MEANINGFUL_BITS_MASK: u8 = 0x3f;
+
 // =============================================================================
 // Bit Writer
 // =============================================================================
@@ -212,8 +215,13 @@ impl Compressor {
             self.writer.write_bit(true);
             self.writer.write_bits(leading_zeros as u64, 6);
 
+            // `meaningful_bits` is 1..=64 but the field is 6 bits wide, so 64
+            // is stored as 0 (the standard Gorilla convention). The decoder
+            // maps 0 back to 64. This is the same bit pattern older encoders
+            // produced, so existing blocks decode correctly.
             let meaningful_bits = 64 - leading_zeros - trailing_zeros;
-            self.writer.write_bits(meaningful_bits as u64, 6);
+            self.writer
+                .write_bits(u64::from(meaningful_bits & MEANINGFUL_BITS_MASK), 6);
 
             let shifted = xor >> trailing_zeros;
             self.writer.write_bits(shifted, meaningful_bits);
@@ -353,8 +361,8 @@ impl<'a> Decompressor<'a> {
             self.reader.read_bits(64)? as i64
         };
 
-        self.prev_delta += delta_of_delta;
-        Some(self.prev_timestamp + self.prev_delta)
+        self.prev_delta = self.prev_delta.checked_add(delta_of_delta)?;
+        self.prev_timestamp.checked_add(self.prev_delta)
     }
 
     fn decompress_value(&mut self) -> Option<u64> {
@@ -363,19 +371,32 @@ impl<'a> Decompressor<'a> {
         }
 
         let xor = if !self.reader.read_bit()? {
-            let meaningful_bits = 64 - self.prev_leading_zeros - self.prev_trailing_zeros;
+            let meaningful_bits = 64u8
+                .checked_sub(self.prev_leading_zeros)?
+                .checked_sub(self.prev_trailing_zeros)?;
+            if meaningful_bits == 0 {
+                // A reuse marker before any header: corrupt stream.
+                return None;
+            }
             let value = self.reader.read_bits(meaningful_bits)?;
-            value << self.prev_trailing_zeros
+            value.checked_shl(u32::from(self.prev_trailing_zeros))?
         } else {
             let leading_zeros = self.reader.read_bits(6)? as u8;
-            let meaningful_bits = self.reader.read_bits(6)? as u8;
-            let trailing_zeros = 64 - leading_zeros - meaningful_bits;
+            let mut meaningful_bits = self.reader.read_bits(6)? as u8;
+            if meaningful_bits == 0 {
+                // 64 meaningful bits do not fit in the 6-bit field and are
+                // stored as 0 (see `compress_value`).
+                meaningful_bits = 64;
+            }
+            let trailing_zeros = 64u8
+                .checked_sub(leading_zeros)?
+                .checked_sub(meaningful_bits)?;
 
             self.prev_leading_zeros = leading_zeros;
             self.prev_trailing_zeros = trailing_zeros;
 
             let value = self.reader.read_bits(meaningful_bits)?;
-            value << trailing_zeros
+            value.checked_shl(u32::from(trailing_zeros))?
         };
 
         Some(self.prev_value_bits ^ xor)
@@ -451,6 +472,21 @@ pub fn compress_points_nexus(points: &[DataPoint]) -> Option<CompressedBlock> {
         count: points.len(),
         checksum,
     })
+}
+
+/// True if `block` decodes to exactly `points` (same count, timestamps and
+/// value bit patterns). Used before a freshly encoded block replaces the data it
+/// was built from, so an encoder fault can never silently lose points.
+pub fn block_matches_points(block: &CompressedBlock, points: &[DataPoint]) -> bool {
+    if block.count != points.len() {
+        return false;
+    }
+    let decoded = decode_block(block);
+    decoded.len() == points.len()
+        && decoded.iter().zip(points).all(|(d, p)| {
+            d.timestamp.timestamp_millis() == p.timestamp.timestamp_millis()
+                && d.value.to_bits() == p.value.to_bits()
+        })
 }
 
 /// Decode a block's points, dispatching on the embedded codec (Gorilla vs
@@ -537,6 +573,123 @@ mod tests {
         let ratio = block.compression_ratio();
 
         assert!(ratio > 2.0, "Expected compression ratio > 2, got {}", ratio);
+    }
+
+    fn gorilla(points: &[DataPoint]) -> CompressedBlock {
+        let mut c = Compressor::new();
+        for p in points {
+            c.compress(p);
+        }
+        c.finish()
+    }
+
+    fn assert_roundtrip(points: &[DataPoint]) {
+        let block = gorilla(points);
+        let decoded = Decompressor::new(&block).decompress_all();
+        assert_eq!(decoded.len(), points.len(), "point count");
+        for (i, (o, d)) in points.iter().zip(decoded.iter()).enumerate() {
+            assert_eq!(
+                o.timestamp.timestamp_millis(),
+                d.timestamp.timestamp_millis(),
+                "timestamp {i}"
+            );
+            assert_eq!(o.value.to_bits(), d.value.to_bits(), "value {i}");
+        }
+        assert!(block_matches_points(&block, points));
+    }
+
+    fn series(values: &[f64]) -> Vec<DataPoint> {
+        let base = DateTime::from_timestamp_millis(1_760_000_000_000).unwrap();
+        values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| DataPoint {
+                timestamp: base + Duration::seconds(i as i64 * 30),
+                value: *v,
+            })
+            .collect()
+    }
+
+    /// A sign flip makes the XOR's top bit set and (for these values) its low
+    /// bit set too: 64 meaningful bits, which the 6-bit header stores as 0.
+    /// Before the fix the decoder treated 0 as 0 bits and corrupted every
+    /// following point of the block.
+    #[test]
+    fn test_sign_flip_roundtrip() {
+        assert_roundtrip(&series(&[
+            21.0, 21.5, -0.3, 21.5, 0.1, -17.25, 3.0e-300, -1.0,
+        ]));
+        assert_roundtrip(&series(&[1.0, f64::from_bits(1.0f64.to_bits() ^ u64::MAX)]));
+        assert_roundtrip(&series(&[
+            0.0,
+            -0.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ]));
+    }
+
+    /// Blocks written by the old encoder carry the same bits (64 stored as 0),
+    /// so the fixed decoder repairs them without a migration.
+    #[test]
+    fn test_full_width_xor_header_is_zero() {
+        let pts = series(&[21.0, -0.3]);
+        let block = gorilla(&pts);
+        // First point raw, then the second timestamp, then the value header:
+        // '1' (changed), '1' (new window), 6 bits lz, 6 bits meaningful.
+        let mut d = Decompressor::new(&block);
+        d.next().unwrap();
+        d.decompress_timestamp().unwrap();
+        let r = &mut d.reader;
+        assert!(r.read_bit().unwrap());
+        assert!(r.read_bit().unwrap());
+        assert_eq!(r.read_bits(6).unwrap(), 0);
+        assert_eq!(r.read_bits(6).unwrap(), 0);
+        assert_eq!(decode_block(&block).len(), 2);
+    }
+
+    #[test]
+    fn test_corrupt_block_does_not_panic() {
+        let block = gorilla(&series(&[21.0, -0.3, 5.0, 6.0]));
+        for cut in 0..block.data.len() {
+            let mut b = block.clone();
+            b.data.truncate(cut);
+            let out = Decompressor::new(&b).decompress_all();
+            assert!(out.len() <= 4);
+        }
+        let mut b = block.clone();
+        for byte in b.data.iter_mut().skip(16) {
+            *byte = 0xff;
+        }
+        let _ = Decompressor::new(&b).decompress_all();
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+        #[test]
+        fn prop_gorilla_roundtrip(
+            bits in proptest::collection::vec(proptest::prelude::any::<u64>(), 1..200),
+            steps in proptest::collection::vec(0i64..5_000_000, 1..200),
+        ) {
+            let base = DateTime::from_timestamp_millis(1_700_000_000_000).unwrap();
+            let mut ts = base;
+            let points: Vec<DataPoint> = bits
+                .iter()
+                .enumerate()
+                .map(|(i, b)| {
+                    ts += Duration::milliseconds(steps[i % steps.len()]);
+                    DataPoint { timestamp: ts, value: f64::from_bits(*b) }
+                })
+                .collect();
+            assert_roundtrip(&points);
+        }
+
+        #[test]
+        fn prop_gorilla_roundtrip_signed_small(
+            vals in proptest::collection::vec(-100.0f64..100.0, 1..300),
+        ) {
+            assert_roundtrip(&series(&vals));
+        }
     }
 
     #[test]

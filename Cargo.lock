@@ -321,6 +321,7 @@ dependencies = [
  "crc32fast",
  "nexuscompress",
  "parking_lot",
+ "proptest",
  "regex",
  "serde",
  "tempfile",

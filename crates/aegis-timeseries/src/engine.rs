@@ -9,7 +9,8 @@
 use crate::aggregation::AggregateFunction;
 use crate::cold::{ColdCompactReport, ColdStore};
 use crate::compression::{
-    compress_points_nexus, decode_block, is_nexus_block, CompressedBlock, Compressor,
+    block_matches_points, compress_points_nexus, decode_block, is_nexus_block, CompressedBlock,
+    Compressor,
 };
 use crate::index::TimeSeriesIndex;
 use crate::partition::{PartitionConfig, PartitionManager};
@@ -71,6 +72,9 @@ pub struct CompressionReport {
     pub blocks_already: usize,
     pub bytes_before: u64,
     pub bytes_after: u64,
+    /// Blocks left untouched because they did not decode to their recorded
+    /// point count, or the re-encoded block did not round-trip.
+    pub blocks_skipped_damaged: usize,
 }
 
 // =============================================================================
@@ -603,7 +607,19 @@ impl TimeSeriesEngine {
             Vec::with_capacity(candidates.len());
         for (sid, old) in candidates {
             let points = decode_block(&old);
+            // A block that no longer decodes to its recorded point count is
+            // damaged; recompressing it would make the loss permanent.
+            if points.len() != old.count {
+                report.blocks_skipped_damaged += 1;
+                continue;
+            }
             if let Some(mut nb) = compress_points_nexus(&points) {
+                // Never swap in a block that does not decode back to the same
+                // points it was built from.
+                if !block_matches_points(&nb, &points) {
+                    report.blocks_skipped_damaged += 1;
+                    continue;
+                }
                 // Preserve the original bounds so range-skipping stays correct.
                 nb.first_timestamp = old.first_timestamp;
                 nb.last_timestamp = old.last_timestamp;
@@ -862,6 +878,11 @@ impl SeriesBuffer {
         }
 
         let block = compressor.finish();
+        // Only seal the block if it decodes back to exactly the buffered
+        // points; otherwise keep them raw rather than lose them.
+        if !block_matches_points(&block, &self.points) {
+            return;
+        }
         self.compressed_blocks.push(block);
         self.points.clear();
     }
