@@ -15,11 +15,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const USAGE: &str = "\
-aegis-gate --bin PATH [--out DIR] [--workspace .] [--audit 1]
-  --bin        the aegis-server binary under test (target/release/aegis-server)
-  --out        server logs, audit.txt and report.json (target/nexusforge-gate/aegis)
-  --workspace  the Aegis-DB checkout (Cargo.lock)
-  --audit 0    skip cargo audit (offline runs only; NexusForge runs it)";
+aegis-gate --bin PATH [--out DIR] [--workspace .] [--audit 1] [--audit-ignore ID,ID]
+  --bin           the aegis-server binary under test (target/release/aegis-server)
+  --out           server logs, audit.txt and report.json (target/nexusforge-gate/aegis)
+  --workspace     the Aegis-DB checkout (Cargo.lock)
+  --audit 0       skip cargo audit (offline runs only; NexusForge runs it)
+  --audit-ignore  advisory IDs cargo audit ignores (each one reasoned in nexusforge-gates.toml)";
 
 // ── args ──
 
@@ -52,6 +53,18 @@ impl Args {
             v.parse().map_err(|_| format!("--{k} must be a number"))
         })
     }
+
+    fn list(&self, k: &str) -> Vec<String> {
+        self.get(k)
+            .map(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 // ── steps ──
@@ -72,13 +85,32 @@ fn print_step(s: &Step) {
     }
 }
 
-fn audit(workspace: &Path, out: &Path) -> Step {
+fn audit_args(lock: &Path, ignore: &[String]) -> Vec<String> {
+    let mut v: Vec<String> = ["audit", "--deny", "warnings", "--file"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    v.push(lock.display().to_string());
+    for id in ignore {
+        v.push("--ignore".to_string());
+        v.push(id.clone());
+    }
+    v
+}
+
+fn audit(workspace: &Path, out: &Path, ignore: &[String]) -> Step {
     let lock = workspace.join("Cargo.lock");
     let log = out.join("audit.txt");
-    let name = "cargo audit --deny warnings".to_string();
+    let name = if ignore.is_empty() {
+        "cargo audit --deny warnings".to_string()
+    } else {
+        format!(
+            "cargo audit --deny warnings (ignoring {})",
+            ignore.join(", ")
+        )
+    };
     let run = Command::new("cargo")
-        .args(["audit", "--deny", "warnings", "--file"])
-        .arg(&lock)
+        .args(audit_args(&lock, ignore))
         .current_dir(workspace)
         .output();
     let problems = match run {
@@ -146,7 +178,7 @@ fn gate(a: &Args) -> Result<bool, String> {
 
     if a.num("audit", 1)? != 0 {
         println!("[1/3] dependency audit");
-        let s = audit(&workspace, &out);
+        let s = audit(&workspace, &out, &a.list("audit-ignore"));
         print_step(&s);
         steps.push(s);
     } else {
@@ -231,6 +263,16 @@ mod tests {
             .unwrap()
             .num("audit", 1)
             .is_err());
+    }
+
+    #[test]
+    fn audit_ignore_list_becomes_ignore_flags() {
+        let a = Args::parse(&["--audit-ignore".into(), "A-1, B-2,".into()]).unwrap();
+        let ids = a.list("audit-ignore");
+        assert_eq!(ids, vec!["A-1".to_string(), "B-2".to_string()]);
+        let want = "audit --deny warnings --file Cargo.lock --ignore A-1 --ignore B-2";
+        assert_eq!(audit_args(Path::new("Cargo.lock"), &ids).join(" "), want);
+        assert!(Args::parse(&[]).unwrap().list("audit-ignore").is_empty());
     }
 
     #[test]
