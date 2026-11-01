@@ -1305,7 +1305,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1842,7 +1842,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2047,8 +2047,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "nexuscompress-codecs",
  "nexuscompress-core",
@@ -2064,8 +2064,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-codecs"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "brotli",
  "bytemuck",
@@ -2077,8 +2077,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-core"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -2091,8 +2091,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-graph"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "bincode",
  "indexmap",
@@ -2105,8 +2105,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-record"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2117,8 +2117,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-schema"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2127,8 +2127,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-stream"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2140,8 +2140,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-tensor"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2152,8 +2152,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-text"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2164,8 +2164,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-timeseries"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "bincode",
  "nexuscompress-codecs",
@@ -2176,8 +2176,8 @@ dependencies = [
 
 [[package]]
 name = "nexuscompress-trainer"
-version = "0.4.0"
-source = "git+https://github.com/AutomataNexus/NexusCompress.git?rev=bfff102109a88bf6fff2b2d6f121f6946864f3cb#bfff102109a88bf6fff2b2d6f121f6946864f3cb"
+version = "0.4.1"
+source = "git+https://github.com/AutomataNexus/NexusCompress.git?tag=v0.4.1#84f93f28903a683fc82d8d4875ae21c9c69ec965"
 dependencies = [
  "arc-swap",
  "bincode",
@@ -2535,7 +2535,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2792,7 +2792,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3184,10 +3184,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3871,7 +3871,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
