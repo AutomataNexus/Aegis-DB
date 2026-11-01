@@ -6,11 +6,12 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
+use crate::auth::UserRole;
 use crate::state::AppState;
 use axum::{
     body::Body,
-    extract::{ConnectInfo, State},
-    http::{HeaderValue, Request, Response, StatusCode},
+    extract::{ConnectInfo, OriginalUri, State},
+    http::{HeaderValue, Method, Request, Response, StatusCode},
     middleware::Next,
     response::IntoResponse,
     Json,
@@ -190,6 +191,117 @@ pub async fn shield_check(
 // Authentication Middleware
 // =============================================================================
 
+/// The authenticated caller, inserted into request extensions by
+/// [`require_auth`] / [`require_admin`]. Handlers that run statements whose
+/// effect depends on their text (SQL) read it to keep viewers read-only.
+#[derive(Debug, Clone)]
+pub struct AuthContext {
+    pub username: String,
+    pub role: UserRole,
+}
+
+impl AuthContext {
+    /// True for the read-only role.
+    pub fn is_viewer(&self) -> bool {
+        matches!(self.role, UserRole::Viewer)
+    }
+}
+
+/// True for a caller limited to read-only statements. `None` means the route
+/// ran without a session (un-bootstrapped server with AEGIS_OPEN_BOOTSTRAP, or
+/// a test harness), which is already fully open.
+pub fn is_read_only_caller(ctx: Option<&AuthContext>) -> bool {
+    ctx.is_some_and(AuthContext::is_viewer)
+}
+
+fn role_rank(role: UserRole) -> u8 {
+    match role {
+        UserRole::Viewer => 0,
+        UserRole::Operator => 1,
+        UserRole::Admin => 2,
+    }
+}
+
+/// True if `have` is at least `needed` (Viewer < Operator < Admin).
+pub fn role_satisfies(have: UserRole, needed: UserRole) -> bool {
+    role_rank(have) >= role_rank(needed)
+}
+
+/// Full request path, including any `nest` prefix.
+fn request_path(request: &Request<Body>) -> String {
+    request
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|u| u.0.path().to_string())
+        .unwrap_or_else(|| request.uri().path().to_string())
+}
+
+/// POST routes that only read. Viewers may call them; the SQL routes among
+/// them additionally refuse non-SELECT statements for viewers in the handler.
+fn is_read_only_post(path: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "/api/v1/query",
+        "/api/v1/prepare",
+        "/api/v1/prepared/execute",
+        "/api/v1/query-builder/execute",
+        "/api/v1/admin/metrics/timeseries",
+        "/api/v1/kv/batch/get",
+        "/api/v1/timeseries/query",
+    ];
+    if EXACT.contains(&path) {
+        return true;
+    }
+    let segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    // /api/v1/<area>/<container-kind>/<name>/<action>
+    matches!(
+        segs.as_slice(),
+        ["api", "v1", "documents", "collections", _, "query"]
+            | ["api", "v1", "vector", "collections", _, "search"]
+            | ["api", "v1", "fts", "indexes", _, "search"]
+            | [
+                "api",
+                "v1",
+                "geo",
+                "collections",
+                _,
+                "radius" | "bbox" | "nearest"
+            ]
+            | ["api", "v1", "columnar", "tables", _, "scan" | "aggregate"]
+            | ["api", "v1", "widecolumn", "tables", _, "scan"]
+    )
+}
+
+/// GET routes that expose account or backup data and need Admin.
+fn is_admin_only_get(path: &str) -> bool {
+    let segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    matches!(
+        segs.as_slice(),
+        ["api", "v1", "admin", "users" | "roles" | "backups"]
+            | ["api", "v1", "admin", "nodes", _, "logs"]
+    )
+}
+
+/// The least role a request needs on a [`require_auth`] route:
+/// reads need Viewer, writes need Operator, account/backup views need Admin.
+/// Routes that always need Admin sit behind [`require_admin`] instead.
+pub fn required_role(method: &Method, path: &str) -> UserRole {
+    let safe = matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
+    if safe {
+        if is_admin_only_get(path) {
+            UserRole::Admin
+        } else {
+            UserRole::Viewer
+        }
+    } else if *method == Method::POST && is_read_only_post(path) {
+        UserRole::Viewer
+    } else if *method == Method::DELETE && path.starts_with("/api/v1/prepared/") {
+        // Deallocating a prepared statement only frees server memory.
+        UserRole::Viewer
+    } else {
+        UserRole::Operator
+    }
+}
+
 /// Handle a request arriving while NO users exist (un-bootstrapped server).
 ///
 /// Fail CLOSED by default: protected endpoints return 503 with provisioning
@@ -232,7 +344,7 @@ fn no_user_bootstrap_response(
 /// Returns 401 Unauthorized if no valid session token is provided.
 pub async fn require_auth(
     State(state): State<AppState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
     // Un-bootstrapped server: fail closed (or fail open if explicitly opted in).
@@ -262,10 +374,32 @@ pub async fn require_auth(
         }
     };
 
-    // Validate the session token
+    // Validate the session token, then check the role this route needs.
     match state.auth.validate_session(token) {
-        Some(_user) => {
-            // Token is valid, proceed with the request
+        Some(user) => {
+            let path = request_path(&request);
+            let needed = required_role(request.method(), &path);
+            if !role_satisfies(user.role, needed) {
+                tracing::warn!(
+                    user = %user.username,
+                    role = %user.role,
+                    needed = %needed,
+                    method = %request.method(),
+                    path = %path,
+                    "Forbidden: role does not allow this route"
+                );
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "Insufficient privileges",
+                        "message": format!("This operation requires the {needed} role")
+                    })),
+                ));
+            }
+            request.extensions_mut().insert(AuthContext {
+                username: user.username,
+                role: user.role,
+            });
             Ok(next.run(request).await)
         }
         None => Err((
@@ -290,7 +424,7 @@ pub async fn require_auth(
 /// fail closed by default, legacy fail-open only with AEGIS_OPEN_BOOTSTRAP.
 pub async fn require_admin(
     State(state): State<AppState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
     if state.auth.list_users().is_empty() {
@@ -319,6 +453,10 @@ pub async fn require_admin(
 
     match state.auth.validate_session(&token) {
         Some(user) if matches!(user.role, crate::auth::UserRole::Admin) => {
+            request.extensions_mut().insert(AuthContext {
+                username: user.username,
+                role: user.role,
+            });
             Ok(next.run(request).await)
         }
         Some(user) => {

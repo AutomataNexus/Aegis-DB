@@ -1631,6 +1631,21 @@ struct PreparedStatement {
     plan: aegis_query::QueryPlan,
     database: String,
     is_mutation: bool,
+    /// False if the statement changes data or schema (from the parsed AST).
+    read_only: bool,
+    /// Username that prepared it; only that user (or an Admin) may use it.
+    owner: Option<String>,
+}
+
+/// Most prepared statements held at once; further prepares are refused until
+/// some are deallocated.
+pub const MAX_PREPARED_STATEMENTS: usize = 10_000;
+
+/// Who prepared a statement and whether it only reads.
+#[derive(Debug, Clone)]
+pub struct PreparedAccess {
+    pub owner: Option<String>,
+    pub read_only: bool,
 }
 
 /// Query engine for executing SQL statements.
@@ -2241,6 +2256,16 @@ impl QueryEngine {
     /// Note: prepared-statement mutations are persisted locally but are **not**
     /// peer-replicated — use the regular query path for replicated writes.
     pub fn prepare(&self, sql: &str, database: Option<&str>) -> Result<String, QueryError> {
+        self.prepare_owned(sql, database, None)
+    }
+
+    /// [`Self::prepare`] recording the preparing user as the statement's owner.
+    pub fn prepare_owned(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        owner: Option<&str>,
+    ) -> Result<String, QueryError> {
         let db_name = resolve_database_name(database)?.to_string();
         let statements = self
             .parser
@@ -2254,19 +2279,50 @@ impl QueryEngine {
             .plan(statement)
             .map_err(|e| QueryError::Plan(e.to_string()))?;
         let is_mutation = Self::is_mutation(sql);
+        let read_only = !Self::is_mutation_stmt(statement);
         let id = format!(
             "stmt_{}",
             self.prepared_counter.fetch_add(1, Ordering::SeqCst)
         );
-        self.prepared.write().unwrap().insert(
+        let mut prepared = self
+            .prepared
+            .write()
+            .map_err(|_| QueryError::Execute("prepared statement table unavailable".into()))?;
+        if prepared.len() >= MAX_PREPARED_STATEMENTS {
+            return Err(QueryError::Plan(format!(
+                "too many prepared statements (limit {MAX_PREPARED_STATEMENTS}); deallocate some"
+            )));
+        }
+        prepared.insert(
             id.clone(),
             PreparedStatement {
                 plan,
                 database: db_name,
                 is_mutation,
+                read_only,
+                owner: owner.map(str::to_string),
             },
         );
         Ok(id)
+    }
+
+    /// Owner and read-only flag of a prepared statement, if it exists.
+    pub fn prepared_access(&self, id: &str) -> Option<PreparedAccess> {
+        let map = self.prepared.read().ok()?;
+        map.get(id).map(|p| PreparedAccess {
+            owner: p.owner.clone(),
+            read_only: p.read_only,
+        })
+    }
+
+    /// True if every statement in `sql` only reads (SELECT, set operations,
+    /// transaction control). Parse errors are returned as errors.
+    pub fn is_read_only_sql(&self, sql: &str) -> Result<bool, QueryError> {
+        let statements = self
+            .parser
+            .parse(sql)
+            .map_err(|e| QueryError::Parse(e.to_string()))?;
+        Ok(statements.iter().all(|s| !Self::is_mutation_stmt(s)))
     }
 
     /// Execute a previously prepared statement with bound parameters.

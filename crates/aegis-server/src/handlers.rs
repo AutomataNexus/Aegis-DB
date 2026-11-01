@@ -12,6 +12,7 @@ use crate::admin::{
     AlertInfo, AlertSeverity, ClusterInfo, DashboardSummary, NodeInfo, QueryStats, StorageInfo,
 };
 use crate::auth::{LoginRequest, MfaVerifyRequest, UserInfo};
+use crate::middleware::AuthContext;
 use crate::state::{AppState, GraphEdge, GraphNode, KvEntry, QueryError, QueryResult};
 use aegis_document::{Document, DocumentId, Query as DocQuery, QueryResult as DocQueryResult};
 use aegis_streaming::{event::EventData, ChannelId, Event, EventType as StreamEventType};
@@ -75,11 +76,21 @@ pub struct QueryResponse {
 /// Execute a SQL query.
 pub async fn execute_query(
     State(state): State<AppState>,
+    auth: Option<axum::Extension<AuthContext>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<QueryRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let start = Instant::now();
-    let is_replicated = headers.get("x-aegis-replicated").is_some();
+    let auth = auth.map(|axum::Extension(a)| a);
+    if let Some(denied) = deny_viewer_write(&state, auth.as_ref(), &request.sql) {
+        return denied;
+    }
+    // Only an Admin session (a peer node) may mark a query as replicated, which
+    // skips the Shield inspection and re-replication.
+    let is_replicated = headers.get("x-aegis-replicated").is_some()
+        && auth
+            .as_ref()
+            .is_none_or(|a| matches!(a.role, crate::auth::UserRole::Admin));
 
     // Defense-in-depth: run user SQL through the Shield's injection detector so
     // it actually inspects query bodies (the request middleware never sees them)
@@ -140,6 +151,7 @@ pub async fn execute_query(
                     execution_time_ms: duration_ms,
                 }),
             )
+                .into_response()
         }
         Err(e) => {
             state.record_request(duration_ms, false).await;
@@ -160,6 +172,7 @@ pub async fn execute_query(
                     execution_time_ms: duration_ms,
                 }),
             )
+                .into_response()
         }
     }
 }
@@ -184,31 +197,102 @@ pub struct ExecutePreparedRequest {
     pub params: Vec<serde_json::Value>,
 }
 
+/// 403 for a viewer whose SQL would change data or schema (or does not parse).
+fn deny_viewer_write(
+    state: &AppState,
+    auth: Option<&AuthContext>,
+    sql: &str,
+) -> Option<axum::response::Response> {
+    if !crate::middleware::is_read_only_caller(auth) {
+        return None;
+    }
+    match state.query_engine.is_read_only_sql(sql) {
+        Ok(true) => None,
+        Ok(false) => Some(viewer_forbidden()),
+        Err(_) => Some(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "success": false, "error": "Query syntax error" })),
+            )
+                .into_response(),
+        ),
+    }
+}
+
+fn viewer_forbidden() -> axum::response::Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "success": false,
+            "error": "Insufficient privileges",
+            "message": "The viewer role may only run read-only statements"
+        })),
+    )
+        .into_response()
+}
+
+/// True if `auth` may use a prepared statement owned by `owner`: its owner,
+/// an Admin, or an unauthenticated (open) server. Statements prepared without
+/// an owner are usable by anyone.
+fn may_use_prepared(auth: Option<&AuthContext>, owner: Option<&str>) -> bool {
+    match (auth, owner) {
+        (None, _) | (_, None) => true,
+        (Some(a), Some(o)) => a.username == o || matches!(a.role, crate::auth::UserRole::Admin),
+    }
+}
+
+fn unknown_prepared() -> axum::response::Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "success": false, "error": "unknown prepared statement" })),
+    )
+        .into_response()
+}
+
 /// Parse + plan a statement once and return an id for repeated execution.
 pub async fn prepare_statement(
     State(state): State<AppState>,
+    auth: Option<axum::Extension<AuthContext>>,
     Json(request): Json<PrepareRequest>,
-) -> impl IntoResponse {
-    match state
-        .query_engine
-        .prepare(&request.sql, request.database.as_deref())
-    {
+) -> axum::response::Response {
+    let auth = auth.map(|axum::Extension(a)| a);
+    if let Some(denied) = deny_viewer_write(&state, auth.as_ref(), &request.sql) {
+        return denied;
+    }
+    match state.query_engine.prepare_owned(
+        &request.sql,
+        request.database.as_deref(),
+        auth.as_ref().map(|a| a.username.as_str()),
+    ) {
         Ok(id) => (
             StatusCode::CREATED,
             Json(serde_json::json!({ "success": true, "statement_id": id })),
-        ),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "success": false, "error": e.to_string() })),
-        ),
+        )
+            .into_response(),
     }
 }
 
 /// Execute a previously prepared statement with bound parameters.
 pub async fn execute_prepared(
     State(state): State<AppState>,
+    auth: Option<axum::Extension<AuthContext>>,
     Json(request): Json<ExecutePreparedRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    let auth = auth.map(|axum::Extension(a)| a);
+    let Some(access) = state.query_engine.prepared_access(&request.statement_id) else {
+        return unknown_prepared();
+    };
+    if !may_use_prepared(auth.as_ref(), access.owner.as_deref()) {
+        return unknown_prepared();
+    }
+    if crate::middleware::is_read_only_caller(auth.as_ref()) && !access.read_only {
+        return viewer_forbidden();
+    }
     let start = Instant::now();
     let result = state
         .query_engine
@@ -227,6 +311,7 @@ pub async fn execute_prepared(
                     execution_time_ms: duration_ms,
                 }),
             )
+                .into_response()
         }
         Err(e) => {
             state.record_request(duration_ms, false).await;
@@ -239,6 +324,7 @@ pub async fn execute_prepared(
                     execution_time_ms: duration_ms,
                 }),
             )
+                .into_response()
         }
     }
 }
@@ -246,9 +332,15 @@ pub async fn execute_prepared(
 /// Deallocate a prepared statement by id.
 pub async fn deallocate_prepared(
     State(state): State<AppState>,
+    auth: Option<axum::Extension<AuthContext>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if state.query_engine.deallocate(&id) {
+    let auth = auth.map(|axum::Extension(a)| a);
+    let allowed = state
+        .query_engine
+        .prepared_access(&id)
+        .is_some_and(|a| may_use_prepared(auth.as_ref(), a.owner.as_deref()));
+    if allowed && state.query_engine.deallocate(&id) {
         (StatusCode::OK, Json(serde_json::json!({ "success": true })))
     } else {
         (
@@ -442,8 +534,12 @@ pub async fn get_node_info(State(state): State<AppState>) -> Json<crate::admin::
 pub async fn cluster_join(
     State(state): State<AppState>,
     Json(req): Json<JoinClusterRequest>,
-) -> Json<JoinClusterResponse> {
+) -> axum::response::Response {
     use crate::admin::{NodeRole, NodeStatus, PeerNode};
+
+    if !crate::admin::is_valid_peer_address(&req.address) {
+        return invalid_peer_address();
+    }
 
     // Register the requesting node as a peer
     let peer = PeerNode {
@@ -494,6 +590,18 @@ pub async fn cluster_join(
         message: "Successfully joined cluster".to_string(),
         peers,
     })
+    .into_response()
+}
+
+fn invalid_peer_address() -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "success": false,
+            "error": "address must be host:port (no scheme, path or credentials)"
+        })),
+    )
+        .into_response()
 }
 
 /// Heartbeat from a peer node.
@@ -510,8 +618,12 @@ pub struct HeartbeatRequest {
 pub async fn cluster_heartbeat(
     State(state): State<AppState>,
     Json(req): Json<HeartbeatRequest>,
-) -> Json<serde_json::Value> {
+) -> axum::response::Response {
     use crate::admin::{NodeRole, NodeStatus, PeerNode};
+
+    if !crate::admin::is_valid_peer_address(&req.address) {
+        return invalid_peer_address();
+    }
 
     // Update peer info
     let peer = PeerNode {
@@ -538,6 +650,7 @@ pub async fn cluster_heartbeat(
             .unwrap_or_default()
             .as_millis()
     }))
+    .into_response()
 }
 
 /// Get list of known peers.
@@ -2555,8 +2668,13 @@ pub struct ExecuteQueryResponse {
 /// Execute a query from the query builder.
 pub async fn execute_builder_query(
     State(state): State<AppState>,
+    auth: Option<axum::Extension<AuthContext>>,
     Json(request): Json<ExecuteQueryRequest>,
-) -> Json<ExecuteQueryResponse> {
+) -> axum::response::Response {
+    let auth = auth.map(|axum::Extension(a)| a);
+    if let Some(denied) = deny_viewer_write(&state, auth.as_ref(), &request.query) {
+        return denied;
+    }
     let start = std::time::Instant::now();
     state.activity.log_query(&request.query, 0, None);
 
@@ -2572,7 +2690,8 @@ pub async fn execute_builder_query(
             row_count: result.rows_affected as usize,
             execution_time_ms: start.elapsed().as_millis() as u64,
             error: None,
-        }),
+        })
+        .into_response(),
         Err(e) => Json(ExecuteQueryResponse {
             success: false,
             columns: vec![],
@@ -2580,7 +2699,8 @@ pub async fn execute_builder_query(
             row_count: 0,
             execution_time_ms: start.elapsed().as_millis() as u64,
             error: Some(e.to_string()),
-        }),
+        })
+        .into_response(),
     }
 }
 

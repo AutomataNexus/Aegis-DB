@@ -1739,8 +1739,8 @@ async fn test_complete_system_flow_e2e() {
         &mut app,
         "/api/v1/auth/login",
         json!({
-            "username": "testdemo",
-            "password": "TestDemo123!"
+            "username": "testoperator",
+            "password": "TestOperator123!"
         }),
     )
     .await;

@@ -615,7 +615,9 @@ async fn join_peer(state: &AppState, peer_addr: &str) {
                                 peer.get("id").and_then(|v| v.as_str()),
                                 peer.get("address").and_then(|v| v.as_str()),
                             ) {
-                                if addr != self_info.address {
+                                if addr != self_info.address
+                                    && aegis_server::admin::is_valid_peer_address(addr)
+                                {
                                     let name = peer
                                         .get("name")
                                         .and_then(|v| v.as_str())

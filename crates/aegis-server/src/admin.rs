@@ -980,9 +980,83 @@ impl Default for AdminService {
 // Tests
 // =============================================================================
 
+/// True if `addr` is a bare `host:port` peer address: a DNS name, IPv4 or
+/// bracketed IPv6 host and a port in 1..=65535, with no scheme, path, query,
+/// credentials or whitespace. Peer addresses are put into request URLs, so
+/// anything else could point the node's requests somewhere unintended.
+pub fn is_valid_peer_address(addr: &str) -> bool {
+    if addr.is_empty() || addr.len() > 261 {
+        return false;
+    }
+    let (host, port) = if let Some(rest) = addr.strip_prefix('[') {
+        let Some((v6, port)) = rest.split_once("]:") else {
+            return false;
+        };
+        if v6.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        (None, port)
+    } else {
+        let Some((host, port)) = addr.rsplit_once(':') else {
+            return false;
+        };
+        (Some(host), port)
+    };
+    if !matches!(port.parse::<u16>(), Ok(p) if p != 0) || !port.bytes().all(|b| b.is_ascii_digit())
+    {
+        return false;
+    }
+    match host {
+        None => true,
+        Some(h) => {
+            !h.is_empty()
+                && h.len() <= 253
+                && h.split('.').all(|label| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && !label.starts_with('-')
+                        && !label.ends_with('-')
+                        && label
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_peer_address_validation() {
+        for ok in [
+            "10.99.0.4:9090",
+            "aegis-2.local:9090",
+            "[::1]:9090",
+            "node1:1",
+        ] {
+            assert!(is_valid_peer_address(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "10.0.0.1",
+            "10.0.0.1:0",
+            "10.0.0.1:99999",
+            "http://10.0.0.1:9090",
+            "169.254.169.254:80/latest/meta-data",
+            "user@host:80",
+            "host:80?x=1",
+            "host:80#f",
+            "ho st:80",
+            "[::1]",
+            "[nothex]:80",
+            "-bad:80",
+            "host:+80",
+        ] {
+            assert!(!is_valid_peer_address(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn test_cluster_info() {
