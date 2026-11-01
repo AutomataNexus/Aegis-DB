@@ -34,7 +34,6 @@ Comprehensive guide for developing, contributing to, and extending Aegis-DB
 5. [Crate Deep Dives](#crate-deep-dives)
    - [aegis-common](#aegis-common)
    - [aegis-storage](#aegis-storage)
-   - [aegis-memory](#aegis-memory)
    - [aegis-query](#aegis-query)
    - [aegis-server](#aegis-server)
    - [aegis-client](#aegis-client)
@@ -306,7 +305,6 @@ aegis-db/
 │   │       ├── transaction.rs # MVCC transactions
 │   │       └── wal.rs        # Write-ahead log
 │   │
-│   ├── aegis-memory/         # Memory management
 │   │   ├── Cargo.toml
 │   │   ├── README.md
 │   │   └── src/
@@ -705,28 +703,6 @@ pub enum CompressionAlgorithm {
 
 pub fn compress(data: &[u8], algorithm: CompressionAlgorithm) -> Result<Vec<u8>>;
 pub fn decompress(data: &[u8], algorithm: CompressionAlgorithm) -> Result<Vec<u8>>;
-```
-
-### aegis-memory
-
-Memory management primitives.
-
-**Arena Allocator:**
-```rust
-pub struct Arena {
-    blocks: Vec<Box<[u8]>>,
-    current_block: usize,
-    offset: usize,
-    block_size: usize,
-}
-
-impl Arena {
-    pub fn new(block_size: usize) -> Self;
-    pub fn alloc(&mut self, size: usize) -> &mut [u8];
-    pub fn alloc_aligned(&mut self, size: usize, align: usize) -> &mut [u8];
-    pub fn reset(&mut self);
-    pub fn bytes_allocated(&self) -> usize;
-}
 ```
 
 ### aegis-query

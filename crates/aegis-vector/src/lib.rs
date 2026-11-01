@@ -11,7 +11,8 @@ pub mod hnsw;
 pub mod types;
 
 pub use engine::{
-    CollectionConfig, CollectionSnapshot, CollectionStats, EngineSnapshot, VectorEngine,
+    CollectionConfig, CollectionSnapshot, CollectionStats, EngineSnapshot, VectorEngine, MAX_DIM,
+    MAX_SEARCH_EF, MAX_SEARCH_K,
 };
 pub use hnsw::{HnswConfig, HnswIndex};
 pub use types::{dot, normalize, Metric, SearchHit, VectorError, VectorRecord};
@@ -44,6 +45,38 @@ mod tests {
         assert!(e
             .upsert("auto", "v2", &[0.1, 0.2], serde_json::Value::Null)
             .is_err());
+    }
+
+    /// A huge `k`/`ef` used to reach `Vec::with_capacity(k)` and abort the
+    /// whole process on allocation failure; it is now rejected up front.
+    #[test]
+    fn search_rejects_oversized_k_and_ef() {
+        let e = VectorEngine::new();
+        e.upsert("c", "v1", &[0.1, 0.2, 0.3], serde_json::Value::Null)
+            .unwrap();
+        let q = [0.1, 0.2, 0.3];
+        let none = serde_json::Value::Null;
+        for k in [MAX_SEARCH_K + 1, usize::MAX / 2, usize::MAX] {
+            assert!(matches!(
+                e.search("c", &q, k, None, &none),
+                Err(VectorError::InvalidSearchParam(_))
+            ));
+        }
+        assert!(matches!(
+            e.search("c", &q, 5, Some(usize::MAX), &none),
+            Err(VectorError::InvalidSearchParam(_))
+        ));
+        let filter = serde_json::json!({"a": 1});
+        assert!(e.search("c", &q, usize::MAX, None, &filter).is_err());
+        // Limits themselves are accepted.
+        assert_eq!(
+            e.search("c", &q, MAX_SEARCH_K, Some(MAX_SEARCH_EF), &none)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(e.search("c", &q, 0, None, &none).unwrap().is_empty());
+        assert!(e.create_collection("big", MAX_DIM + 1, Metric::L2).is_err());
     }
 
     /// Exact KNN by linear scan (ground truth).

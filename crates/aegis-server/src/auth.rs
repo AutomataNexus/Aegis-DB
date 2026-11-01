@@ -439,7 +439,7 @@ impl AuthService {
         let users = self.users.read();
         match serde_json::to_string_pretty(&*users) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&users_path, json) {
+                if let Err(e) = crate::oplog::write_atomic(&users_path, json) {
                     tracing::error!("Failed to write users to {}: {}", users_path.display(), e);
                 }
             }
@@ -470,17 +470,24 @@ impl AuthService {
                 u.last_login = Some(now_timestamp());
             }
         }
-        let users = self.users.read();
-        let user = users
-            .get(username)
-            .expect("user should exist after successful credential check");
+        // Copy what the session needs and release the users lock before touching
+        // the session maps: validate_session holds sessions then takes users, so
+        // holding users here while taking sessions deadlocked the server once a
+        // writer queued on users.
+        let (user_id, mfa_enabled, info) = {
+            let users = self.users.read();
+            let user = users
+                .get(username)
+                .expect("user should exist after successful credential check");
+            (user.id.clone(), user.mfa_enabled, UserInfo::from(user))
+        };
 
-        if user.mfa_enabled {
+        if mfa_enabled {
             // Create pending MFA session
             let temp_token = generate_token();
             let pending = PendingMfaSession {
                 temp_token: temp_token.clone(),
-                user_id: user.id.clone(),
+                user_id,
                 created_at: Instant::now(),
                 expires_at: Instant::now() + self.mfa_timeout,
             };
@@ -492,14 +499,14 @@ impl AuthService {
             let token = generate_token();
             let session = Session {
                 token: token.clone(),
-                user_id: user.id.clone(),
+                user_id,
                 created_at: Instant::now(),
                 expires_at: Instant::now() + self.session_duration,
                 mfa_verified: true,
             };
             self.sessions.write().insert(token.clone(), session);
 
-            AuthResponse::success(token, UserInfo::from(user))
+            AuthResponse::success(token, info)
         }
     }
 
@@ -515,22 +522,26 @@ impl AuthService {
             }
         };
 
-        // Get user
-        let users = self.users.read();
-        let user = match users.values().find(|u| u.id == pending.user_id) {
-            Some(u) => u,
-            None => return AuthResponse::error("User not found"),
-        };
+        // Get user; the users lock is released before the session maps are written
+        // (same lock order as login).
+        let (user_id, info) = {
+            let users = self.users.read();
+            let user = match users.values().find(|u| u.id == pending.user_id) {
+                Some(u) => u,
+                None => return AuthResponse::error("User not found"),
+            };
 
-        // Verify TOTP code
-        let secret = match &user.mfa_secret {
-            Some(s) => s,
-            None => return AuthResponse::error("MFA not configured"),
-        };
+            // Verify TOTP code
+            let secret = match &user.mfa_secret {
+                Some(s) => s,
+                None => return AuthResponse::error("MFA not configured"),
+            };
 
-        if !verify_totp(code, secret) {
-            return AuthResponse::error("Invalid MFA code");
-        }
+            if !verify_totp(code, secret) {
+                return AuthResponse::error("Invalid MFA code");
+            }
+            (user.id.clone(), UserInfo::from(user))
+        };
 
         // Remove pending session
         self.pending_mfa.write().remove(temp_token);
@@ -539,27 +550,29 @@ impl AuthService {
         let token = generate_token();
         let session = Session {
             token: token.clone(),
-            user_id: user.id.clone(),
+            user_id,
             created_at: Instant::now(),
             expires_at: Instant::now() + self.session_duration,
             mfa_verified: true,
         };
         self.sessions.write().insert(token.clone(), session);
 
-        AuthResponse::success(token, UserInfo::from(user))
+        AuthResponse::success(token, info)
     }
 
     /// Validate a session token and return user info.
     pub fn validate_session(&self, token: &str) -> Option<UserInfo> {
-        let sessions = self.sessions.read();
-        let session = sessions.get(token)?;
-
-        if session.is_expired() {
-            return None;
-        }
+        let user_id = {
+            let sessions = self.sessions.read();
+            let session = sessions.get(token)?;
+            if session.is_expired() {
+                return None;
+            }
+            session.user_id.clone()
+        };
 
         let users = self.users.read();
-        let user = users.values().find(|u| u.id == session.user_id)?;
+        let user = users.values().find(|u| u.id == user_id)?;
 
         Some(UserInfo::from(user))
     }
@@ -1219,7 +1232,7 @@ impl RbacManager {
         let path = dir.join("rbac.json");
         match serde_json::to_string_pretty(&snapshot) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                if let Err(e) = crate::oplog::write_atomic(&path, json) {
                     tracing::error!("Failed to write RBAC snapshot to {}: {}", path.display(), e);
                 }
             }
@@ -2235,6 +2248,45 @@ mod tests {
 
         let otp = binary_code % 1_000_000;
         format!("{:06}", otp)
+    }
+
+    /// login (users then sessions) racing validate_session (sessions then users) once
+    /// deadlocked the server; with no lock held across the two maps this finishes.
+    #[test]
+    fn test_login_and_validate_do_not_deadlock() {
+        use std::sync::{mpsc, Arc};
+        let auth = Arc::new(auth_with_test_user());
+        let token = auth
+            .login("testuser", "TestPassword123!")
+            .token
+            .expect("login should return token");
+        let (done, finished) = mpsc::channel();
+        let mut workers = Vec::new();
+        for i in 0..8 {
+            let auth = Arc::clone(&auth);
+            let token = token.clone();
+            let done = done.clone();
+            workers.push(std::thread::spawn(move || {
+                for _ in 0..4 {
+                    if i % 2 == 0 {
+                        assert!(auth.login("testuser", "TestPassword123!").token.is_some());
+                    } else {
+                        for _ in 0..500 {
+                            assert!(auth.validate_session(&token).is_some());
+                        }
+                    }
+                }
+                done.send(()).expect("test channel open");
+            }));
+        }
+        for _ in 0..8 {
+            finished
+                .recv_timeout(std::time::Duration::from_secs(120))
+                .expect("login / validate_session deadlocked");
+        }
+        for w in workers {
+            w.join().expect("worker panicked");
+        }
     }
 
     #[test]

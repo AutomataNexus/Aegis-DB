@@ -656,7 +656,7 @@ impl BreachDetector {
         let vec: Vec<&BreachIncident> = incidents.iter().collect();
         match serde_json::to_string_pretty(&vec) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                if let Err(e) = crate::oplog::write_atomic(&path, json) {
                     tracing::error!(
                         "Failed to write breach incidents to {}: {}",
                         path.display(),

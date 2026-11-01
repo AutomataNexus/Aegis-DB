@@ -49,6 +49,25 @@ pub struct ServerConfig {
     /// Set AEGIS_OPEN_BOOTSTRAP=true to restore the legacy behavior.
     #[serde(default)]
     pub open_bootstrap: bool,
+    /// Addresses of reverse proxies whose X-Forwarded-For / X-Real-IP headers
+    /// are believed. A request from any other address is identified by its
+    /// socket address alone, so a client cannot choose the IP the Shield and
+    /// rate limiters see. Set with AEGIS_TRUSTED_PROXIES (comma-separated
+    /// IPs); defaults to loopback, for a proxy on the same host.
+    #[serde(default = "default_trusted_proxies")]
+    pub trusted_proxies: Vec<String>,
+}
+
+fn default_trusted_proxies() -> Vec<String> {
+    match std::env::var("AEGIS_TRUSTED_PROXIES") {
+        Ok(v) => v
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Err(_) => vec!["127.0.0.1".to_string(), "::1".to_string()],
+    }
 }
 
 impl Default for ServerConfig {
@@ -78,6 +97,7 @@ impl Default for ServerConfig {
             open_bootstrap: std::env::var("AEGIS_OPEN_BOOTSTRAP")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
+            trusted_proxies: default_trusted_proxies(),
         }
     }
 }

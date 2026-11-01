@@ -143,16 +143,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aegis-memory"
-version = "0.6.0"
-dependencies = [
- "aegis-common",
- "criterion",
- "crossbeam",
- "parking_lot",
-]
-
-[[package]]
 name = "aegis-monitoring"
 version = "0.6.0"
 dependencies = [
@@ -179,7 +169,6 @@ name = "aegis-query"
 version = "0.6.0"
 dependencies = [
  "aegis-common",
- "aegis-memory",
  "aegis-storage",
  "chrono",
  "proptest",
@@ -227,9 +216,11 @@ dependencies = [
  "argon2",
  "axum",
  "axum-server",
+ "bincode",
  "bytes",
  "chrono",
  "clap",
+ "crc32fast",
  "criterion",
  "data-encoding",
  "futures-util",
@@ -326,6 +317,7 @@ dependencies = [
  "crc32fast",
  "nexuscompress",
  "parking_lot",
+ "proptest",
  "regex",
  "serde",
  "tempfile",
@@ -3486,6 +3478,7 @@ dependencies = [
  "bitflags",
  "bytes",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",

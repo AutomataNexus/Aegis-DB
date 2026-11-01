@@ -70,6 +70,7 @@ impl DocumentEngine {
     /// Create a new collection.
     pub fn create_collection(&self, name: impl Into<String>) -> Result<(), EngineError> {
         let name = name.into();
+        check_name(&name)?;
         let mut collections = self
             .collections
             .write()
@@ -94,6 +95,7 @@ impl DocumentEngine {
         schema: Schema,
     ) -> Result<(), EngineError> {
         let name = name.into();
+        check_name(&name)?;
         let mut collections = self
             .collections
             .write()
@@ -109,6 +111,20 @@ impl DocumentEngine {
 
         collections.insert(name.clone(), Collection::with_schema(name, schema));
         Ok(())
+    }
+
+    /// Re-create a collection while loading persisted state (data files and the
+    /// redo log). Unlike [`Self::create_collection`] this does not apply the
+    /// name rules, so a collection written before they existed still loads.
+    /// Never call it with a name taken from a request.
+    pub fn restore_collection(&self, name: &str) {
+        let mut collections = self
+            .collections
+            .write()
+            .expect("collections RwLock poisoned");
+        if !collections.contains_key(name) {
+            collections.insert(name.to_string(), Collection::new(name.to_string()));
+        }
     }
 
     /// Drop a collection.
@@ -177,6 +193,7 @@ impl DocumentEngine {
             .write()
             .expect("collections RwLock poisoned");
         if !collections.contains_key(name) {
+            check_name(name)?;
             if collections.len() >= self.config.max_collections {
                 return Err(EngineError::TooManyCollections);
             }
@@ -455,6 +472,7 @@ pub struct CollectionStats {
 /// Errors that can occur in the document engine.
 #[derive(Debug, Clone)]
 pub enum EngineError {
+    InvalidName(aegis_common::names::NameError),
     CollectionExists(String),
     CollectionNotFound(String),
     TooManyCollections,
@@ -465,6 +483,7 @@ pub enum EngineError {
 impl std::fmt::Display for EngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidName(e) => write!(f, "Invalid collection name: {}", e),
             Self::CollectionExists(name) => write!(f, "Collection already exists: {}", name),
             Self::CollectionNotFound(name) => write!(f, "Collection not found: {}", name),
             Self::TooManyCollections => write!(f, "Maximum number of collections reached"),
@@ -475,6 +494,10 @@ impl std::fmt::Display for EngineError {
 }
 
 impl std::error::Error for EngineError {}
+
+fn check_name(name: &str) -> Result<(), EngineError> {
+    aegis_common::names::validate_name(name).map_err(EngineError::InvalidName)
+}
 
 // =============================================================================
 // Tests
@@ -504,6 +527,27 @@ mod tests {
 
         engine.drop_collection("users").unwrap();
         assert!(!engine.collection_exists("users"));
+    }
+
+    #[test]
+    fn test_collection_names_that_would_escape_the_data_dir_are_rejected() {
+        let engine = DocumentEngine::new();
+        for bad in ["../etc", "a/b", "..", ".", "", "x y"] {
+            assert!(matches!(
+                engine.create_collection(bad),
+                Err(EngineError::InvalidName(_))
+            ));
+            assert!(matches!(
+                engine.insert(bad, Document::new()),
+                Err(EngineError::InvalidName(_))
+            ));
+            assert!(!engine.collection_exists(bad));
+        }
+        engine.create_collection("controllers").unwrap();
+        // Persisted legacy names still load.
+        engine.restore_collection("legacy name");
+        assert!(engine.collection_exists("legacy name"));
+        engine.insert("legacy name", Document::new()).unwrap();
     }
 
     #[test]

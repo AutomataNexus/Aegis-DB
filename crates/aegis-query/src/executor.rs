@@ -3860,7 +3860,8 @@ fn evaluate_binary_op(op: PlanBinaryOp, left: &Value, right: &Value) -> Executor
             if r == 0 {
                 return Err(ExecutorError::DivisionByZero);
             }
-            Ok(Value::Integer(l % r))
+            // `i64::MIN % -1` overflows and panics; its value is 0.
+            Ok(Value::Integer(l.wrapping_rem(r)))
         }
         PlanBinaryOp::Equal => Ok(Value::Boolean(
             compare_values(left, right)? == std::cmp::Ordering::Equal,
@@ -4136,6 +4137,21 @@ fn cast_value(value: &Value, target_type: &DataType) -> ExecutorResult<Value> {
 mod tests {
     use super::*;
     use crate::planner::{LimitNode, PlanNode, ProjectNode, ProjectionExpr, QueryPlan, ScanNode};
+
+    #[test]
+    fn test_modulo_overflow_does_not_panic() {
+        let r = evaluate_binary_op(
+            PlanBinaryOp::Modulo,
+            &Value::Integer(i64::MIN),
+            &Value::Integer(-1),
+        )
+        .unwrap();
+        assert_eq!(r, Value::Integer(0));
+        assert!(
+            evaluate_binary_op(PlanBinaryOp::Modulo, &Value::Integer(5), &Value::Integer(0))
+                .is_err()
+        );
+    }
 
     fn create_test_context() -> ExecutionContext {
         let mut context = ExecutionContext::new();

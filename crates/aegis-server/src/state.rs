@@ -76,6 +76,13 @@ pub struct AppState {
     pub update_orchestrator: Arc<UpdateOrchestrator>,
     pub vault: Arc<AegisVault>,
     pub shield: Arc<ShieldEngine>,
+    /// Redo log for KV, document and timeseries writes (with a data directory).
+    pub oplog: Option<Arc<crate::oplog::OpLog>>,
+    /// Serialises "read a document's post-image and log it" so the last record
+    /// logged for a document is always its latest state.
+    doc_log: Arc<parking_lot::Mutex<()>>,
+    /// Held for the whole of a checkpoint (`save_to_disk`).
+    checkpoint: Arc<parking_lot::Mutex<()>>,
     data_dir: Option<PathBuf>,
 }
 
@@ -118,9 +125,72 @@ impl AppState {
             }
         }
 
+        // Redo log: opened before the engines load their checkpoints; its records
+        // are replayed on top of them below.
+        let (oplog, recovered_ops) = match data_dir {
+            Some(ref dir) => {
+                let sync_ms = std::env::var("AEGIS_WAL_SYNC_MS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(200);
+                match crate::oplog::OpLog::open(
+                    &dir.join("oplog"),
+                    std::time::Duration::from_millis(sync_ms),
+                ) {
+                    Ok((log, recovered)) => {
+                        tracing::info!(
+                            "Redo log: {} records to replay from {} segment(s){}",
+                            recovered.ops.len(),
+                            recovered.segments,
+                            if recovered.torn_segments > 0 {
+                                format!(" ({} ended in a torn record)", recovered.torn_segments)
+                            } else {
+                                String::new()
+                            }
+                        );
+                        let log = Arc::new(log);
+                        if sync_ms > 0 {
+                            spawn_oplog_sync(&log, std::time::Duration::from_millis(sync_ms));
+                        }
+                        (Some(log), recovered.ops)
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to open the redo log: {}. Writes are persisted by full rewrites.",
+                            e
+                        );
+                        (None, Vec::new())
+                    }
+                }
+            }
+            None => (None, Vec::new()),
+        };
+
         // Initialize engines
         let document_engine = Arc::new(DocumentEngine::new());
-        let kv_store = Arc::new(KvStore::with_data_dir(data_dir.clone()));
+        let kv_store = Arc::new(KvStore::with_data_dir_and_log(
+            data_dir.clone(),
+            oplog.clone(),
+        ));
+        let timeseries_engine = Arc::new({
+            // Hot window (RAM) + cold tier (disk) lengths; AEGIS_TS_COLD_DAYS=0 disables
+            // the cold tier (evicted blocks are discarded, the pre-0.5.1 behaviour).
+            let env_days = |k: &str, default: i64| {
+                std::env::var(k)
+                    .ok()
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .unwrap_or(default)
+            };
+            let ts_config = aegis_timeseries::engine::EngineConfig {
+                data_path: data_dir.as_ref().map(|d| d.join("timeseries")),
+                hot_retention_days: env_days("AEGIS_TS_HOT_DAYS", 7).max(1),
+                cold_retention_days: Some(env_days("AEGIS_TS_COLD_DAYS", 365)).filter(|d| *d > 0),
+                max_query_points: env_days("AEGIS_TS_MAX_QUERY_POINTS", 2_000_000).max(10_000)
+                    as usize,
+                ..Default::default()
+            };
+            TimeSeriesEngine::with_config(ts_config)
+        });
 
         // Load persisted data if data directory is specified
         if let Some(ref dir) = data_dir {
@@ -137,7 +207,13 @@ impl AppState {
                                 // JSON; decompress_docs() transparently reads either.
                                 if let Ok(bytes) = std::fs::read(&path) {
                                     if let Some(docs) = decompress_docs(&bytes) {
-                                        let _ = document_engine.create_collection(collection_name);
+                                        if !aegis_common::names::is_valid_name(collection_name) {
+                                            tracing::warn!(
+                                                "Collection {:?} has a name new collections may not use; loading it anyway",
+                                                collection_name
+                                            );
+                                        }
+                                        document_engine.restore_collection(collection_name);
                                         let mut count = 0;
                                         for doc_json in docs {
                                             let doc = json_to_document(doc_json);
@@ -163,6 +239,17 @@ impl AppState {
                     }
                 }
             }
+        }
+
+        // Re-apply what was logged after the last checkpoint.
+        if !recovered_ops.is_empty() {
+            let applied = replay_ops(
+                &recovered_ops,
+                &kv_store,
+                &document_engine,
+                &timeseries_engine,
+            );
+            tracing::info!("Redo log: replayed {} records", applied);
         }
 
         // Log server startup
@@ -383,26 +470,7 @@ impl AppState {
             config: Arc::new(config),
             query_engine,
             document_engine,
-            timeseries_engine: Arc::new({
-                // Hot window (RAM) + cold tier (disk) lengths; AEGIS_TS_COLD_DAYS=0 disables
-                // the cold tier (evicted blocks are discarded, the pre-0.5.1 behaviour).
-                let env_days = |k: &str, default: i64| {
-                    std::env::var(k)
-                        .ok()
-                        .and_then(|v| v.parse::<i64>().ok())
-                        .unwrap_or(default)
-                };
-                let ts_config = aegis_timeseries::engine::EngineConfig {
-                    data_path: data_dir.as_ref().map(|d| d.join("timeseries")),
-                    hot_retention_days: env_days("AEGIS_TS_HOT_DAYS", 7).max(1),
-                    cold_retention_days: Some(env_days("AEGIS_TS_COLD_DAYS", 365))
-                        .filter(|d| *d > 0),
-                    max_query_points: env_days("AEGIS_TS_MAX_QUERY_POINTS", 2_000_000).max(10_000)
-                        as usize,
-                    ..Default::default()
-                };
-                TimeSeriesEngine::with_config(ts_config)
-            }),
+            timeseries_engine,
             streaming_engine: Arc::new(StreamingEngine::new()),
             kv_store,
             metrics: Arc::new(RwLock::new(Metrics::default())),
@@ -487,6 +555,9 @@ impl AppState {
                 Arc::new(vault)
             },
             shield: Arc::new(ShieldEngine::new(aegis_shield::ShieldConfig::default())),
+            oplog,
+            doc_log: Arc::new(parking_lot::Mutex::new(())),
+            checkpoint: Arc::new(parking_lot::Mutex::new(())),
             data_dir,
         }
     }
@@ -500,7 +571,7 @@ impl AppState {
         let settings = self.settings.read().await;
         match serde_json::to_string_pretty(&*settings) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                if let Err(e) = crate::oplog::write_atomic(&path, json) {
                     tracing::error!("Failed to write settings to {}: {}", path.display(), e);
                 }
             }
@@ -582,7 +653,110 @@ impl AppState {
     }
 
     /// Flush a single document collection to disk (if data_dir is configured).
+    ///
+    /// The whole collection is re-encoded and compressed, which takes long enough on a
+    /// big collection to stall the async worker it runs on, and with it any task parked
+    /// on that worker (the accept loop included: logins timed out while one worker
+    /// compressed and the rest sat idle). On the multi-thread runtime
+    /// the worker hands its queue to another thread first.
     pub fn flush_collection(&self, collection_name: &str) {
+        let multi_thread = tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false);
+        if multi_thread {
+            tokio::task::block_in_place(|| self.flush_collection_now(collection_name));
+        } else {
+            self.flush_collection_now(collection_name);
+        }
+    }
+
+    /// Persist the current state of `ids` in `collection` after a mutation: log
+    /// each document's post-image (or its deletion) when there is a redo log,
+    /// otherwise rewrite the collection file.
+    pub fn persist_docs(&self, collection: &str, ids: &[aegis_document::DocumentId]) {
+        let Some(ref log) = self.oplog else {
+            self.flush_collection(collection);
+            return;
+        };
+        let _ordered = self.doc_log.lock();
+        for id in ids {
+            let op = match self.document_engine.get(collection, id) {
+                Ok(Some(doc)) => crate::oplog::Op::DocPut {
+                    collection: collection.to_string(),
+                    doc_json: document_to_json(&doc).to_string(),
+                },
+                _ => crate::oplog::Op::DocDelete {
+                    collection: collection.to_string(),
+                    id: id.to_string(),
+                },
+            };
+            log.log(&op);
+        }
+    }
+
+    /// Persist a newly created (possibly empty) collection.
+    pub fn persist_collection_create(&self, name: &str) {
+        match self.oplog {
+            Some(ref log) => {
+                let _ordered = self.doc_log.lock();
+                log.log(&crate::oplog::Op::CollectionCreate {
+                    name: name.to_string(),
+                });
+            }
+            None => self.flush_collection(name),
+        }
+    }
+
+    /// Persist a dropped collection: its at-rest file is removed so it does not
+    /// come back on the next start.
+    pub fn persist_collection_drop(&self, name: &str) {
+        if let Some(ref log) = self.oplog {
+            let _ordered = self.doc_log.lock();
+            log.log(&crate::oplog::Op::CollectionDrop {
+                name: name.to_string(),
+            });
+        }
+        if let Some(ref dir) = self.data_dir {
+            let Some(path) = data_file_path(&dir.join("documents"), name) else {
+                return;
+            };
+            match std::fs::remove_file(&path) {
+                Ok(()) => crate::oplog::sync_dir(&dir.join("documents")),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::error!("Failed to remove dropped collection {:?}: {}", path, e),
+            }
+        }
+    }
+
+    /// Write timeseries points and log them, as one step with respect to checkpoints
+    /// (appending a point twice would duplicate it, so the checkpoint must hold
+    /// exactly the logged points before its cut).
+    pub fn write_points(
+        &self,
+        metric: &str,
+        tags: aegis_timeseries::types::Tags,
+        points: Vec<aegis_timeseries::types::DataPoint>,
+    ) -> Result<(), aegis_timeseries::engine::EngineError> {
+        let Some(ref log) = self.oplog else {
+            return self.timeseries_engine.write_batch(metric, tags, points);
+        };
+        log.record(|| {
+            let op = crate::oplog::Op::TsWrite {
+                metric: metric.to_string(),
+                tags: tags.0.clone(),
+                points: points
+                    .iter()
+                    .map(|p| (p.timestamp.timestamp_nanos_opt().unwrap_or(0), p.value))
+                    .collect(),
+            };
+            match self.timeseries_engine.write_batch(metric, tags, points) {
+                Ok(()) => (Ok(()), vec![op]),
+                Err(e) => (Err(e), Vec::new()),
+            }
+        })
+    }
+
+    fn flush_collection_now(&self, collection_name: &str) {
         let Some(ref dir) = self.data_dir else { return };
         let docs_dir = dir.join("documents");
         if let Err(e) = std::fs::create_dir_all(&docs_dir) {
@@ -593,11 +767,13 @@ impl AppState {
         if let Ok(result) = self.document_engine.find(collection_name, &query) {
             let docs: Vec<serde_json::Value> =
                 result.documents.iter().map(document_to_json).collect();
-            let path = docs_dir.join(format!("{}.json", collection_name));
+            let Some(path) = data_file_path(&docs_dir, collection_name) else {
+                return;
+            };
             // Stored compressed-at-rest as a NexusCompress frame when that beats
             // raw JSON; the loader reads either form transparently.
             let (bytes, _) = encode_docs(&docs);
-            if let Err(e) = std::fs::write(&path, bytes) {
+            if let Err(e) = crate::oplog::write_atomic(&path, bytes) {
                 tracing::error!("Failed to write collection '{}': {}", collection_name, e);
             }
         }
@@ -626,8 +802,8 @@ impl AppState {
         let docs: Vec<serde_json::Value> = result.documents.iter().map(document_to_json).collect();
         let (bytes, uncompressed) = encode_docs(&docs);
         let stored = bytes.len() as u64;
-        let path = docs_dir.join(format!("{}.json", collection_name));
-        if let Err(e) = std::fs::write(&path, bytes) {
+        let path = data_file_path(&docs_dir, collection_name)?;
+        if let Err(e) = crate::oplog::write_atomic(&path, bytes) {
             tracing::error!("Failed to write collection '{}': {}", collection_name, e);
             return None;
         }
@@ -639,13 +815,27 @@ impl AppState {
         let Some(ref dir) = self.data_dir else {
             return Ok(());
         };
+        // One checkpoint at a time: an older one finishing after a newer one would
+        // overwrite newer state whose log generations were already retired.
+        let _one_at_a_time = self.checkpoint.lock();
 
-        // KV and documents already flush per-mutation, so periodic save
-        // uses compact JSON as a consistency checkpoint
+        // Cut the redo log first, copying the timeseries inside the cut (its points
+        // are not idempotent to replay, so the copy must hold exactly the records
+        // before the cut). KV and documents are copied after it; their records are
+        // post-images, so one in both the copy and the new generation replays
+        // harmlessly. The generations before the cut go once everything is on disk.
+        let (covered, ts_state) = match self.oplog {
+            Some(ref log) => {
+                let (covered, state) = log.cut(|| self.timeseries_engine.capture())?;
+                (Some(covered), state)
+            }
+            None => (None, self.timeseries_engine.capture()),
+        };
+
         let kv_path = dir.join("kv_store.json");
         let entries = self.kv_store.list(None, usize::MAX);
         let json = serde_json::to_vec(&entries)?;
-        std::fs::write(&kv_path, crate::compress::encode_blob(&json))?;
+        crate::oplog::write_atomic(&kv_path, crate::compress::encode_blob(&json))?;
 
         // Vector + full-text + geo + columnar + object snapshots (rebuilt on load).
         self.flush_vectors();
@@ -663,26 +853,36 @@ impl AppState {
             if let Ok(result) = self.document_engine.find(&collection_name, &query) {
                 let docs: Vec<serde_json::Value> =
                     result.documents.iter().map(document_to_json).collect();
-                let path = docs_dir.join(format!("{}.json", collection_name));
+                let Some(path) = data_file_path(&docs_dir, &collection_name) else {
+                    continue;
+                };
                 // Compressed-at-rest as a NexusCompress frame when smaller than
                 // raw JSON; loader reads either form transparently.
                 let (bytes, _) = encode_docs(&docs);
-                std::fs::write(&path, bytes)?;
+                crate::oplog::write_atomic(&path, bytes)?;
             }
         }
 
         // SQL tables — flush all contexts
         self.query_engine.flush();
 
-        // Flush timeseries data
-        self.timeseries_engine.flush();
-        tracing::debug!("Flushed timeseries data to disk");
+        // Timeseries copy taken at the cut
+        if let Some(ref state) = ts_state {
+            self.timeseries_engine
+                .save_captured(state)
+                .map_err(std::io::Error::other)?;
+            tracing::debug!("Flushed timeseries data to disk");
+        }
 
         // Flush audit logs
         if let Err(e) = self.activity.flush() {
             tracing::error!("Failed to flush audit logs: {}", e);
         }
         tracing::debug!("Flushed audit logs to disk");
+
+        if let (Some(ref log), Some(covered)) = (&self.oplog, covered) {
+            log.retire(covered)?;
+        }
 
         Ok(())
     }
@@ -710,7 +910,11 @@ impl AppState {
         // Extract table name and change type from SQL
         let sql_trimmed = sql.trim();
         let (change_type, table_name) = if sql_trimmed.len() > 6 {
-            let upper = sql_trimmed[..12.min(sql_trimmed.len())].to_uppercase();
+            let upper: String = sql_trimmed
+                .chars()
+                .take(12)
+                .collect::<String>()
+                .to_uppercase();
             if upper.starts_with("INSERT") {
                 (ChangeType::Insert, extract_table_after(sql_trimmed, "INTO"))
             } else if upper.starts_with("UPDATE") {
@@ -928,6 +1132,9 @@ pub struct DatabaseStats {
 pub struct KvStore {
     data: SyncRwLock<HashMap<String, KvEntry>>,
     data_dir: Option<PathBuf>,
+    /// Redo log; when present each mutation is logged instead of rewriting the
+    /// whole store file, and the periodic checkpoint writes the file.
+    oplog: Option<Arc<crate::oplog::OpLog>>,
 }
 
 /// Key-value entry with metadata.
@@ -957,6 +1164,13 @@ impl KvStore {
     }
 
     pub fn with_data_dir(data_dir: Option<PathBuf>) -> Self {
+        Self::with_data_dir_and_log(data_dir, None)
+    }
+
+    pub fn with_data_dir_and_log(
+        data_dir: Option<PathBuf>,
+        oplog: Option<Arc<crate::oplog::OpLog>>,
+    ) -> Self {
         let mut entries = HashMap::new();
 
         if let Some(ref dir) = data_dir {
@@ -976,6 +1190,55 @@ impl KvStore {
         Self {
             data: SyncRwLock::new(entries),
             data_dir,
+            oplog,
+        }
+    }
+
+    /// Log a mutation; called with the store's write lock held so the log order is
+    /// the apply order.
+    fn log(&self, op: crate::oplog::Op) {
+        if let Some(ref log) = self.oplog {
+            log.log(&op);
+        }
+    }
+
+    fn put_op(entry: &KvEntry) -> crate::oplog::Op {
+        crate::oplog::Op::KvPut {
+            key: entry.key.clone(),
+            value_json: entry.value.to_string(),
+            ttl: entry.ttl,
+            created_ns: entry.created_at.timestamp_nanos_opt().unwrap_or(0),
+            updated_ns: entry.updated_at.timestamp_nanos_opt().unwrap_or(0),
+        }
+    }
+
+    /// Re-apply a logged KV record during recovery (not logged again).
+    pub fn replay(&self, op: &crate::oplog::Op) {
+        let mut data = self.data.write();
+        match op {
+            crate::oplog::Op::KvPut {
+                key,
+                value_json,
+                ttl,
+                created_ns,
+                updated_ns,
+            } => {
+                let value = serde_json::from_str(value_json).unwrap_or(serde_json::Value::Null);
+                data.insert(
+                    key.clone(),
+                    KvEntry {
+                        key: key.clone(),
+                        value,
+                        ttl: *ttl,
+                        created_at: chrono::DateTime::from_timestamp_nanos(*created_ns),
+                        updated_at: chrono::DateTime::from_timestamp_nanos(*updated_ns),
+                    },
+                );
+            }
+            crate::oplog::Op::KvDelete { key } => {
+                data.remove(key);
+            }
+            _ => {}
         }
     }
 
@@ -987,7 +1250,9 @@ impl KvStore {
             let entries: Vec<&KvEntry> = data.values().collect();
             match serde_json::to_vec(&entries) {
                 Ok(json) => {
-                    if let Err(e) = std::fs::write(&kv_path, crate::compress::encode_blob(&json)) {
+                    if let Err(e) =
+                        crate::oplog::write_atomic(&kv_path, crate::compress::encode_blob(&json))
+                    {
                         tracing::error!("Failed to flush KV store to {:?}: {}", kv_path, e);
                     }
                 }
@@ -1022,8 +1287,12 @@ impl KvStore {
         };
 
         data.insert(key, entry.clone());
-        drop(data);
-        self.flush_to_disk();
+        if self.oplog.is_some() {
+            self.log(Self::put_op(&entry));
+        } else {
+            drop(data);
+            self.flush_to_disk();
+        }
         entry
     }
 
@@ -1043,8 +1312,12 @@ impl KvStore {
         let mut data = self.data.write();
         if data.get(key).is_some_and(|e| e.is_expired_at(now)) {
             data.remove(key);
-            drop(data);
-            self.flush_to_disk();
+            // An expired entry is also expired when replayed (its write time is
+            // logged), so with a redo log there is nothing to record.
+            if self.oplog.is_none() {
+                drop(data);
+                self.flush_to_disk();
+            }
         }
         None
     }
@@ -1053,9 +1326,15 @@ impl KvStore {
     pub fn delete(&self, key: &str) -> Option<KvEntry> {
         let mut data = self.data.write();
         let removed = data.remove(key);
-        drop(data);
         if removed.is_some() {
-            self.flush_to_disk();
+            if self.oplog.is_some() {
+                self.log(crate::oplog::Op::KvDelete {
+                    key: key.to_string(),
+                });
+            } else {
+                drop(data);
+                self.flush_to_disk();
+            }
         }
         removed
     }
@@ -1176,7 +1455,8 @@ impl GraphStore {
             };
             match serde_json::to_vec(&snapshot) {
                 Ok(json) => {
-                    if let Err(e) = std::fs::write(&graph_path, crate::compress::encode_blob(&json))
+                    if let Err(e) =
+                        crate::oplog::write_atomic(&graph_path, crate::compress::encode_blob(&json))
                     {
                         tracing::error!("Failed to flush graph store to {:?}: {}", graph_path, e);
                     }
@@ -1355,6 +1635,21 @@ struct PreparedStatement {
     plan: aegis_query::QueryPlan,
     database: String,
     is_mutation: bool,
+    /// False if the statement changes data or schema (from the parsed AST).
+    read_only: bool,
+    /// Username that prepared it; only that user (or an Admin) may use it.
+    owner: Option<String>,
+}
+
+/// Most prepared statements held at once; further prepares are refused until
+/// some are deallocated.
+pub const MAX_PREPARED_STATEMENTS: usize = 10_000;
+
+/// Who prepared a statement and whether it only reads.
+#[derive(Debug, Clone)]
+pub struct PreparedAccess {
+    pub owner: Option<String>,
+    pub read_only: bool,
 }
 
 /// Query engine for executing SQL statements.
@@ -1492,12 +1787,19 @@ impl QueryEngine {
 
     /// Set peer addresses for mutation replication.
     pub fn set_peers(&self, peers: Vec<String>) {
-        *self.peers.write().unwrap() = peers;
+        *self
+            .peers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = peers;
     }
 
     /// Asynchronously replicate a SQL mutation to all peer nodes.
     fn replicate_to_peers(&self, sql: &str, database: &str) {
-        let peers = self.peers.read().unwrap().clone();
+        let peers = self
+            .peers
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         if peers.is_empty() {
             return;
         }
@@ -1539,7 +1841,7 @@ impl QueryEngine {
                             tracing::debug!(
                                 "Replicated to {}: {}",
                                 peer,
-                                &sql[..sql.len().min(80)]
+                                prefix_at_char_boundary(&sql, 80)
                             );
                             success = true;
                             break;
@@ -1616,14 +1918,20 @@ impl QueryEngine {
 
         // Try to get existing context
         {
-            let contexts = self.contexts.read().unwrap();
+            let contexts = self
+                .contexts
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(ctx) = contexts.get(db_name) {
                 return ctx.clone();
             }
         }
 
         // Create new context for this database
-        let mut contexts = self.contexts.write().unwrap();
+        let mut contexts = self
+            .contexts
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Double-check after acquiring write lock
         if let Some(ctx) = contexts.get(db_name) {
             return ctx.clone();
@@ -1643,7 +1951,9 @@ impl QueryEngine {
             } else {
                 database
             };
-            let path = base_path.join(format!("{}.json", db_name));
+            let Some(path) = data_file_path(base_path, db_name) else {
+                return;
+            };
 
             // Write to WAL before persisting snapshot (write-ahead guarantee)
             if let Some(ref wal) = self.wal {
@@ -1664,7 +1974,10 @@ impl QueryEngine {
                 }
             }
 
-            let contexts = self.contexts.read().unwrap();
+            let contexts = self
+                .contexts
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(ctx) = contexts.get(db_name) {
                 if let Ok(ctx_guard) = ctx.read() {
                     if let Err(e) =
@@ -1743,7 +2056,7 @@ impl QueryEngine {
     /// On ROLLBACK (explicit or on error inside a transaction), all
     /// changes since BEGIN are undone.
     pub fn execute(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
-        let db_name = database.unwrap_or("default");
+        let db_name = resolve_database_name(database)?;
 
         let statements = self
             .parser
@@ -1911,7 +2224,7 @@ impl QueryEngine {
             return self.execute(sql, database);
         }
 
-        let db_name = database.unwrap_or("default");
+        let db_name = resolve_database_name(database)?;
 
         let statements = self
             .parser
@@ -1963,7 +2276,17 @@ impl QueryEngine {
     /// Note: prepared-statement mutations are persisted locally but are **not**
     /// peer-replicated — use the regular query path for replicated writes.
     pub fn prepare(&self, sql: &str, database: Option<&str>) -> Result<String, QueryError> {
-        let db_name = database.unwrap_or("default").to_string();
+        self.prepare_owned(sql, database, None)
+    }
+
+    /// [`Self::prepare`] recording the preparing user as the statement's owner.
+    pub fn prepare_owned(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        owner: Option<&str>,
+    ) -> Result<String, QueryError> {
+        let db_name = resolve_database_name(database)?.to_string();
         let statements = self
             .parser
             .parse(sql)
@@ -1976,19 +2299,50 @@ impl QueryEngine {
             .plan(statement)
             .map_err(|e| QueryError::Plan(e.to_string()))?;
         let is_mutation = Self::is_mutation(sql);
+        let read_only = !Self::is_mutation_stmt(statement);
         let id = format!(
             "stmt_{}",
             self.prepared_counter.fetch_add(1, Ordering::SeqCst)
         );
-        self.prepared.write().unwrap().insert(
+        let mut prepared = self
+            .prepared
+            .write()
+            .map_err(|_| QueryError::Execute("prepared statement table unavailable".into()))?;
+        if prepared.len() >= MAX_PREPARED_STATEMENTS {
+            return Err(QueryError::Plan(format!(
+                "too many prepared statements (limit {MAX_PREPARED_STATEMENTS}); deallocate some"
+            )));
+        }
+        prepared.insert(
             id.clone(),
             PreparedStatement {
                 plan,
                 database: db_name,
                 is_mutation,
+                read_only,
+                owner: owner.map(str::to_string),
             },
         );
         Ok(id)
+    }
+
+    /// Owner and read-only flag of a prepared statement, if it exists.
+    pub fn prepared_access(&self, id: &str) -> Option<PreparedAccess> {
+        let map = self.prepared.read().ok()?;
+        map.get(id).map(|p| PreparedAccess {
+            owner: p.owner.clone(),
+            read_only: p.read_only,
+        })
+    }
+
+    /// True if every statement in `sql` only reads (SELECT, set operations,
+    /// transaction control). Parse errors are returned as errors.
+    pub fn is_read_only_sql(&self, sql: &str) -> Result<bool, QueryError> {
+        let statements = self
+            .parser
+            .parse(sql)
+            .map_err(|e| QueryError::Parse(e.to_string()))?;
+        Ok(statements.iter().all(|s| !Self::is_mutation_stmt(s)))
     }
 
     /// Execute a previously prepared statement with bound parameters.
@@ -1998,7 +2352,10 @@ impl QueryEngine {
         params: &[serde_json::Value],
     ) -> Result<QueryResult, QueryError> {
         let (plan, db_name, is_mutation) = {
-            let map = self.prepared.read().unwrap();
+            let map = self
+                .prepared
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let prepared = map.get(id).ok_or_else(|| {
                 QueryError::Execute(format!("unknown prepared statement '{}'", id))
             })?;
@@ -2033,7 +2390,11 @@ impl QueryEngine {
 
     /// Deallocate a prepared statement. Returns true if it existed.
     pub fn deallocate(&self, id: &str) -> bool {
-        self.prepared.write().unwrap().remove(id).is_some()
+        self.prepared
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id)
+            .is_some()
     }
 
     /// Number of currently prepared statements.
@@ -2043,7 +2404,10 @@ impl QueryEngine {
 
     pub fn list_tables(&self, database: Option<&str>) -> Vec<String> {
         let db_name = database.unwrap_or("default");
-        let contexts = self.contexts.read().unwrap();
+        let contexts = self
+            .contexts
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         contexts
             .get(db_name)
             .and_then(|ctx| ctx.read().ok())
@@ -2087,9 +2451,14 @@ impl QueryEngine {
     /// Force persist all databases to disk (for graceful shutdown).
     pub fn flush(&self) {
         if let Some(ref base_path) = self.data_path {
-            let contexts = self.contexts.read().unwrap();
+            let contexts = self
+                .contexts
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for (db_name, ctx) in contexts.iter() {
-                let path = base_path.join(format!("{}.json", db_name));
+                let Some(path) = data_file_path(base_path, db_name) else {
+                    continue;
+                };
                 if let Ok(ctx_guard) = ctx.read() {
                     if let Err(e) =
                         crate::compress::write_blob_json(&path, &ctx_guard.to_snapshot())
@@ -2162,10 +2531,22 @@ fn json_param_to_value(json: &serde_json::Value) -> aegis_common::Value {
 }
 
 /// Extract the table name following a keyword in SQL (e.g., "INTO" in INSERT INTO).
+/// At most `max_bytes` of `s`, cut back to a char boundary (byte slicing in
+/// the middle of a multi-byte character panics).
+fn prefix_at_char_boundary(s: &str, max_bytes: usize) -> &str {
+    let mut end = s.len().min(max_bytes);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 fn extract_table_after(sql: &str, keyword: &str) -> String {
-    let upper = sql.to_uppercase();
+    // ASCII uppercasing keeps every byte offset valid in `sql` (full Unicode
+    // uppercasing can change lengths, e.g. 'ß' -> "SS").
+    let upper = sql.to_ascii_uppercase();
     if let Some(pos) = upper.find(keyword) {
-        let after = &sql[pos + keyword.len()..].trim_start();
+        let after = sql.get(pos + keyword.len()..).unwrap_or("").trim_start();
         after
             .split(|c: char| c.is_whitespace() || c == '(')
             .next()
@@ -2365,9 +2746,159 @@ fn doc_value_to_json(value: &aegis_document::Value) -> serde_json::Value {
 // Tests
 // =============================================================================
 
+/// Background `fsync` of the redo log every `every`; the thread ends when the log
+/// is dropped.
+fn spawn_oplog_sync(log: &Arc<crate::oplog::OpLog>, every: std::time::Duration) {
+    let weak = Arc::downgrade(log);
+    let spawned = std::thread::Builder::new()
+        .name("aegis-oplog-sync".into())
+        .spawn(move || loop {
+            std::thread::sleep(every);
+            let Some(log) = weak.upgrade() else { return };
+            if let Err(e) = log.sync() {
+                tracing::error!("Redo log fsync failed: {}", e);
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::error!("Failed to start the redo log sync thread: {}", e);
+    }
+}
+
+/// The database a request targets: `default` when absent or empty, otherwise a
+/// name that passes the shared naming rule (it becomes `databases/<name>.json`).
+fn resolve_database_name(database: Option<&str>) -> Result<&str, QueryError> {
+    match database {
+        None | Some("") => Ok("default"),
+        Some(name) => aegis_common::names::validate_name(name)
+            .map(|()| name)
+            .map_err(|e| QueryError::Parse(format!("invalid database name: {e}"))),
+    }
+}
+
+/// `dir/<name>.json`, or `None` (logged) if `name` could escape `dir`.
+fn data_file_path(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    match aegis_common::names::contained_path(dir, name, ".json") {
+        Ok(path) => Some(path),
+        Err(e) => {
+            tracing::error!("Refusing data file path for {:?}: {}", name, e);
+            None
+        }
+    }
+}
+
+/// Re-apply logged records on top of the loaded checkpoint, in log order. Returns
+/// the number applied.
+fn replay_ops(
+    ops: &[crate::oplog::Op],
+    kv_store: &KvStore,
+    document_engine: &DocumentEngine,
+    timeseries_engine: &TimeSeriesEngine,
+) -> usize {
+    use crate::oplog::Op;
+    let mut applied = 0;
+    for op in ops {
+        match op {
+            Op::KvPut { .. } | Op::KvDelete { .. } => kv_store.replay(op),
+            Op::DocPut {
+                collection,
+                doc_json,
+            } => {
+                let Ok(json) = serde_json::from_str::<serde_json::Value>(doc_json) else {
+                    continue;
+                };
+                let doc = json_to_document(json);
+                let id = doc.id.clone();
+                document_engine.restore_collection(collection.as_str());
+                let exists = matches!(document_engine.get(collection, &id), Ok(Some(_)));
+                let result = if exists {
+                    document_engine.update(collection, &id, doc)
+                } else {
+                    document_engine.insert(collection, doc).map(|_| ())
+                };
+                if let Err(e) = result {
+                    tracing::warn!(
+                        "Redo log: document {}/{} not replayed: {}",
+                        collection,
+                        id,
+                        e
+                    );
+                    continue;
+                }
+            }
+            Op::DocDelete { collection, id } => {
+                let _ = document_engine.delete(collection, &aegis_document::DocumentId::new(id));
+            }
+            Op::CollectionCreate { name } => {
+                document_engine.restore_collection(name.as_str());
+            }
+            Op::CollectionDrop { name } => {
+                let _ = document_engine.drop_collection(name);
+            }
+            Op::TsWrite {
+                metric,
+                tags,
+                points,
+            } => {
+                let points = points
+                    .iter()
+                    .map(|(ns, v)| aegis_timeseries::types::DataPoint {
+                        timestamp: chrono::DateTime::from_timestamp_nanos(*ns),
+                        value: *v,
+                    })
+                    .collect();
+                if let Err(e) = timeseries_engine.write_batch(
+                    metric,
+                    aegis_timeseries::types::Tags(tags.clone()),
+                    points,
+                ) {
+                    tracing::warn!("Redo log: points for '{}' not replayed: {}", metric, e);
+                    continue;
+                }
+            }
+        }
+        applied += 1;
+    }
+    applied
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sql_text_helpers_respect_char_boundaries() {
+        let sql = format!("INSERT INTO t VALUES ('{}')", "\u{00e9}".repeat(60));
+        for n in 0..sql.len() + 2 {
+            let p = prefix_at_char_boundary(&sql, n);
+            assert!(p.len() <= n && sql.starts_with(p));
+        }
+        assert_eq!(
+            extract_table_after("insert into stra\u{df}e (a)", "INTO"),
+            "stra\u{df}e"
+        );
+        assert_eq!(extract_table_after("\u{df}\u{df} UPDATE t", "UPDATE"), "t");
+        assert_eq!(extract_table_after("SELECT 1", "INTO"), "unknown");
+    }
+
+    #[test]
+    fn test_database_names_cannot_escape_the_data_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let eng = QueryEngine::with_persistence(dir.path());
+        for bad in ["../escape", "a/b", "..", "/abs"] {
+            assert!(
+                matches!(
+                    eng.execute("CREATE TABLE t (id INT)", Some(bad)),
+                    Err(QueryError::Parse(_))
+                ),
+                "{bad}"
+            );
+            assert!(eng.prepare("SELECT 1", Some(bad)).is_err());
+        }
+        eng.execute("CREATE TABLE t (id INT)", Some("site_1"))
+            .unwrap();
+        eng.execute("CREATE TABLE t (id INT)", Some("")).unwrap();
+        assert!(!dir.path().join("escape.json").exists());
+    }
 
     #[test]
     fn test_prepared_statements() {

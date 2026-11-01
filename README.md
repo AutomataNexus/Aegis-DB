@@ -472,7 +472,6 @@ aegis-server (REST API - Axum)
     └── aegis-monitoring (metrics, health)
         |
         ├── aegis-storage (backends, WAL, MVCC)
-        ├── aegis-memory (arena allocators, buffer pool)
         └── aegis-common (shared types, errors)
 ```
 

@@ -6,18 +6,19 @@
 //! @version 0.1.0
 //! @author AutomataNexus Development Team
 
+use crate::auth::UserRole;
 use crate::state::AppState;
 use axum::{
     body::Body,
-    extract::{ConnectInfo, State},
-    http::{HeaderValue, Request, Response, StatusCode},
+    extract::{ConnectInfo, OriginalUri, State},
+    http::{HeaderValue, Method, Request, Response, StatusCode},
     middleware::Next,
     response::IntoResponse,
     Json,
 };
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -25,6 +26,9 @@ use uuid::Uuid;
 // =============================================================================
 // Rate Limiter
 // =============================================================================
+
+/// Above this many tracked clients, `check` prunes idle entries inline.
+const MAX_RATE_LIMIT_ENTRIES: usize = 100_000;
 
 /// Token bucket rate limiter entry for a single client.
 #[derive(Debug, Clone)]
@@ -56,6 +60,12 @@ impl RateLimiter {
     pub fn check(&self, key: &str) -> bool {
         let mut entries = self.entries.write();
         let now = Instant::now();
+
+        // Bound memory even if the periodic cleanup falls behind.
+        if entries.len() >= MAX_RATE_LIMIT_ENTRIES && !entries.contains_key(key) {
+            let max_age = Duration::from_secs(self.window_secs * 2);
+            entries.retain(|_, e| now.duration_since(e.last_update) < max_age);
+        }
 
         let entry = entries
             .entry(key.to_string())
@@ -127,19 +137,11 @@ pub async fn request_id(mut request: Request<Body>, next: Next) -> Response<Body
 /// Analyzes requests for threats and blocks malicious traffic.
 pub async fn shield_check(
     State(state): State<AppState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
-    let source_ip = request
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("127.0.0.1")
-        .split(',')
-        .next()
-        .unwrap_or("127.0.0.1")
-        .trim()
-        .to_string();
+    let source_ip = get_client_ip(&request, &state.config.trusted_proxies);
+    request.extensions_mut().insert(ClientIp(source_ip.clone()));
 
     let ctx = aegis_shield::RequestContext {
         source_ip: source_ip.clone(),
@@ -190,6 +192,117 @@ pub async fn shield_check(
 // Authentication Middleware
 // =============================================================================
 
+/// The authenticated caller, inserted into request extensions by
+/// [`require_auth`] / [`require_admin`]. Handlers that run statements whose
+/// effect depends on their text (SQL) read it to keep viewers read-only.
+#[derive(Debug, Clone)]
+pub struct AuthContext {
+    pub username: String,
+    pub role: UserRole,
+}
+
+impl AuthContext {
+    /// True for the read-only role.
+    pub fn is_viewer(&self) -> bool {
+        matches!(self.role, UserRole::Viewer)
+    }
+}
+
+/// True for a caller limited to read-only statements. `None` means the route
+/// ran without a session (un-bootstrapped server with AEGIS_OPEN_BOOTSTRAP, or
+/// a test harness), which is already fully open.
+pub fn is_read_only_caller(ctx: Option<&AuthContext>) -> bool {
+    ctx.is_some_and(AuthContext::is_viewer)
+}
+
+fn role_rank(role: UserRole) -> u8 {
+    match role {
+        UserRole::Viewer => 0,
+        UserRole::Operator => 1,
+        UserRole::Admin => 2,
+    }
+}
+
+/// True if `have` is at least `needed` (Viewer < Operator < Admin).
+pub fn role_satisfies(have: UserRole, needed: UserRole) -> bool {
+    role_rank(have) >= role_rank(needed)
+}
+
+/// Full request path, including any `nest` prefix.
+fn request_path(request: &Request<Body>) -> String {
+    request
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|u| u.0.path().to_string())
+        .unwrap_or_else(|| request.uri().path().to_string())
+}
+
+/// POST routes that only read. Viewers may call them; the SQL routes among
+/// them additionally refuse non-SELECT statements for viewers in the handler.
+fn is_read_only_post(path: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "/api/v1/query",
+        "/api/v1/prepare",
+        "/api/v1/prepared/execute",
+        "/api/v1/query-builder/execute",
+        "/api/v1/admin/metrics/timeseries",
+        "/api/v1/kv/batch/get",
+        "/api/v1/timeseries/query",
+    ];
+    if EXACT.contains(&path) {
+        return true;
+    }
+    let segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    // /api/v1/<area>/<container-kind>/<name>/<action>
+    matches!(
+        segs.as_slice(),
+        ["api", "v1", "documents", "collections", _, "query"]
+            | ["api", "v1", "vector", "collections", _, "search"]
+            | ["api", "v1", "fts", "indexes", _, "search"]
+            | [
+                "api",
+                "v1",
+                "geo",
+                "collections",
+                _,
+                "radius" | "bbox" | "nearest"
+            ]
+            | ["api", "v1", "columnar", "tables", _, "scan" | "aggregate"]
+            | ["api", "v1", "widecolumn", "tables", _, "scan"]
+    )
+}
+
+/// GET routes that expose account or backup data and need Admin.
+fn is_admin_only_get(path: &str) -> bool {
+    let segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    matches!(
+        segs.as_slice(),
+        ["api", "v1", "admin", "users" | "roles" | "backups"]
+            | ["api", "v1", "admin", "nodes", _, "logs"]
+    )
+}
+
+/// The least role a request needs on a [`require_auth`] route:
+/// reads need Viewer, writes need Operator, account/backup views need Admin.
+/// Routes that always need Admin sit behind [`require_admin`] instead.
+pub fn required_role(method: &Method, path: &str) -> UserRole {
+    let safe = matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
+    if safe {
+        if is_admin_only_get(path) {
+            UserRole::Admin
+        } else {
+            UserRole::Viewer
+        }
+    } else if *method == Method::POST && is_read_only_post(path) {
+        UserRole::Viewer
+    } else if *method == Method::DELETE && path.starts_with("/api/v1/prepared/") {
+        // Deallocating a prepared statement only frees server memory.
+        UserRole::Viewer
+    } else {
+        UserRole::Operator
+    }
+}
+
 /// Handle a request arriving while NO users exist (un-bootstrapped server).
 ///
 /// Fail CLOSED by default: protected endpoints return 503 with provisioning
@@ -232,7 +345,7 @@ fn no_user_bootstrap_response(
 /// Returns 401 Unauthorized if no valid session token is provided.
 pub async fn require_auth(
     State(state): State<AppState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
     // Un-bootstrapped server: fail closed (or fail open if explicitly opted in).
@@ -262,10 +375,32 @@ pub async fn require_auth(
         }
     };
 
-    // Validate the session token
+    // Validate the session token, then check the role this route needs.
     match state.auth.validate_session(token) {
-        Some(_user) => {
-            // Token is valid, proceed with the request
+        Some(user) => {
+            let path = request_path(&request);
+            let needed = required_role(request.method(), &path);
+            if !role_satisfies(user.role, needed) {
+                tracing::warn!(
+                    user = %user.username,
+                    role = %user.role,
+                    needed = %needed,
+                    method = %request.method(),
+                    path = %path,
+                    "Forbidden: role does not allow this route"
+                );
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "Insufficient privileges",
+                        "message": format!("This operation requires the {needed} role")
+                    })),
+                ));
+            }
+            request.extensions_mut().insert(AuthContext {
+                username: user.username,
+                role: user.role,
+            });
             Ok(next.run(request).await)
         }
         None => Err((
@@ -290,7 +425,7 @@ pub async fn require_auth(
 /// fail closed by default, legacy fail-open only with AEGIS_OPEN_BOOTSTRAP.
 pub async fn require_admin(
     State(state): State<AppState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
     if state.auth.list_users().is_empty() {
@@ -319,6 +454,10 @@ pub async fn require_admin(
 
     match state.auth.validate_session(&token) {
         Some(user) if matches!(user.role, crate::auth::UserRole::Admin) => {
+            request.extensions_mut().insert(AuthContext {
+                username: user.username,
+                role: user.role,
+            });
             Ok(next.run(request).await)
         }
         Some(user) => {
@@ -350,36 +489,57 @@ pub async fn require_admin(
 // Rate Limiting Middleware
 // =============================================================================
 
-/// Extract client IP from request, checking X-Forwarded-For header first.
-fn get_client_ip(request: &Request<Body>) -> String {
-    // Check X-Forwarded-For header (from reverse proxies)
-    if let Some(forwarded) = request
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|h| h.to_str().ok())
-    {
-        // Take the first IP in the chain (original client)
-        if let Some(first_ip) = forwarded.split(',').next() {
-            return first_ip.trim().to_string();
+/// The client address resolved by [`shield_check`], for handlers.
+#[derive(Debug, Clone)]
+pub struct ClientIp(pub String);
+
+/// Client IP for a request: the socket address, unless that address is a
+/// trusted proxy, in which case the right-most X-Forwarded-For entry that is
+/// not itself a trusted proxy (then X-Real-IP). Header values that do not
+/// parse as an IP are ignored. Without socket information (in-process tests)
+/// the result is `unknown`, never loopback.
+pub fn get_client_ip(request: &Request<Body>, trusted_proxies: &[String]) -> String {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    resolve_client_ip(peer, request.headers(), trusted_proxies)
+}
+
+/// See [`get_client_ip`].
+pub fn resolve_client_ip(
+    peer: Option<IpAddr>,
+    headers: &axum::http::HeaderMap,
+    trusted_proxies: &[String],
+) -> String {
+    let trusted: Vec<IpAddr> = trusted_proxies
+        .iter()
+        .filter_map(|p| p.trim().parse().ok())
+        .collect();
+    let is_trusted = |ip: &IpAddr| trusted.contains(ip);
+    let Some(peer) = peer else {
+        return "unknown".to_string();
+    };
+    if !is_trusted(&peer) {
+        return peer.to_string();
+    }
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
+        let hops: Vec<IpAddr> = xff
+            .split(',')
+            .filter_map(|h| h.trim().parse().ok())
+            .collect();
+        if let Some(client) = hops.iter().rev().find(|ip| !is_trusted(ip)) {
+            return client.to_string();
         }
     }
-
-    // Check X-Real-IP header
-    if let Some(real_ip) = request
-        .headers()
+    if let Some(real) = headers
         .get("x-real-ip")
         .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.trim().parse::<IpAddr>().ok())
     {
-        return real_ip.to_string();
+        return real.to_string();
     }
-
-    // Fall back to socket address from extensions (if available via ConnectInfo)
-    if let Some(connect_info) = request.extensions().get::<ConnectInfo<SocketAddr>>() {
-        return connect_info.0.ip().to_string();
-    }
-
-    // Ultimate fallback
-    "unknown".to_string()
+    peer.to_string()
 }
 
 /// Rate limiting middleware for general API requests.
@@ -389,7 +549,7 @@ pub async fn rate_limit(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
-    let client_ip = get_client_ip(&request);
+    let client_ip = get_client_ip(&request, &state.config.trusted_proxies);
     let rate_limit = state.config.rate_limit_per_minute;
 
     // Skip rate limiting if disabled (rate_limit = 0)
@@ -419,7 +579,7 @@ pub async fn login_rate_limit(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, impl IntoResponse> {
-    let client_ip = get_client_ip(&request);
+    let client_ip = get_client_ip(&request, &state.config.trusted_proxies);
     let rate_limit = state.config.login_rate_limit_per_minute;
 
     // Skip rate limiting if disabled (rate_limit = 0)
@@ -514,6 +674,90 @@ mod tests {
 
     async fn handler() -> &'static str {
         "ok"
+    }
+
+    fn hdrs(pairs: &[(&'static str, &str)]) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(*k, v.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn test_client_ip_ignores_headers_from_untrusted_peers() {
+        let trusted = vec!["127.0.0.1".to_string(), "::1".to_string()];
+        let ext: IpAddr = "198.51.100.7".parse().unwrap();
+        let lo: IpAddr = "127.0.0.1".parse().unwrap();
+        // Untrusted peer: its forwarded headers are ignored.
+        assert_eq!(
+            resolve_client_ip(
+                Some(ext),
+                &hdrs(&[("x-forwarded-for", "127.0.0.1")]),
+                &trusted
+            ),
+            "198.51.100.7"
+        );
+        assert_eq!(
+            resolve_client_ip(Some(ext), &hdrs(&[("x-real-ip", "10.0.0.1")]), &trusted),
+            "198.51.100.7"
+        );
+        // Trusted proxy: right-most untrusted hop, not the spoofable first one.
+        assert_eq!(
+            resolve_client_ip(
+                Some(lo),
+                &hdrs(&[("x-forwarded-for", "1.1.1.1, 203.0.113.5, 127.0.0.1")]),
+                &trusted
+            ),
+            "203.0.113.5"
+        );
+        assert_eq!(
+            resolve_client_ip(Some(lo), &hdrs(&[("x-forwarded-for", "garbage")]), &trusted),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            resolve_client_ip(Some(lo), &hdrs(&[]), &trusted),
+            "127.0.0.1"
+        );
+        // No socket info: never defaults to loopback.
+        assert_eq!(resolve_client_ip(None, &hdrs(&[]), &trusted), "unknown");
+    }
+
+    /// A scanner User-Agent from the local host (no X-Forwarded-For) must not
+    /// ban loopback; before the fix this locked out every local client.
+    #[tokio::test]
+    async fn test_shield_never_bans_loopback_clients() {
+        let state = AppState::new(ServerConfig::default());
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                shield_check,
+            ))
+            .with_state(state.clone());
+        let local: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        for _ in 0..30 {
+            let mut req = Request::builder()
+                .uri("/")
+                .header("user-agent", "sqlmap/1.7")
+                .body(Body::empty())
+                .unwrap();
+            req.extensions_mut().insert(ConnectInfo(local));
+            let resp = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+        // An outside client cannot pose as loopback through X-Forwarded-For.
+        let outside: SocketAddr = "198.51.100.7:1234".parse().unwrap();
+        let mut req = Request::builder()
+            .uri("/")
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("user-agent", "sqlmap/1.7")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(outside));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_ne!(resp.status(), StatusCode::OK);
+        assert!(!state.shield.is_exempt("198.51.100.7"));
     }
 
     #[tokio::test]

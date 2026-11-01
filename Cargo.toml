@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/aegis-common",
     "crates/aegis-storage",
-    "crates/aegis-memory",
     "crates/aegis-query",
     "crates/aegis-server",
     "crates/aegis-client",
@@ -88,7 +87,7 @@ regex = "1.10"
 # Networking
 axum = "0.7"
 tower = { version = "0.4", features = ["util", "limit"] }
-tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "catch-panic"] }
 hyper = { version = "1.1", features = ["full"] }
 tonic = "0.11"
 prost = "0.12"
@@ -118,7 +117,6 @@ tempfile = "3.10"
 # Internal crates
 aegis-common = { version = "0.6.0", path = "crates/aegis-common" }
 aegis-storage = { version = "0.6.0", path = "crates/aegis-storage" }
-aegis-memory = { version = "0.6.0", path = "crates/aegis-memory" }
 aegis-query = { version = "0.6.0", path = "crates/aegis-query" }
 aegis-server = { version = "0.6.0", path = "crates/aegis-server" }
 aegis-client = { version = "0.6.0", path = "crates/aegis-client" }
@@ -143,6 +141,14 @@ aegis-ledger = { version = "0.6.0", path = "crates/aegis-ledger" }
 lto = "thin"
 codegen-units = 1
 opt-level = 3
+
+# Arithmetic overflow in the storage engines must fail loudly, never wrap into
+# silently corrupt data (a wrapped shift once zeroed Gorilla-encoded values).
+[profile.release.package.aegis-timeseries]
+overflow-checks = true
+
+[profile.release.package.aegis-server]
+overflow-checks = true
 
 [profile.bench]
 inherits = "release"

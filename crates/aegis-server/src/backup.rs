@@ -576,7 +576,7 @@ impl BackupManager {
 
     /// Get information about a specific backup.
     pub fn get_backup(&self, backup_id: &str) -> Result<BackupInfo, String> {
-        let backup_path = self.backup_dir.join(backup_id);
+        let backup_path = self.backup_path(backup_id)?;
         if !backup_path.exists() {
             return Err(format!("Backup '{}' not found", backup_id));
         }
@@ -701,7 +701,7 @@ impl BackupManager {
 
     /// Restore from a backup.
     pub fn restore_backup(&self, backup_id: &str, force: bool) -> Result<usize, String> {
-        let backup_path = self.backup_dir.join(backup_id);
+        let backup_path = self.backup_path(backup_id)?;
         if !backup_path.exists() {
             return Err(format!("Backup '{}' not found", backup_id));
         }
@@ -827,8 +827,17 @@ impl BackupManager {
     }
 
     /// Delete a backup.
+    /// `backups/<id>`, refusing any id that is not a plain name or that would
+    /// resolve outside the backup directory (`../..` used to delete the data
+    /// directory's parent).
+    fn backup_path(&self, backup_id: &str) -> Result<PathBuf, String> {
+        aegis_common::names::validate_name(backup_id)
+            .and_then(|()| aegis_common::names::contained_path(&self.backup_dir, backup_id, ""))
+            .map_err(|e| format!("Invalid backup id: {e}"))
+    }
+
     pub fn delete_backup(&self, backup_id: &str) -> Result<(), String> {
-        let backup_path = self.backup_dir.join(backup_id);
+        let backup_path = self.backup_path(backup_id)?;
         if !backup_path.exists() {
             return Err(format!("Backup '{}' not found", backup_id));
         }
@@ -1297,6 +1306,25 @@ mod tests {
 
         let restored = fs::read_to_string(data_dir.join("kv_store.json")).expect("Failed to read");
         assert_eq!(restored, test_data);
+    }
+
+    #[test]
+    fn test_backup_ids_cannot_escape_backup_dir() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let data_dir = temp_dir.path().join("data");
+        fs::create_dir_all(data_dir.join("backups")).expect("mkdir");
+        let outside = temp_dir.path().join("keep");
+        fs::create_dir_all(&outside).expect("mkdir");
+        fs::write(outside.join("metadata.json"), "{}").expect("write");
+        let manager = BackupManager::new(data_dir.clone());
+
+        for id in ["..", "../keep", "../../", "a/b", ".", ""] {
+            assert!(manager.delete_backup(id).is_err(), "{id}");
+            assert!(manager.restore_backup(id, true).is_err(), "{id}");
+            assert!(manager.get_backup(id).is_err(), "{id}");
+        }
+        assert!(outside.join("metadata.json").exists());
+        assert!(data_dir.exists());
     }
 
     #[test]

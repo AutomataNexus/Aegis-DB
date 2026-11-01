@@ -21,6 +21,7 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Router,
 };
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -158,12 +159,11 @@ pub fn create_router(state: AppState) -> Router {
 
     let admin_routes = admin_read_routes.merge(admin_write_routes);
 
-    // Cluster peer management routes. Inter-node join/heartbeat and read views
-    // keep require_auth; shutting the node down requires the Admin role.
+    // Cluster peer management routes. Read views need any session. Join and
+    // heartbeat register an address this node will then send requests to, so
+    // they need the Admin role (as does shutting the node down).
     let cluster_routes = Router::new()
         .route("/info", get(handlers::get_node_info))
-        .route("/join", post(handlers::cluster_join))
-        .route("/heartbeat", post(handlers::cluster_heartbeat))
         .route("/peers", get(handlers::get_peers))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -171,6 +171,8 @@ pub fn create_router(state: AppState) -> Router {
         ))
         .merge(
             Router::new()
+                .route("/join", post(handlers::cluster_join))
+                .route("/heartbeat", post(handlers::cluster_heartbeat))
                 .route("/shutdown", post(handlers::cluster_shutdown))
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
@@ -212,7 +214,6 @@ pub fn create_router(state: AppState) -> Router {
     let doc_routes = Router::new()
         .route("/collections", get(handlers::list_collections))
         .route("/collections", post(handlers::create_collection))
-        .route("/collections/:name", delete(handlers::delete_collection))
         .route(
             "/collections/:name/batch-insert",
             post(handlers::bulk_insert_documents),
@@ -257,6 +258,15 @@ pub fn create_router(state: AppState) -> Router {
             state.clone(),
             middleware::require_auth,
         ));
+    // Dropping a whole collection is destructive: admin only.
+    let doc_routes = doc_routes.merge(
+        Router::new()
+            .route("/collections/:name", delete(handlers::delete_collection))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::require_admin,
+            )),
+    );
 
     // Time series routes (require auth)
     let timeseries_routes = Router::new()
@@ -716,6 +726,9 @@ pub fn create_router(state: AppState) -> Router {
         .layer(tower::limit::ConcurrencyLimitLayer::new(
             state.config.max_connections,
         ))
+        // A panic in a handler becomes a 500 for that request instead of
+        // tearing down the connection task.
+        .layer(CatchPanicLayer::custom(panic_response))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
@@ -728,6 +741,21 @@ pub fn create_router(state: AppState) -> Router {
         ))
         .layer(axum::middleware::from_fn(middleware::request_id))
         .with_state(state)
+}
+
+/// Response for a request whose handler panicked. The panic message is logged,
+/// never returned.
+fn panic_response(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let detail = err
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| err.downcast_ref::<&str>().copied())
+        .unwrap_or("unknown panic");
+    tracing::error!("Request handler panicked: {}", detail);
+    axum::response::IntoResponse::into_response((
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        axum::Json(serde_json::json!({ "error": "Internal server error" })),
+    ))
 }
 
 // =============================================================================
@@ -758,6 +786,25 @@ mod tests {
             .expect("failed to execute request");
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_handler_panic_becomes_500() {
+        async fn boom() -> &'static str {
+            panic!("table lock holder panicked")
+        }
+        let app: Router = Router::new()
+            .route("/boom", get(boom))
+            .layer(CatchPanicLayer::custom(panic_response));
+        let response = app
+            .oneshot(Request::builder().uri("/boom").body(Body::empty()).unwrap())
+            .await
+            .expect("panic must not escape the service");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&body).contains("table lock"));
     }
 
     #[tokio::test]

@@ -106,10 +106,12 @@ pub enum VectorError {
     CollectionExists(String),
     #[error("vector dimension mismatch: expected {expected}, got {got}")]
     DimensionMismatch { expected: usize, got: usize },
-    #[error("invalid dimension: must be > 0")]
+    #[error("invalid dimension: must be between 1 and 65536")]
     InvalidDimension,
     #[error("unknown metric '{0}' (use cosine, l2, or dot)")]
     UnknownMetric(String),
     #[error("vector '{0}' not found")]
     VectorNotFound(String),
+    #[error("invalid search parameter: {0}")]
+    InvalidSearchParam(String),
 }

@@ -15,6 +15,7 @@
 
 pub mod config;
 pub mod error;
+pub mod names;
 pub mod types;
 pub mod utils;
 

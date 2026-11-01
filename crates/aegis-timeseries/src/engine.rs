@@ -9,7 +9,8 @@
 use crate::aggregation::AggregateFunction;
 use crate::cold::{ColdCompactReport, ColdStore};
 use crate::compression::{
-    compress_points_nexus, decode_block, is_nexus_block, CompressedBlock, Compressor,
+    block_matches_points, compress_points_nexus, decode_block, is_nexus_block, CompressedBlock,
+    Compressor,
 };
 use crate::index::TimeSeriesIndex;
 use crate::partition::{PartitionConfig, PartitionManager};
@@ -71,6 +72,9 @@ pub struct CompressionReport {
     pub blocks_already: usize,
     pub bytes_before: u64,
     pub bytes_after: u64,
+    /// Blocks left untouched because they did not decode to their recorded
+    /// point count, or the re-encoded block did not round-trip.
+    pub blocks_skipped_damaged: usize,
 }
 
 // =============================================================================
@@ -603,7 +607,19 @@ impl TimeSeriesEngine {
             Vec::with_capacity(candidates.len());
         for (sid, old) in candidates {
             let points = decode_block(&old);
+            // A block that no longer decodes to its recorded point count is
+            // damaged; recompressing it would make the loss permanent.
+            if points.len() != old.count {
+                report.blocks_skipped_damaged += 1;
+                continue;
+            }
             if let Some(mut nb) = compress_points_nexus(&points) {
+                // Never swap in a block that does not decode back to the same
+                // points it was built from.
+                if !block_matches_points(&nb, &points) {
+                    report.blocks_skipped_damaged += 1;
+                    continue;
+                }
                 // Preserve the original bounds so range-skipping stays correct.
                 nb.first_timestamp = old.first_timestamp;
                 nb.last_timestamp = old.last_timestamp;
@@ -641,42 +657,56 @@ impl TimeSeriesEngine {
 
     /// Flush all pending writes to disk.
     pub fn flush(&self) {
-        if let Some(ref pm) = self.persistence {
-            let metrics: Vec<Metric> = {
-                let m = self.metrics.read();
-                m.values().cloned().collect()
-            };
-
-            let series: Vec<PersistedSeries> = {
-                let data = self.series_data.read();
-                data.iter()
-                    .map(|(id, buffer)| PersistedSeries {
-                        series_id: id.clone(),
-                        metric: buffer.metric.clone(),
-                        tags: buffer.tags.clone(),
-                        points: buffer.points.clone(),
-                        compressed_blocks: buffer
-                            .compressed_blocks
-                            .iter()
-                            .map(PersistedBlock::from)
-                            .collect(),
-                    })
-                    .collect()
-            };
-
-            let state = PersistedState {
-                version: 1,
-                metrics,
-                series,
-            };
-
-            if let Err(e) = pm.save(&state) {
+        if let Some(state) = self.capture() {
+            if let Err(e) = self.save_captured(&state) {
                 eprintln!("Failed to flush timeseries data: {}", e);
             }
         }
+    }
 
+    /// Copy the resident series for a checkpoint (`None` without persistence).
+    /// Writers wait while the copy is taken; [`TimeSeriesEngine::save_captured`]
+    /// then writes it without holding any engine lock.
+    pub fn capture(&self) -> Option<PersistedState> {
+        self.persistence.as_ref()?;
+        let metrics: Vec<Metric> = {
+            let m = self.metrics.read();
+            m.values().cloned().collect()
+        };
+
+        let series: Vec<PersistedSeries> = {
+            let data = self.series_data.read();
+            data.iter()
+                .map(|(id, buffer)| PersistedSeries {
+                    series_id: id.clone(),
+                    metric: buffer.metric.clone(),
+                    tags: buffer.tags.clone(),
+                    points: buffer.points.clone(),
+                    compressed_blocks: buffer
+                        .compressed_blocks
+                        .iter()
+                        .map(PersistedBlock::from)
+                        .collect(),
+                })
+                .collect()
+        };
+
+        Some(PersistedState {
+            version: 1,
+            metrics,
+            series,
+        })
+    }
+
+    /// Write a state from [`TimeSeriesEngine::capture`] to disk (atomically).
+    pub fn save_captured(&self, state: &PersistedState) -> Result<(), String> {
+        let Some(ref pm) = self.persistence else {
+            return Ok(());
+        };
+        pm.save(state).map_err(|e| e.to_string())?;
         let mut stats = self.stats.write();
         stats.last_flush = Some(Utc::now());
+        Ok(())
     }
 
     /// Age-based retention on the resident series map: drop every point/block older
@@ -848,6 +878,11 @@ impl SeriesBuffer {
         }
 
         let block = compressor.finish();
+        // Only seal the block if it decodes back to exactly the buffered
+        // points; otherwise keep them raw rather than lose them.
+        if !block_matches_points(&block, &self.points) {
+            return;
+        }
         self.compressed_blocks.push(block);
         self.points.clear();
     }
