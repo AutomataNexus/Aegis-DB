@@ -207,7 +207,13 @@ impl AppState {
                                 // JSON; decompress_docs() transparently reads either.
                                 if let Ok(bytes) = std::fs::read(&path) {
                                     if let Some(docs) = decompress_docs(&bytes) {
-                                        let _ = document_engine.create_collection(collection_name);
+                                        if !aegis_common::names::is_valid_name(collection_name) {
+                                            tracing::warn!(
+                                                "Collection {:?} has a name new collections may not use; loading it anyway",
+                                                collection_name
+                                            );
+                                        }
+                                        document_engine.restore_collection(collection_name);
                                         let mut count = 0;
                                         for doc_json in docs {
                                             let doc = json_to_document(doc_json);
@@ -711,7 +717,9 @@ impl AppState {
             });
         }
         if let Some(ref dir) = self.data_dir {
-            let path = dir.join("documents").join(format!("{}.json", name));
+            let Some(path) = data_file_path(&dir.join("documents"), name) else {
+                return;
+            };
             match std::fs::remove_file(&path) {
                 Ok(()) => crate::oplog::sync_dir(&dir.join("documents")),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -759,7 +767,9 @@ impl AppState {
         if let Ok(result) = self.document_engine.find(collection_name, &query) {
             let docs: Vec<serde_json::Value> =
                 result.documents.iter().map(document_to_json).collect();
-            let path = docs_dir.join(format!("{}.json", collection_name));
+            let Some(path) = data_file_path(&docs_dir, collection_name) else {
+                return;
+            };
             // Stored compressed-at-rest as a NexusCompress frame when that beats
             // raw JSON; the loader reads either form transparently.
             let (bytes, _) = encode_docs(&docs);
@@ -792,7 +802,7 @@ impl AppState {
         let docs: Vec<serde_json::Value> = result.documents.iter().map(document_to_json).collect();
         let (bytes, uncompressed) = encode_docs(&docs);
         let stored = bytes.len() as u64;
-        let path = docs_dir.join(format!("{}.json", collection_name));
+        let path = data_file_path(&docs_dir, collection_name)?;
         if let Err(e) = crate::oplog::write_atomic(&path, bytes) {
             tracing::error!("Failed to write collection '{}': {}", collection_name, e);
             return None;
@@ -843,7 +853,9 @@ impl AppState {
             if let Ok(result) = self.document_engine.find(&collection_name, &query) {
                 let docs: Vec<serde_json::Value> =
                     result.documents.iter().map(document_to_json).collect();
-                let path = docs_dir.join(format!("{}.json", collection_name));
+                let Some(path) = data_file_path(&docs_dir, &collection_name) else {
+                    continue;
+                };
                 // Compressed-at-rest as a NexusCompress frame when smaller than
                 // raw JSON; loader reads either form transparently.
                 let (bytes, _) = encode_docs(&docs);
@@ -1907,7 +1919,9 @@ impl QueryEngine {
             } else {
                 database
             };
-            let path = base_path.join(format!("{}.json", db_name));
+            let Some(path) = data_file_path(base_path, db_name) else {
+                return;
+            };
 
             // Write to WAL before persisting snapshot (write-ahead guarantee)
             if let Some(ref wal) = self.wal {
@@ -2007,7 +2021,7 @@ impl QueryEngine {
     /// On ROLLBACK (explicit or on error inside a transaction), all
     /// changes since BEGIN are undone.
     pub fn execute(&self, sql: &str, database: Option<&str>) -> Result<QueryResult, QueryError> {
-        let db_name = database.unwrap_or("default");
+        let db_name = resolve_database_name(database)?;
 
         let statements = self
             .parser
@@ -2175,7 +2189,7 @@ impl QueryEngine {
             return self.execute(sql, database);
         }
 
-        let db_name = database.unwrap_or("default");
+        let db_name = resolve_database_name(database)?;
 
         let statements = self
             .parser
@@ -2227,7 +2241,7 @@ impl QueryEngine {
     /// Note: prepared-statement mutations are persisted locally but are **not**
     /// peer-replicated — use the regular query path for replicated writes.
     pub fn prepare(&self, sql: &str, database: Option<&str>) -> Result<String, QueryError> {
-        let db_name = database.unwrap_or("default").to_string();
+        let db_name = resolve_database_name(database)?.to_string();
         let statements = self
             .parser
             .parse(sql)
@@ -2353,7 +2367,9 @@ impl QueryEngine {
         if let Some(ref base_path) = self.data_path {
             let contexts = self.contexts.read().unwrap();
             for (db_name, ctx) in contexts.iter() {
-                let path = base_path.join(format!("{}.json", db_name));
+                let Some(path) = data_file_path(base_path, db_name) else {
+                    continue;
+                };
                 if let Ok(ctx_guard) = ctx.read() {
                     if let Err(e) =
                         crate::compress::write_blob_json(&path, &ctx_guard.to_snapshot())
@@ -2647,6 +2663,28 @@ fn spawn_oplog_sync(log: &Arc<crate::oplog::OpLog>, every: std::time::Duration) 
     }
 }
 
+/// The database a request targets: `default` when absent or empty, otherwise a
+/// name that passes the shared naming rule (it becomes `databases/<name>.json`).
+fn resolve_database_name(database: Option<&str>) -> Result<&str, QueryError> {
+    match database {
+        None | Some("") => Ok("default"),
+        Some(name) => aegis_common::names::validate_name(name)
+            .map(|()| name)
+            .map_err(|e| QueryError::Parse(format!("invalid database name: {e}"))),
+    }
+}
+
+/// `dir/<name>.json`, or `None` (logged) if `name` could escape `dir`.
+fn data_file_path(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    match aegis_common::names::contained_path(dir, name, ".json") {
+        Ok(path) => Some(path),
+        Err(e) => {
+            tracing::error!("Refusing data file path for {:?}: {}", name, e);
+            None
+        }
+    }
+}
+
 /// Re-apply logged records on top of the loaded checkpoint, in log order. Returns
 /// the number applied.
 fn replay_ops(
@@ -2669,7 +2707,7 @@ fn replay_ops(
                 };
                 let doc = json_to_document(json);
                 let id = doc.id.clone();
-                let _ = document_engine.create_collection(collection.as_str());
+                document_engine.restore_collection(collection.as_str());
                 let exists = matches!(document_engine.get(collection, &id), Ok(Some(_)));
                 let result = if exists {
                     document_engine.update(collection, &id, doc)
@@ -2690,7 +2728,7 @@ fn replay_ops(
                 let _ = document_engine.delete(collection, &aegis_document::DocumentId::new(id));
             }
             Op::CollectionCreate { name } => {
-                let _ = document_engine.create_collection(name.as_str());
+                document_engine.restore_collection(name.as_str());
             }
             Op::CollectionDrop { name } => {
                 let _ = document_engine.drop_collection(name);
@@ -2725,6 +2763,26 @@ fn replay_ops(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_database_names_cannot_escape_the_data_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let eng = QueryEngine::with_persistence(dir.path());
+        for bad in ["../escape", "a/b", "..", "/abs"] {
+            assert!(
+                matches!(
+                    eng.execute("CREATE TABLE t (id INT)", Some(bad)),
+                    Err(QueryError::Parse(_))
+                ),
+                "{bad}"
+            );
+            assert!(eng.prepare("SELECT 1", Some(bad)).is_err());
+        }
+        eng.execute("CREATE TABLE t (id INT)", Some("site_1"))
+            .unwrap();
+        eng.execute("CREATE TABLE t (id INT)", Some("")).unwrap();
+        assert!(!dir.path().join("escape.json").exists());
+    }
 
     #[test]
     fn test_prepared_statements() {
