@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/aegis-common",
     "crates/aegis-storage",
-    "crates/aegis-memory",
     "crates/aegis-query",
     "crates/aegis-server",
     "crates/aegis-client",
@@ -117,7 +116,6 @@ tempfile = "3.10"
 # Internal crates
 aegis-common = { version = "0.6.0", path = "crates/aegis-common" }
 aegis-storage = { version = "0.6.0", path = "crates/aegis-storage" }
-aegis-memory = { version = "0.6.0", path = "crates/aegis-memory" }
 aegis-query = { version = "0.6.0", path = "crates/aegis-query" }
 aegis-server = { version = "0.6.0", path = "crates/aegis-server" }
 aegis-client = { version = "0.6.0", path = "crates/aegis-client" }

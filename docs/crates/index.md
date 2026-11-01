@@ -32,8 +32,6 @@ Aegis-DB v0.6.0 is built as a Rust workspace with 23 specialized crates and 933 
 ├─────────────────────────────────────────────────────────────────┤
 │                    aegis-storage (Backends, WAL, MVCC)           │
 ├─────────────────────────────────────────────────────────────────┤
-│                aegis-memory (Arena, Buffer Pool)                 │
-├─────────────────────────────────────────────────────────────────┤
 │              aegis-common (Types, Errors, Config)                │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -43,7 +41,6 @@ Aegis-DB v0.6.0 is built as a Rust workspace with 23 specialized crates and 933 
 | Crate | Description | Key Dependencies |
 |:------|:------------|:-----------------|
 | [aegis-common](aegis-common.md) | Core types, config, error handling | serde, chrono, uuid |
-| [aegis-memory](aegis-memory.md) | Arena allocators, buffer pool | crossbeam |
 | [aegis-storage](aegis-storage.md) | Pluggable backends, WAL, MVCC | lz4, zstd, tokio |
 | [aegis-query](aegis-query.md) | SQL parser, planner, executor | sqlparser |
 | [aegis-document](aegis-document.md) | Document store (JSON/BSON) | serde_json |
@@ -89,8 +86,7 @@ aegis-server
 
 aegis-query
 ├── aegis-common
-├── aegis-storage
-└── aegis-memory
+└── aegis-storage
 
 aegis-storage
 └── aegis-common
